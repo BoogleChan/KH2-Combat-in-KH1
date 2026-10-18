@@ -21,6 +21,9 @@
 !/NOTICE
 !/LICENSE-MIT
 !/LICENSE-APACHE
+# The built mod for OpenKH (mod.yml and its DLL, from crates/kh1-hook).
+!/mod.yml
+!/kh1-kh2.dll
 
 # 4. Documentation (notes only: no dumps, no tables copied from the game).
 !/docs/*.md
