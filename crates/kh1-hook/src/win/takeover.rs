@@ -1028,6 +1028,10 @@ unsafe fn takeover(actor: usize) -> bool {
     // Vicinity Break's likewise), so they stay in the list.
     let auto_aim = super::settings::get().auto_aim;
     d.character.set_auto_target(auto_aim);
+    // KH2's combo keeps one direction (the user): the stick aims only a combo's first swing; a
+    // target (R1's lock or KH1's cursor) is faced at the start of each swing, never mid-swing.
+    d.character.set_face_lock(true);
+    d.character.set_combo_direction_lock(true);
     let env = Env { pos, grounded: d.grounded, height_above_ground: above.max(0.0), targets: &targets, ledges: &[] };
     // A Reflect chosen from the Magic menu: KH2's cast as soon as its move allows (`reflect`).
     super::reflect::before_step(actor, &mut d.character);

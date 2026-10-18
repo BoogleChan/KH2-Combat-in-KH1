@@ -2268,3 +2268,16 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   draws nothing (it needs the screen behind it). Test `spell_packages_fully_supported` (with
   `KH2_FX_DIR`). The hook now passes the frame's camera before the effects tick
   (`Effects::set_camera`).
+
+### 2026-10-18: Stage 197 (one direction per combo; forms run on MP)
+- "sora can sometimes change the direction of his velocity depending on where you hold the
+  stick regardless of if hes locked onto an entity or not" / "we do need to change how sora is
+  able to change directions when attacking when he isn't locked onto anything", then the rule
+  (the user): the combo stays locked in one direction until it ends (idle or a fall); with the
+  orange or blue reticle on, the next attack snaps toward the enemy at its start, never mid
+  attack. Each swing used to face the stick when nothing was targeted, and the motions' turn
+  windows homed mid-swing. `Character::set_combo_direction_lock` (with `set_face_lock`), set by
+  the hook. Test `combo_keeps_its_direction`.
+- "drive forms consume mp over time, if mp reaches zero it reverts back instead of the current
+  timer": 1 MP every 3 s of battle, 6 s out of it; at 0 MP, Revert. Entering needs more than
+  the 3 MP it costs.

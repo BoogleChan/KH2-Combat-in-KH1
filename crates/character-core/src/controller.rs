@@ -385,6 +385,12 @@ pub struct Character {
     /// Each attack starts facing the locked-on target (a host's choice; off = the game's turn
     /// windows only).
     face_lock: bool,
+    /// The combo keeps one direction (a host's choice, the KH1 port's user: "in kh2 sora will
+    /// actually stay locked in one direction during a combo"): no turning during a swing (the
+    /// motions' turn windows, the stick), a swing that follows one in the combo keeps its facing
+    /// unless a target is there to snap to at its start; the stick only aims a combo's first
+    /// swing (after idle or a fall).
+    combo_direction_lock: bool,
     /// No lock: aim at the nearest target (the game's auto-target). Off: aim only at the lock;
     /// the rows that look at every enemy still see them all (`set_auto_target`).
     auto_target: bool,
@@ -522,6 +528,7 @@ impl Character {
             lock: None,
             forced_row: None,
             face_lock: false,
+            combo_direction_lock: false,
             auto_target: true,
             air_dodge_ready: false,
             glide_bank: 0,
@@ -925,6 +932,11 @@ impl Character {
         self.face_lock = on;
     }
 
+    /// See `combo_direction_lock`.
+    pub fn set_combo_direction_lock(&mut self, on: bool) {
+        self.combo_direction_lock = on;
+    }
+
     /// Whether, with no lock, swings aim at the nearest target (the game's way, default) or at
     /// none. Either way every target in `Env::targets` counts for the combo rows that look at
     /// all enemies (Explosion's, Vicinity Break's, Magnet Burst's).
@@ -1210,9 +1222,20 @@ impl Character {
             (self.count, self.finishers) = saved;
             return false;
         }
-        if to_lock.is_none() && target.is_none() && len2(input.stick) > DEAD_ZONE {
-            // No target: face the stick direction immediately.
+        // No target: face the stick direction immediately (with the combo's direction locked,
+        // only for a combo's first swing; one that follows keeps the combo's direction).
+        let follows = in_attack || carry;
+        if to_lock.is_none() && target.is_none() && len2(input.stick) > DEAD_ZONE && !(self.combo_direction_lock && follows) {
             self.facing = yaw_of(input.stick);
+        }
+        // A target there: the swing starts facing it (and holds that through the swing).
+        if self.combo_direction_lock && to_lock.is_none() {
+            if let Some(t) = target.and_then(|t| env.targets.iter().find(|x| x.id == t.id)) {
+                let d = [t.pos[0] - env.pos[0], t.pos[2] - env.pos[2]];
+                if len2(d) > 1e-3 {
+                    self.facing = yaw_of(d);
+                }
+            }
         }
         let dir = match target.and_then(|t| env.targets.iter().find(|x| x.id == t.id)) {
             Some(t) => norm([t.pos[0] - env.pos[0], t.pos[2] - env.pos[2]]),
@@ -1655,6 +1678,8 @@ impl Character {
                 WindowKind::Hitbox { attack, group, weapon, .. } => {
                     fo.hitboxes.push(ActiveHitbox { swing: (act.swing << 8) | wi as u64, attack, group, weapon })
                 }
+                // (With the combo's direction locked, no turning during a swing.)
+                WindowKind::TurnToLock(_) | WindowKind::TurnToTarget(_) if self.combo_direction_lock && matches!(act.kind, ActionKind::Attack { .. }) => {}
                 WindowKind::TurnToLock(rate) | WindowKind::TurnToTarget(rate) => {
                     if let Some(t) = target {
                         let d = [t[0] - env.pos[0], t[2] - env.pos[2]];
@@ -1681,7 +1706,7 @@ impl Character {
             fo.events.push(e.kind);
         }
         // Moving in an allow-movement range with nothing to aim at: he turns with the stick.
-        if target.is_none() && len2(input.stick) > DEAD_ZONE && matches!(act.kind, ActionKind::Attack { .. } | ActionKind::Magic) && clip.has(f, |k| matches!(k, WindowKind::AllowMovement)) {
+        if target.is_none() && !self.combo_direction_lock && len2(input.stick) > DEAD_ZONE && matches!(act.kind, ActionKind::Attack { .. } | ActionKind::Magic) && clip.has(f, |k| matches!(k, WindowKind::AllowMovement)) {
             self.facing = turn_toward(self.facing, yaw_of(input.stick), self.params.turn_speed);
         }
 

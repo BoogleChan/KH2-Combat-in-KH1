@@ -1032,3 +1032,48 @@ fn moving_air_attack_steers_and_falls() {
     let more = w.run(10, Pad { stick: [1.0, 0.0], ..IDLE });
     assert!(w.pos[1] < h1 || more.iter().any(|o| o.state != StateName::Attack), "fell from {h1} to {}", w.pos[1]);
 }
+
+/// The combo keeps one direction (the user: "in kh2 sora will actually stay locked in one
+/// direction during a combo until ... he ends his combo ... [or] if the orange or blue reticle
+/// is on, his next attack will snap him towards the direction of the enemy ... not mid
+/// attack"): the stick aims only the combo's first swing; with a target, each swing starts
+/// facing it and doesn't turn during the swing.
+#[test]
+fn combo_keeps_its_direction() {
+    let mut ch = sora();
+    ch.set_combo_direction_lock(true);
+    ch.set_face_lock(true);
+    let mut w = World::new(ch);
+    // First swing toward +x.
+    let o = w.step(Pad { attack: true, stick: [1.0, 0.0], ..IDLE });
+    assert_eq!(o.state, StateName::Attack);
+    let first = o.facing;
+    assert!((first - std::f32::consts::FRAC_PI_2).abs() < 1e-3, "{first}");
+    // The rest of the combo with the stick held the other way: same direction.
+    let mut facings = Vec::new();
+    for f in 0..60 {
+        let o = w.step(Pad { attack: f % 2 == 0, stick: [-1.0, 0.0], ..IDLE });
+        if !o.hitboxes.is_empty() {
+            w.ch.register_hit();
+        }
+        if o.state == StateName::Attack {
+            facings.push(o.facing);
+        }
+    }
+    assert!(facings.len() > 30);
+    assert!(facings.iter().all(|f| (f - first).abs() < 1e-3), "{facings:?}");
+    // Back in idle: the next combo turns to the stick again.
+    w.run(80, IDLE);
+    let o = w.step(Pad { attack: true, stick: [-1.0, 0.0], ..IDLE });
+    assert!((o.facing + std::f32::consts::FRAC_PI_2).abs() < 1e-3, "{}", o.facing);
+
+    // Locked on a target behind him: the next swing starts facing it; it doesn't turn mid-swing.
+    let mut ch = sora();
+    ch.set_combo_direction_lock(true);
+    ch.set_face_lock(true);
+    let mut w = World::new(ch);
+    w.targets.push(TargetInfo { id: 7, pos: [0.0, 0.0, -100.0], radius: 30.0, height: 100.0 });
+    w.ch.set_lock(Some(7));
+    let o = w.step(Pad { attack: true, ..IDLE });
+    assert!((o.facing.abs() - std::f32::consts::PI).abs() < 1e-3, "{}", o.facing);
+}

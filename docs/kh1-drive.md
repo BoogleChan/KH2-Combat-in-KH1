@@ -172,3 +172,7 @@ Page 2 differs from page 1 only in row 3, so reuse KH1's Summon path end to end:
   its motions' allow-movement range (41: the shots 0..46, the casts) in `character-core`.
 - The look: `tint.rs` (`docs/kh1-tint.md`). Stage 192: Sora's PC model has the alternate mesh
   table (header `+0x10` = 0x96969696, the table behind `+0x14`); pieces picked by texture.
+
+- Stage 197: the form runs on Sora's MP instead of a timer (the user): 1 MP every 180 frames
+  of battle, every 360 out of it; at 0 MP he reverts (on the ground). Entering needs more than
+  its 3 MP cost.

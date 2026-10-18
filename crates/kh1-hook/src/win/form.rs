@@ -5,8 +5,8 @@
 //!   the form's moveset, motions and combo rows (`P_EX100_MAGF`, moveset 3), his facing and
 //!   lock kept, and its arrival (53). Its abilities: Sora's support abilities, not his action
 //!   or growth ones, and the form's own growth ability, Quick Run, at MAX (the user);
-//! - the form lasts `(level + 3) × 600` frames of battle (KH2's gauge, exe: it drains 1 a
-//!   frame in battle, ½ out of it); then, or on the Revert command (the same Drive entry), back to Sora with
+//! - the form runs on Sora's MP (the user): 1 MP every 3 s of battle, every 6 s out of it
+//!   (KH2's gauge drains half as fast out of battle); at 0 MP, or on the Revert command (the same Drive entry), back to Sora with
 //!   the revert motion (4), on the ground. Knocked out: back at once;
 //! - its shots and its spells: `formmagic`.
 //! The cost is MP (`COST`, KH1's own payment), not a Drive gauge, which KH1 has none of.
@@ -30,6 +30,8 @@ pub const COST_MP: i32 = 3;
 const COST: i32 = COST_MP * 100;
 /// The form's level (KH1 has no form experience): Lv 1, 40 s of battle.
 const LEVEL: u32 = 1;
+/// Frames of battle per MP the form uses up (half as fast out of battle).
+const MP_DRAIN_FRAMES: u32 = 180;
 /// KH2's magic sub offset in Wisdom Form.
 pub const MAGIC_SUB: i32 = 10;
 
@@ -92,7 +94,7 @@ pub unsafe fn usable(sora: usize) -> bool {
     if in_form() {
         return true;
     }
-    pose::kh2().is_some_and(|k| k.wisdom.is_some()) && super::takeover::kh2_has() && sora > 0x10000 && mp(sora) >= COST_MP
+    pose::kh2().is_some_and(|k| k.wisdom.is_some()) && super::takeover::kh2_has() && sora > 0x10000 && mp(sora) > COST_MP
 }
 
 /// Chosen from the Drive list (`drive::chosen`). Returns why not, if refused.
@@ -111,8 +113,8 @@ pub unsafe fn choose(sora: usize) -> Result<&'static str, String> {
         return Err("KH1 has Sora".into());
     }
     let have = mp(sora);
-    if have < COST_MP {
-        return Err(format!("MP {have}, it costs {COST_MP}"));
+    if have <= COST_MP {
+        return Err(format!("MP {have}: it costs {COST_MP} and needs some left to run on"));
     }
     REQUEST.store(1, Ordering::Relaxed);
     Ok("Wisdom Form")
@@ -130,7 +132,7 @@ pub struct Drive {
 }
 
 struct InForm {
-    /// In half frames (the gauge drains 1 a frame in battle, ½ out of it).
+    /// Half frames toward the next MP drained (2 a frame in battle, 1 out of it).
     left: u32,
     sora: Abilities,
     own: Abilities,
@@ -209,7 +211,7 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
                 REQUEST.store(1, Ordering::Relaxed);
                 return;
             }
-            if mp(actor) < COST_MP {
+            if mp(actor) <= COST_MP {
                 log(&format!("Drive: MP {} short of {COST_MP} by now", mp(actor)));
                 return;
             }
@@ -249,10 +251,9 @@ unsafe fn arrive(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     swap(ch, anim, &f.character, &f.rig, own.clone());
     super::kh2fx::owner_gone();
     ch.play(ARRIVE_MOTION, true);
-    let left = (LEVEL + 3) * 600 * 2;
-    d.form = Some(InForm { left, sora, own, logged_s: u32::MAX });
+    d.form = Some(InForm { left: 0, sora, own, logged_s: 0 });
     IN_FORM.store(true, Ordering::Relaxed);
-    log(&format!("Wisdom Form (Lv{LEVEL}): {:.0} s of battle (twice that out of it), Quick Run MAX", left as f32 / 120.0));
+    log(&format!("Wisdom Form (Lv{LEVEL}): 1 MP every {:.0} s of battle (twice that out of it), Quick Run MAX", MP_DRAIN_FRAMES as f32 / 60.0));
 }
 
 unsafe fn revert(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &pose::Kh2, motion: bool, why: &str) {
@@ -289,19 +290,30 @@ pub fn abilities(d: &mut Drive, ch: &mut Character) {
     }
 }
 
-/// After KH2's step: the look (`tint`), the gauge (battle frames), its end.
+/// After KH2's step: the look (`tint`), the MP the form uses up, its end.
+///
+/// The form's gauge is Sora's MP (the user: "drive forms consume mp over time, if mp reaches
+/// zero it reverts back"): 1 MP every `MP_DRAIN_FRAMES` in battle, half as fast out of it
+/// (KH2's gauge drains so); at 0 MP, back to Sora (on the ground, `before_step`).
 pub unsafe fn after_step(d: &mut Drive, actor: usize, battle: bool) {
     super::tint::refresh(actor, d.form.is_some());
     let Some(f) = d.form.as_mut() else { return };
-    f.left = f.left.saturating_sub(if battle { 2 } else { 1 });
-    let s = f.left.div_ceil(120);
-    if s % 10 == 0 && s != f.logged_s {
-        f.logged_s = s;
-        log(&format!("Wisdom Form: {s} s left"));
+    f.left += if battle { 2 } else { 1 };
+    if f.left >= MP_DRAIN_FRAMES * 2 {
+        f.left = 0;
+        let before = mp(actor);
+        if before > 0 {
+            super::reflect::pay_mp(actor, 100);
+        }
+        let now = mp(actor);
+        if f.logged_s < 40 {
+            f.logged_s += 1;
+            log(&format!("Wisdom Form: MP {before} -> {now}"));
+        }
     }
-    if f.left == 0 && !d.revert {
+    if mp(actor) <= 0 && !d.revert {
         d.revert = true;
-        log("Wisdom Form: the gauge is empty");
+        log("Wisdom Form: out of MP");
     }
 }
 

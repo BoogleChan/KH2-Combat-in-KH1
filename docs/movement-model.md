@@ -361,3 +361,14 @@ What this produces on your install (`kh2-combat sora`):
 
 (Stage 193: the stick-held momentum keeping of stage 183 is reverted, the user; air control is
 KH2's plain steer, `air_keep` 0.9 toward the stick's speed.)
+
+## The combo keeps one direction (stage 197, the KH1 port)
+
+`Character::set_combo_direction_lock` (the user: "in kh2 sora will actually stay locked in one
+direction during a combo until either ... he ends his combo and returns to his idle or freefall
+animation [or] if the orange or blue reticle is on, his next attack will snap him towards the
+direction of the enemy (he can not snap to an enemy mid attack ...)"): the stick aims only a
+combo's first swing (one started from idle or a fall); a swing that follows another in the
+combo keeps its facing unless a target is there, which it faces at its start; no turning during
+a swing (the motions' turn windows and the moving attacks' stick turn are skipped). Test
+`combo_keeps_its_direction`.
