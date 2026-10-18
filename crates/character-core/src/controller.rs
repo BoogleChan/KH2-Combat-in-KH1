@@ -344,8 +344,11 @@ const HIT_BACK_SPEED: f32 = 0.1;
 /// runs off; it was 0, KH1 had none). Buttons still work from the motion's reaction window.
 const LAND_HOLD: u32 = 14;
 
-/// Frames after a ground swing ends in which a spell still comes mid-combo (`combo_live`).
-const COMBO_GRACE: u32 = 60;
+/// Frames after a ground swing or a spell ends in which the combo still goes on
+/// (`combo_live`): just the hand-over (a host's move handing back, an input taken the next
+/// frame). Back in idle the combo is over (the user: "the intended behavior is for sora to have
+/// his combo reset if he returns to idle"; it was 60 frames, for spells picked from KH1's menu).
+const COMBO_GRACE: u32 = 2;
 
 /// Physics tick length in frames: KH2 recomputes velocities at 30 Hz.
 const DT: f32 = 2.0;
@@ -608,21 +611,42 @@ impl Character {
         }
         match &self.mode {
             Mode::Free => !(self.combo_carry && self.carry_finisher && self.finishers >= self.max_finishers()),
-            Mode::Action(a) => {
-                let f = a.frame.saturating_sub(1);
-                let has = |p: &dyn Fn(&WindowKind) -> bool| self.clip(a.motion).map_or(false, |c| c.has(f, |k| p(k)));
-                // (As a swing's next finisher: only after one that counts, `try_attack`.)
-                let next_finisher = self.finishers < self.max_finishers() && self.swing_counts() && has(&|k| matches!(k, WindowKind::Finisher));
-                match &a.kind {
-                    ActionKind::Attack { row } if row.is_finisher() => next_finisher,
-                    ActionKind::Attack { .. } => has(&|k| matches!(k, WindowKind::ComboMagic | WindowKind::Combo)),
-                    ActionKind::Magic if self.cast_finisher => next_finisher,
-                    ActionKind::Magic => has(&|k| matches!(k, WindowKind::ComboMagic)),
-                    ActionKind::Land => true,
-                    _ => false,
-                }
-            }
+            Mode::Action(a) => self.cast_window(a, a.frame.saturating_sub(1)),
             Mode::Glide => false,
+        }
+    }
+
+    /// Whether the action playing lets a spell in at frame `f` (`can_cast`).
+    fn cast_window(&self, a: &Action, f: u32) -> bool {
+        let has = |p: &dyn Fn(&WindowKind) -> bool| self.clip(a.motion).map_or(false, |c| c.has(f, |k| p(k)));
+        // (As a swing's next finisher: only after one that counts, `try_attack`.)
+        let next_finisher = || self.finishers < self.max_finishers() && self.swing_counts() && has(&|k| matches!(k, WindowKind::Finisher));
+        match &a.kind {
+            ActionKind::Attack { row } if row.is_finisher() => next_finisher(),
+            ActionKind::Attack { .. } => has(&|k| matches!(k, WindowKind::ComboMagic | WindowKind::Combo)),
+            ActionKind::Magic if self.cast_finisher => next_finisher(),
+            ActionKind::Magic => has(&|k| matches!(k, WindowKind::ComboMagic)),
+            ActionKind::Land => true,
+            _ => false,
+        }
+    }
+
+    /// Whether a spell chosen now can come out in the move playing, now or at a later window of
+    /// it (KH2's buffer: into the move's next combo window). Not in a finisher with no next
+    /// finisher to cast as (the user: a spell chosen during a finisher came out after it,
+    /// however long after; "there shouldn't be any buffer system like that for magic"), nor in a
+    /// move with no window for it: the choice is dropped, and only once he is back in idle (or
+    /// in a window) does a spell come.
+    pub fn magic_later(&self) -> bool {
+        if self.can_cast() {
+            return true;
+        }
+        match &self.mode {
+            Mode::Action(a) => {
+                let len = self.clip(a.motion).map_or(0, |c| c.length);
+                (a.frame..len).any(|f| self.cast_window(a, f))
+            }
+            _ => false,
         }
     }
 
@@ -1892,6 +1916,11 @@ impl Character {
                         return true;
                     }
                     self.buffered_attack = false;
+                }
+                if finished && !self.airborne {
+                    // Played to its end on the ground: back in idle, the combo is over (the
+                    // user). (In the air it goes on until the landing, as a swing's does.)
+                    self.reset_combo();
                 }
             }
             ActionKind::Hurt => {

@@ -372,3 +372,13 @@ combo's first swing (one started from idle or a fall); a swing that follows anot
 combo keeps its facing unless a target is there, which it faces at its start; no turning during
 a swing (the motions' turn windows and the moving attacks' stick turn are skipped). Test
 `combo_keeps_its_direction`.
+
+## Back in idle the combo is over; no spell through a finisher (stage 198)
+
+- `COMBO_GRACE` is 2 frames (the hand-over), not 60: a swing or a spell that ends into idle ends
+  the combo; a spell played to its end on the ground resets it (`reset_combo`). Only an input
+  during the move (a buffered Attack, a spell in the swing's combo window) carries it on.
+- `Character::magic_later`: whether a spell chosen now can come in the move playing, now or at a
+  later window of it. Hosts drop a spell chosen when it can't (a finisher with no next finisher,
+  the combo's last step) instead of holding it for after the move.
+- Tests `spell_mid_combo_is_a_step_of_it` (rewritten), `no_magic_buffered_through_a_finisher`.

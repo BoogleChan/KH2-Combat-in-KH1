@@ -628,35 +628,91 @@ fn neutral_aerial_dodge_goes_straight_up() {
     assert!(w.pos[2] - z0 > 20.0);
 }
 
-/// A spell cast mid-combo inserts itself as a step of it (the user: as a modifier does), also
-/// just after a swing has ended (picking it from the menu takes a moment): swing, spell, then
-/// the next swing is the combo's finisher.
+/// A spell cast mid-combo inserts itself as a step of it (the user: as a modifier does): swing,
+/// spell in the swing's combo window, an Attack pressed during the spell, and that swing is the
+/// combo's finisher. Back in idle the combo is over (the user: "the intended behavior is for
+/// sora to have his combo reset if he returns to idle"): a spell after the swing has ended
+/// starts a new combo, and one played to its end leaves none to go on with.
 #[test]
 fn spell_mid_combo_is_a_step_of_it() {
     let mut ch = sora();
     ch.moveset.clips.insert(71, Clip::plain(71, 30));
     let mut w = World::new(ch);
     w.step(Pad { attack: true, ..IDLE });
+    let mut cast = None;
     for _ in 0..45 {
         let o = w.step(IDLE);
         if !o.hitboxes.is_empty() {
             w.ch.register_hit();
         }
+        if cast.is_none() && w.ch.can_cast() {
+            cast = w.ch.cast(CastMotions { ground: 71, finisher: None, air: 73 });
+        }
     }
-    w.run(10, IDLE);
-    assert_eq!(w.ch.cast(CastMotions { ground: 71, finisher: None, air: 73 }), Some(71));
-    w.run(40, IDLE);
-    let o = w.step(Pad { attack: true, ..IDLE });
-    assert_eq!(o.motion, 110, "the swing after the spell should be the finisher");
-    // Long after a swing, a spell starts no combo step.
+    assert_eq!(cast, Some(71), "cast from the swing's window");
+    let outs = w.run(40, Pad { attack: true, ..IDLE });
+    let next: Vec<u16> = outs.iter().filter(|o| o.state == StateName::Attack && o.clip_frame == 0).map(|o| o.motion).collect();
+    assert_eq!(next.first(), Some(&110), "the swing after the spell should be the finisher: {next:?}");
+
+    // A spell played to its end on the ground: idle, the combo over.
     let mut ch = sora();
     ch.moveset.clips.insert(71, Clip::plain(71, 30));
     let mut w = World::new(ch);
     w.step(Pad { attack: true, ..IDLE });
-    w.run(200, IDLE);
+    for _ in 0..12 {
+        let o = w.step(IDLE);
+        if !o.hitboxes.is_empty() {
+            w.ch.register_hit();
+        }
+    }
+    for _ in 0..30 {
+        if w.ch.can_cast() {
+            w.ch.cast(CastMotions { ground: 71, finisher: None, air: 73 });
+            break;
+        }
+        w.step(IDLE);
+    }
+    w.run(60, IDLE);
+    assert_eq!(w.step(Pad { attack: true, ..IDLE }).motion, 100, "a new combo");
+
+    // A spell after the swing has ended (idle): a new combo's first step.
+    let mut ch = sora();
+    ch.moveset.clips.insert(71, Clip::plain(71, 30));
+    let mut w = World::new(ch);
+    w.step(Pad { attack: true, ..IDLE });
+    w.run(60, IDLE);
     w.ch.cast(CastMotions { ground: 71, finisher: None, air: 73 });
     w.run(40, IDLE);
     assert_eq!(w.step(Pad { attack: true, ..IDLE }).motion, 100);
+}
+
+/// A spell chosen during the combo's finisher (no next finisher) can't come in that move, nor
+/// later: `magic_later` says so, and the host drops the choice (the user: "regardless of if a
+/// spell is inputted during a finisher it should not be allowed to execute").
+#[test]
+fn no_magic_buffered_through_a_finisher() {
+    let mut w = World::new(sora());
+    let (motions, _) = mash(&mut w, true);
+    assert!(motions.contains(&110));
+    let mut w = World::new(sora());
+    let mut seen = false;
+    for f in 0..200 {
+        let o = w.step(Pad { attack: f % 2 == 0, ..IDLE });
+        if !o.hitboxes.is_empty() {
+            w.ch.register_hit();
+        }
+        if o.state == StateName::Attack && o.motion == 110 {
+            seen = true;
+            assert!(!w.ch.magic_later(), "frame {} of the finisher", o.clip_frame);
+            break;
+        }
+    }
+    assert!(seen);
+    // In a plain swing before its window: later in the move, yes.
+    let mut w = World::new(sora());
+    w.step(Pad { attack: true, ..IDLE });
+    w.step(IDLE);
+    assert!(!w.ch.can_cast() && w.ch.magic_later());
 }
 
 /// A spell chosen mid-swing is cast as soon as the swing would take its next swing (its combo

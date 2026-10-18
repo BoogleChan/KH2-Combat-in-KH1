@@ -2281,3 +2281,16 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - "drive forms consume mp over time, if mp reaches zero it reverts back instead of the current
   timer": 1 MP every 3 s of battle, 6 s out of it; at 0 MP, Revert. Entering needs more than
   the 3 MP it costs.
+
+### 2026-10-18: Stage 198 (no spell held through a finisher; idle ends the combo)
+- "during a finisher if a magic spell is inputted, then at the end of the finisher regardless of
+  how much time is passed sora will always execute said spell ... there shouldn't be any buffer
+  system like that for magic": a spell chosen in a move with no window left for it
+  (`Character::magic_later`: a finisher without a next finisher) is refused at once (KH1's
+  spells in `combat::command`, Reflect and Wisdom's spells in their waits); one chosen in a swing
+  still goes at that swing's combo window.
+- "if sora inputs a magic and returns to the idle state his position in the combo string is
+  kept ... the intended behavior is for sora to have his combo reset if he returns to idle":
+  `COMBO_GRACE` 60 → 2 frames; a KH2 cast played to its end on the ground resets the combo; a KH1
+  spell's combo slot is restored at hand-back only when an Attack or a spell cut it or waited
+  through it (`takeover::SPELL_CUT`).

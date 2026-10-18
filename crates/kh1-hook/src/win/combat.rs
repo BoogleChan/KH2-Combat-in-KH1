@@ -187,6 +187,11 @@ pub unsafe fn resume_command() {
         return;
     }
     let ready = takeover::with_kh2(|c, _| if kind == 2 { c.can_cast() } else { c.can_take_command() });
+    if kind == 2 && ready == Some(false) && takeover::with_kh2(|c, _| c.magic_later()) == Some(false) {
+        *p = None;
+        cmd_log(format!("command {kind:#x} dropped: the move playing has no window left for it"));
+        return;
+    }
     if ready == Some(true) {
         *p = None;
         // The menu step's own flags this frame (`0x140291660`) kept; the choice put back.
@@ -265,6 +270,16 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     // (`can_take_command`). Chosen mid-move, it waits and runs as soon as he can (the user: magic
     // cancelled any KH2 move).
     let ready = takeover::with_kh2(|c, _| if kind == 2 { c.can_cast() } else { c.can_take_command() }).unwrap_or(true);
+    // A spell no window of the move playing can take (a finisher's, the combo's last): not
+    // kept for after it (the user: "regardless of if a spell is inputted during a finisher it
+    // should not be allowed to execute ... there shouldn't be any buffer system like that for
+    // magic").
+    if !ready && kind == 2 && takeover::with_kh2(|c, _| c.magic_later()) == Some(false) {
+        cmd_log(format!("command {kind:#x} ({full:08x}) refused: the move playing has no window for a spell"));
+        let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
+        sound(4);
+        return;
+    }
     if !ready {
         let motion = takeover::KH2_MOTION.load(Ordering::Relaxed);
         if let Ok(mut p) = PENDING_COMMAND.lock() {

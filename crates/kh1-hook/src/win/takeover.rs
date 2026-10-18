@@ -362,6 +362,8 @@ pub static SPELL_SLOT: AtomicU8 = AtomicU8::new(0);
 /// A spell was chosen during KH1's cast (`combat::command` / `take_chosen_command`): waiting in
 /// the command queue, it cuts the cast once the spell is out (a spell into a spell).
 pub static MAGIC_AFTER: AtomicBool = AtomicBool::new(false);
+/// KH1's spell was cut by, or had waiting through it, an Attack or a spell: the combo goes on.
+static SPELL_CUT: AtomicBool = AtomicBool::new(false);
 /// KH2's motion on its last frame (`u32::MAX` while KH1 has Sora): a command chosen during a KH2
 /// move waits only while that move plays (KH2's input buffer), not on a timer of its own (the
 /// user: magic came out however much later it was; it is part of the combo string).
@@ -720,6 +722,9 @@ unsafe fn takeover(actor: usize) -> bool {
         let magic_waits = magic_after && done;
         if frames >= 3 && cast_landed || frames >= 10 && (falling || jump || cancel || magic_waits || matches!(state, 0 | 1) && (kh1_moving() || free || square || attack)) {
             JUMP_NOW.store(jump, Ordering::Relaxed);
+            // The spell's combo goes on only with an Attack or a spell that cut it or was chosen
+            // during it (else he is back in idle: the combo is over, the user).
+            SPELL_CUT.store(command && (attack_cut || magic_cut || magic_after || ATTACK_AFTER.load(Ordering::Relaxed)), Ordering::Relaxed);
             // An Attack waiting through a spell (pressed during it): the combo goes on after it,
             // as after KH2's own casts (the user: magic is part of the combo's queue).
             if command && attack && SPELL_SLOT.load(Ordering::Relaxed) == 0 {
@@ -869,7 +874,11 @@ unsafe fn takeover(actor: usize) -> bool {
         d.character.abilities = abilities;
         // After a KH1 spell: the combo goes on from the slot it took (not after the combo's last).
         let spell = SPELL_SLOT.swap(0, Ordering::Relaxed);
-        if COMBO_ON.swap(false, Ordering::Relaxed) && spell == 0 || matches!(spell, 1 | 2) {
+        // (Only when something went on from it: an Attack or a spell that cut it or waited
+        // through it, `SPELL_CUT`. A spell played to its end leaves him in idle, and back in idle
+        // the combo is over, the user.)
+        let cut = SPELL_CUT.swap(false, Ordering::Relaxed);
+        if COMBO_ON.swap(false, Ordering::Relaxed) && spell == 0 || matches!(spell, 1 | 2) && cut {
             d.character.set_combo_state(combo);
         }
         d.grounded = true;

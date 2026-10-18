@@ -241,7 +241,7 @@ pub unsafe fn before_step(actor: usize, ch: &mut Character) {
     let Ok(mut w) = WAITING.try_lock() else { return };
     let Some((spell, when, motion)) = *w else { return };
     if !ch.can_cast() {
-        if !super::takeover::same_move(motion) || when.elapsed().as_secs_f32() > WAIT_S {
+        if !super::takeover::same_move(motion) || !ch.magic_later() || when.elapsed().as_secs_f32() > WAIT_S {
             *w = None;
             log(&format!("Wisdom {}: dropped, the move it was chosen in (motion {motion}) ended without a window for it", SPELL_NAMES[spell as usize]));
         }
