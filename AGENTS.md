@@ -2249,3 +2249,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   turning with the stick when nothing is targeted. Test `moving_air_attack_steers_and_falls`.
 - A public copy of the KH1 mod alone was made (fresh history, `local/export_public.py`), on the PC beside
   this repo (`kh2-combat-public`).
+
+### 2026-10-18: Stage 195 (Wisdom's blue by texture swap)
+- "the outfit isnt blue": the PC draws the remastered Sora (its meshes go through `0x1401DB690`,
+  never the hooked `0x1401DB7F0`), and his jumpsuit shares one HD texture (`-1c1`) with the
+  jacket, zipper and some skin (a helper session's research, `docs/kh1-tint.md`). `tint.rs` now
+  swaps the source textures of mesh-table entries 0 and 1 for recoloured copies (red → hue 225°,
+  the rest untouched) made with KH1's own texture creator, in the form only. The PKG's remastered
+  assets are readable now (`egs::Archive::read_remastered`, `Kh1Install::read_remastered`).

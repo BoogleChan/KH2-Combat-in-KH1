@@ -67,6 +67,23 @@ impl Kh1Install {
         live
     }
 
+    /// Reads one of a file's remastered (HD) assets (`asset`: the start of its name, e.g.
+    /// `-1c1` for a model's second HD texture), with its full name.
+    pub fn read_remastered(&self, source: Source, name: &str, asset: &str) -> Result<(String, Vec<u8>)> {
+        let keys = self.key_table()?;
+        for part in ARCHIVES {
+            let hed = self.hed(source, part);
+            if !hed.is_file() {
+                continue;
+            }
+            let archive = Archive::open(&hed)?;
+            if archive.find(name).is_some() {
+                return archive.read_remastered(&keys, name, asset);
+            }
+        }
+        Err(Error::NotFound(name.to_string()))
+    }
+
     /// Reads a file by its original name from whichever package holds it.
     pub fn read(&self, source: Source, name: &str) -> Result<Vec<u8>> {
         let keys = self.key_table()?;

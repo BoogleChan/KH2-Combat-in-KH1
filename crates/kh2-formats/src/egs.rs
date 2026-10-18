@@ -232,6 +232,63 @@ impl Archive {
     }
 }
 
+impl Archive {
+    /// Reads one of `name`'s remastered (HD) assets, the first whose name starts with `asset`
+    /// (e.g. `-1c1` for `-1c1.dds`). They follow the original data in header order, each
+    /// encrypted and compressed as the original is (same seed, its own lengths: the header's
+    /// `+0x28` decompressed and `+0x2C` compressed size, -2 plain, -1 encrypted only). Returns
+    /// the asset's full name and data.
+    pub fn read_remastered(&self, keys: &KeyTable, name: &str, asset: &str) -> Result<(String, Vec<u8>)> {
+        let e = *self.find(name).ok_or_else(|| Error::NotFound(name.to_string()))?;
+        let mut f = File::open(&self.pkg_path)?;
+        f.seek(SeekFrom::Start(e.offset))?;
+        let mut seed = [0u8; 16];
+        f.read_exact(&mut seed)?;
+        let mut h = Reader::new(&seed);
+        let decompressed = h.i32()?;
+        let remastered = h.i32()?;
+        let compressed = h.i32()?;
+        if decompressed < 0 || !(0..=0x10000).contains(&remastered) {
+            return bad(format!("{name}: implausible pkg header"));
+        }
+        let mut heads = vec![0u8; remastered as usize * 0x30];
+        f.read_exact(&mut heads)?;
+        // Past the original data to the first asset.
+        let len = if compressed >= 0 { compressed } else { decompressed } as i64;
+        f.seek(SeekFrom::Current(len))?;
+        for head in heads.chunks_exact(0x30) {
+            let end = head[..0x20].iter().position(|&b| b == 0).unwrap_or(0x20);
+            let asset_name = String::from_utf8_lossy(&head[..end]).into_owned();
+            let mut r = Reader::new(&head[0x28..0x30]);
+            let dec = r.i32()?;
+            let comp = r.i32()?;
+            let n = if comp >= 0 { comp } else { dec };
+            if n < 0 || n as u64 > e.stored_len as u64 {
+                return bad(format!("{name}: asset {asset_name} has an implausible length"));
+            }
+            if !asset_name.starts_with(asset) {
+                f.seek(SeekFrom::Current(n as i64))?;
+                continue;
+            }
+            let mut data = vec![0u8; n as usize];
+            f.read_exact(&mut data)?;
+            if comp > -2 {
+                keys.decrypt_head(&seed, &mut data);
+            }
+            if comp > -1 {
+                if data.len() < 2 {
+                    return bad(format!("{name}: asset {asset_name} too short"));
+                }
+                let mut out = Vec::with_capacity(dec.max(0) as usize);
+                flate2::read::DeflateDecoder::new(&data[2..]).read_to_end(&mut out)?;
+                return Ok((asset_name, out));
+            }
+            return Ok((asset_name, data));
+        }
+        Err(Error::NotFound(format!("{name}: remastered asset {asset}*")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
