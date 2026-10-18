@@ -389,10 +389,10 @@ pub struct Character {
     /// windows only).
     face_lock: bool,
     /// The combo keeps one direction (a host's choice, the KH1 port's user: "in kh2 sora will
-    /// actually stay locked in one direction during a combo"): no turning during a swing (the
-    /// motions' turn windows, the stick), a swing that follows one in the combo keeps its facing
-    /// unless a target is there to snap to at its start; the stick only aims a combo's first
-    /// swing (after idle or a fall).
+    /// actually stay locked in one direction during a combo"): no turning during a swing by the
+    /// stick, and by the motions' turn windows only toward a target (a reticle on it); a swing
+    /// that follows one in the combo keeps its facing unless a target is there to snap to at its
+    /// start; the stick only aims a combo's first swing (after idle or a fall).
     combo_direction_lock: bool,
     /// No lock: aim at the nearest target (the game's auto-target). Off: aim only at the lock;
     /// the rows that look at every enemy still see them all (`set_auto_target`).
@@ -1702,8 +1702,11 @@ impl Character {
                 WindowKind::Hitbox { attack, group, weapon, .. } => {
                     fo.hitboxes.push(ActiveHitbox { swing: (act.swing << 8) | wi as u64, attack, group, weapon })
                 }
-                // (With the combo's direction locked, no turning during a swing.)
-                WindowKind::TurnToLock(_) | WindowKind::TurnToTarget(_) if self.combo_direction_lock && matches!(act.kind, ActionKind::Attack { .. }) => {}
+                // (With the combo's direction locked, no turning during a swing unless a target's
+                // reticle is on, the user: "change the direction he's facing mid move only if ...
+                // an entity having a blue or orange reticle on it". Then the motion's own turn
+                // windows home in on it, as KH2's do.)
+                WindowKind::TurnToLock(_) | WindowKind::TurnToTarget(_) if self.combo_direction_lock && target.is_none() && matches!(act.kind, ActionKind::Attack { .. }) => {}
                 WindowKind::TurnToLock(rate) | WindowKind::TurnToTarget(rate) => {
                     if let Some(t) = target {
                         let d = [t[0] - env.pos[0], t[2] - env.pos[2]];

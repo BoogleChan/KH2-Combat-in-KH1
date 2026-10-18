@@ -382,3 +382,7 @@ a swing (the motions' turn windows and the moving attacks' stick turn are skippe
   later window of it. Hosts drop a spell chosen when it can't (a finisher with no next finisher,
   the combo's last step) instead of holding it for after the move.
 - Tests `spell_mid_combo_is_a_step_of_it` (rewritten), `no_magic_buffered_through_a_finisher`.
+- Stage 199: mid-swing turning comes back with a target only (the user: "change the direction
+  he's facing mid move only if ... an entity having a blue or orange reticle on it"): the
+  motions' turn windows (TurnToLock) run while a target is locked (the hook locks KH2 on KH1's
+  reticle, small blue or big orange); with none they don't, and the stick never turns a swing.

@@ -1132,4 +1132,27 @@ fn combo_keeps_its_direction() {
     w.ch.set_lock(Some(7));
     let o = w.step(Pad { attack: true, ..IDLE });
     assert!((o.facing.abs() - std::f32::consts::PI).abs() < 1e-3, "{}", o.facing);
+
+    // With a reticle on a target, the swing's own turn window turns him toward it mid-swing
+    // (the user: only then); with none, the same window doesn't.
+    let turn_swing = |locked: bool| {
+        let mut ch = sora();
+        let mut clip = attack_clip(100, 40, (10, 16), 1, 20);
+        clip.windows.push(Window { start: 0, end: Some(20), kind: WindowKind::TurnToLock(0.2) });
+        ch.moveset.clips.insert(100, clip);
+        ch.set_combo_direction_lock(true);
+        ch.set_face_lock(true);
+        ch.set_auto_target(false);
+        let mut w = World::new(ch);
+        w.step(Pad { attack: true, ..IDLE });
+        // A target appears off to his side after the swing has started.
+        w.targets.push(TargetInfo { id: 9, pos: [200.0, 0.0, 0.0], radius: 30.0, height: 100.0 });
+        if locked {
+            w.ch.set_lock(Some(9));
+        }
+        let outs = w.run(10, IDLE);
+        outs.last().unwrap().facing
+    };
+    assert!(turn_swing(true) > 0.5, "turned toward the reticle");
+    assert!(turn_swing(false).abs() < 1e-3, "no reticle, no turn");
 }

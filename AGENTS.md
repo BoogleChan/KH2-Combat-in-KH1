@@ -2294,3 +2294,9 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   `COMBO_GRACE` 60 → 2 frames; a KH2 cast played to its end on the ground resets the combo; a KH1
   spell's combo slot is restored at hand-back only when an Attack or a spell cut it or waited
   through it (`takeover::SPELL_CUT`).
+
+### 2026-10-18: Stage 199 (turning mid-swing only toward a reticle)
+- "have sora change the direction he's facing mid move only if the condition of an entity
+  having a blue or orange reticle on it is met": with the combo's direction locked, the swings'
+  turn windows run again when a target is locked (KH1's reticle, either kind, is the lock), and
+  stay off without one. Test `combo_keeps_its_direction` extended.
