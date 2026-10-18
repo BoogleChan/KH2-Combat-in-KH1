@@ -2,6 +2,7 @@
 //! §5.5): starting elements at a bone, binding, start waits, the 30 Hz
 //! effect clock, fading and ending.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -66,6 +67,9 @@ pub struct Effects {
     rng: Rng,
     next: u32,
     skipped: HashMap<u32, usize>,
+    /// The camera view of the last [`Effects::build`], for the programs
+    /// that read the camera in their calc (RyjMatrixNoRot, KeDMat).
+    view: Cell<Mat4>,
 }
 
 /// The effect root from an element and its bone matrix: translation,
@@ -91,7 +95,7 @@ pub fn element_transform(el: &PaxElement, bone: Mat4) -> (Vec3, Mat3, Vec3) {
 
 impl Effects {
     pub fn new(lib: Arc<Library>) -> Effects {
-        Effects { lib, running: Vec::new(), rng: Rng::default(), next: 1, skipped: HashMap::new() }
+        Effects { lib, running: Vec::new(), rng: Rng::default(), next: 1, skipped: HashMap::new(), view: Cell::new(Mat4::IDENTITY) }
     }
 
     pub fn library(&self) -> &Arc<Library> {
@@ -216,6 +220,14 @@ impl Effects {
         }
     }
 
+    /// Give the programs that read the camera in their calc
+    /// (RyjMatrixNoRot, KeDMat, KeDMatFr) this frame's camera before
+    /// [`Effects::tick`]. Without it they use the camera of the last
+    /// [`Effects::build`], one frame old.
+    pub fn set_camera(&mut self, camera: &Camera) {
+        self.view.set(camera.view());
+    }
+
     /// Multiply an effect's alpha (e.g. hide weapon effects, flag 0x800).
     pub fn set_alpha(&mut self, h: EffectHandle, alpha: f32) {
         if let Some(r) = self.running.iter_mut().find(|r| r.handle == h.0) {
@@ -241,6 +253,7 @@ impl Effects {
     pub fn tick(&mut self, game_frames: f32, bones: &mut dyn FnMut(u16) -> Option<Mat4>) {
         let lib = self.lib.clone();
         let rng = &mut self.rng;
+        let view = self.view.get();
         let dt = game_frames.max(0.0);
         self.running.retain_mut(|r| {
             r.visible = false;
@@ -275,13 +288,14 @@ impl Effects {
             r.started = true;
             r.player.set_root(&lib, r.pos, r.rot, r.scale);
             r.player.fx.colour = [1.0, 1.0, 1.0, r.alpha];
+            r.player.fx.view = view;
             r.acc += dt;
             let repeat = r.acc < TICK_FRAMES;
             if !repeat {
                 r.acc -= TICK_FRAMES;
                 while r.acc >= TICK_FRAMES {
                     r.player.calc_pass(&lib, rng);
-                    r.player.draw_pass(&lib, rng, false);
+                    r.player.draw_pass(&lib, rng, false, false);
                     r.player.advance(&lib, rng);
                     r.acc -= TICK_FRAMES;
                     if r.player.finished {
@@ -290,7 +304,7 @@ impl Effects {
                 }
             }
             r.player.calc_pass(&lib, rng);
-            r.player.draw_pass(&lib, rng, repeat);
+            r.player.draw_pass(&lib, rng, repeat, true);
             r.pending_advance = !repeat;
             r.visible = true;
             true
@@ -300,6 +314,7 @@ impl Effects {
     /// The triangles of every visible effect for this camera, in the
     /// game's draw order (effects in start order). `out` is cleared first.
     pub fn build(&self, camera: &Camera, out: &mut Frame) {
+        self.view.set(camera.view());
         out.clear();
         for r in &self.running {
             if r.visible {

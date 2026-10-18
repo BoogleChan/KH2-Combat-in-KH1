@@ -319,7 +319,9 @@ C runtime `rand`. Any uniform `[0, 1]` source reproduces it in distribution.
 ## 7. Program reference
 
 The types Explosion and Magnet Burst use, plus those of Guard Break, Finishing Leap and
-Aerial Finish (§12.1). `w[i]` = the program's i-th work offset;
+Aerial Finish (§12.1), and (§7.5–§7.10) those of the spell packages the mod plays
+(`magic/FIRE_n`, `BLIZZARD_n`, `THUNDER_n`, `CURE_n`, `REFLECT_n.mag`, Sora's `P_EX100.a.us`
+and Wisdom Form's `P_EX100_MAGF.a.us`). `w[i]` = the program's i-th work offset;
 "state" lives at `+0xA0 + w[i]` of the instance. Keys start with the frame word; offsets
 below are from the key start. All checked unless marked.
 
@@ -450,6 +452,196 @@ instance matrix into a ring buffer (key @11 length, 4..128), optionally into roo
 space (@17), can drift / attract the history (@29, @30 with key vectors), and draws a strip
 through the history with spline smoothing (key @18 subdivisions), textured from a DPD model's
 texture (key @4 model number). **Partially traced**; see Unknowns.
+
+### 7.5 Shape trails (the spells' flame and light tails)
+
+Fire's main elements (0, 2, 5, 8–12 of `magic/FIRE_n.mag`), Blizzard's shard (element 2) and
+Reflect's bursts (elements 4–16 of `REFLECT_n.mag`) draw their tails with these two programs.
+Both have a calc slot and a draw slot, so both run in the draw pass (§5.5); the calc records,
+the draw walks the record. All **checked** in the code unless marked.
+
+**157 pppKeShpTail3X** (calc `0x1404d04a0`, draw `0x1404d08e0`, construct `0x1404d0830`, reset
+`0x1404d08a0`). Work `w0` (offsets from it):
+
+| Off | Type | Meaning |
+|---|---|---|
+| +0x00 | 4×i16 | head colour R, G, B, A (8.8 like pppColor: 0x4000 = 0x80) |
+| +0x08 | 4×i16 | tail colour |
+| +0x10, +0x18 | 4×i16 each | head colour velocity, acceleration |
+| +0x20, +0x28 | 4×i16 each | tail colour velocity, acceleration |
+| +0x30 | 28 × 16 bytes | ring of past positions (x, y, z, w = 1) |
+| +0x1F0 | u32 | animation time |
+| +0x1F8 | u16 | random seed (one C `rand()` at construct) |
+| +0x1FA | u8 | index of the newest point (counts down, wraps 0 → 27) |
+
+`w1` is the instance colour (pppColor's work; only its alpha byte is read), `w3` the Z matrix.
+Key (0x58 bytes):
+
+| Off | Type | Meaning |
+|---|---|---|
+| @4 | i32 | shape number (0xFFFF = off) |
+| @8 | i32 | animation speed (added to the time once per drawn tick) |
+| @0xC, @0x10 | f32 | size of the first and of the last sprite |
+| @0x14 | f32 | random size change: each sprite is `size · (1 − r · @0x14)`, `r` in 0..1 |
+| @0x18 | f32 | spacing between sprites along the trail (at the first sprite's size) |
+| @0x1C | u8 | sprite count |
+| @0x1D | u8 | draw a sprite at the newest point first (else the count includes it but it is skipped) |
+| @0x1E | i16 | non-zero: turn each sprite by its random value |
+| @0x20 / @0x28 | 4×i16 | deltas added on a key tick to the head / tail colour |
+| @0x30 / @0x38 | 4×i16 | to the head colour's velocity / acceleration |
+| @0x40 / @0x48 | 4×i16 | to the tail colour's velocity / acceleration |
+| @0x50, @0x51 | u8 | → draw flags 0x800 / 0x400 (as DrawShapeX @12/@13) |
+| @0x52 | u8 | use the Z matrix at `w3` |
+| @0x53 | u8 | record in world space (the point through `Root`) and draw through `V`; else effect space, drawn through `V·Root` |
+| @0x54 | u8 | 0 = depth-sorted draw, else immediate |
+| @0x55 | u8 | 1 = no depth test |
+
+- *Calc* (once per tick): on the instance's frame 0, if it has never looped (instance byte
+  +0x9D, set at every instance loop), all 28 points are set to the current position. Then the
+  newest index moves back by one and the current position (`M`'s translation, or `Root ·` it)
+  is written there. Each colour channel: `velocity += acceleration; value += velocity`
+  (wrapping 16-bit), then on a key tick the key's six deltas are added.
+- *Draw* (`0x1404d08e0`): colours are the channels `>> 7` (bytes, 0x80 = 1.0), alphas times
+  the instance alpha / 128. With `n` = the count, the colour steps by `(head − tail)/(n−1)`,
+  the size by `(first − last)/(n−1)` and the spacing by `size step / first size · spacing`.
+  Starting at the newest point it walks back through the ring: before each further sprite the
+  colour, spacing and size step; it stops when the count runs out, the spacing reaches 0 or
+  it would have to pass the newest point again (the history ran out). The sprite goes at
+  distance `offset` into the current segment (linear), where `offset` starts at the key
+  spacing and grows by the current spacing after each sprite, while the "enough history"
+  check uses the remaining length minus the current spacing. (So the second sprite sits one
+  full spacing back; the slight mismatch is the game's.)
+- Each sprite: a 16-bit generator `seed = seed · 0x80D + 7` (from the stored seed, so every
+  sprite keeps its value from frame to frame) gives `r = seed / 65535` for the size change,
+  the rotation angle `seed` (65536 = one turn, sine table) and the animation phase: the step
+  shown is `((time + seed) / wait of step 0) mod steps`. The sprite matrix is a billboard:
+  axes `M.x · rs.x · size` and `M.y · rs.y · size` used as they are in view space (turned by
+  the angle: `x' = x·cos + y·sin`, `y' = y·cos − x·sin`), z axis zero, position `V·Root·p` (or
+  `V·p` in world mode); the shape is drawn with the packet colour (the trail colour, not the
+  instance colour).
+- After drawing, the time += @8 (only on the first drawn frame of a tick).
+- Reset (instance loop) clears the 48 colour bytes; the ring, seed and time stay.
+- Fire 1's element 0: shape 10, 15 sprites 6 units apart, size 2 → 1.5, ±40 % size, turned,
+  orange (0x83, 0x7B, 0x5D, 0x80) to faint red (0x5D, 0x33, 0x22, 0x10), world space, Z offset
+  −30 (KeZCrctShp): about 75 units of flame behind the ball.
+
+**155 pppKeShpTail2X** (calc `0x1404cef40`, draw `0x1404cf150`, construct `0x1404cf120`, no
+reset). The same trail with fixed colours and one animated shape. Work `w0`: u8 ring length
+(construct: 31), u8 newest index, u16 animation time, u16 step, u16 step drawn, ring at +0x10
+(31 × 16 bytes). Key (0x2C bytes): @4 shape, @8 i16 animation speed, @0xC/@0x10 first/last
+size, @0x14 4×u8 head colour, @0x18 4×u8 tail colour, @0x1C f32 spacing, @0x20 u16 count,
+@0x22 draw the first sprite, @0x23/@0x24 → 0x800/0x400, @0x25 Z matrix at `w3`, @0x26 world
+space, @0x27 0 = sorted, @0x28 1 = no depth test.
+- Calc: the same ring recording (in effect space only x, y, z are written), then the shape
+  animation like DrawShapeX but reading the wait and loop bit of the step it is on (no lag):
+  `drawn = step; time += speed; if time ≥ wait(step): step += 1, time −= wait; past the last
+  step: time = 0, step = 0 if that step loops else stays`.
+- Draw: the same walk; all sprites show step `drawn`, are batched, and have the axes of `M`
+  (x, y and z) times `rs` and the size.
+
+**Not traced**: what the PC's shape packet does with the instance's Z matrix for sprites that
+are elsewhere along the trail; `kh2-fx` applies the instance's own depth shift to all of them.
+
+### 7.6 Loop integrators (Blizzard's shard, Wisdom's Blizzard)
+
+Same keys and work as Point / Angle / Scale / Move / AngMove (§7.1); what differs is what an
+instance loop (§5.6) does to them. **Checked.**
+
+| Type | Name | calc, construct, reset | Difference |
+|---|---|---|---|
+| 210 | pppMoveLoop | `0x1404c1f00`, `0x1404c1ff0`, `0x1404c2010` | While fast-forwarding after a loop (`0x142b0ee24` set) the velocity takes its keys but the value is not advanced. Construct and reset clear only the velocity (`w1`). |
+| 211 | pppAngMoveLoop | `0x1404c2030`, `0x1404c20b0`, `0x1404c20d0` | Same for integer angles. |
+| 213 | pppPointLoop | `0x1404c2390`, `0x1404c2460`, `0x1404c2490` | On its first run (a key handle at `w0 + 12` still 0) the value is cleared and the current key remembered at `w0 + 12`. Key ticks add as Point does. Reset **subtracts** the remembered key; the replay from frame 0 adds it back, so the value runs on across loops instead of restarting. |
+| 214 | pppAngleLoop | `0x1404c2590`, `0x1404c26c0`, `0x1404c26f0` | As PointLoop with integer angles; after a key each angle above 0x10000 is brought down by whole turns (`while a > 0x10000: a −= 0x10000`). |
+| 215 | pppScaleLoop | `0x1404c27d0`, `0x1404c28a0`, `0x1404c28d0` | As PointLoop. |
+
+For comparison, the plain Move's construct and reset (`0x1404c1d30`) also clear only the
+velocity, and Point's (`0x1404c2370`) the value.
+
+### 7.7 Random vectors (Thunder, Wisdom's Thunder)
+
+**Checked.** Key: @4 i32 target offset (−1 = a scratch global), @8 three f32 ranges, @20 u8
+mode. Calc, not on a computed frame: on instance frame 0 the factors are drawn and stored at
+`w0`; on frame 0 and on every later key tick each target float gets an addition.
+
+| Type | Name | Calc | Factor(s) at `w0` | Added to target `i` |
+|---|---|---|---|---|
+| 63 | pppRandFV | `0x1404c4000` | one: `2u` (mode 0) or `u + u` | `range_i · r − range_i` |
+| 75 | pppSRandFV | `0x1404c4d60` (factor `0x1404c4e80`) | three, one per axis, as RandFV | `range_i · r_i − range_i` |
+| 76 | pppSRandUpFV | `0x1404c4ed0` (factor `0x1404c4fd0`) | three: `u` (mode 0) or `(u + u) / 2` | `range_i · r_i` (0..range) |
+
+`u` is `rand01` (§5.7). So SRandFV scatters each axis independently in ±range and SRandUpFV
+in 0..range.
+
+### 7.8 More matrices
+
+All calc-pass programs. **Checked** unless marked.
+
+- **96 pppRyjMatrixNoRot** (`0x1404c6ad0`; Fire 3, Reflect, Sora's element 42). `M` = the
+  camera view's inverse (`0x14047a6d0`: rotation transposed, translation inverted), rows scaled
+  by the scale at `w2`, translation = the position at `w0` (`w1` is not read). Drawn through
+  `V·Root` (DrawMatrix) it cancels the camera's rotation: the instance faces the camera in 3D
+  (only the root's own rotation remains). MegaBirths under it emit in that frame. `kh2-fx`
+  uses the view of the last frame built (the calc runs before the frame's camera is known);
+  a host can call `Effects::set_camera` before `tick` to remove the one-frame lag.
+- **106 pppKeParMatR** (`0x1404c7ae0`; children of Sora's element 42, Thunder 3). ParMatrix
+  that also inherits the parent's rotation without its scale: the translation becomes
+  `parent.M · M.translation` (as ParMatrix), and `M`'s axes are rotated by the parent's three
+  axes normalised (`M = R_parent · M`). The key is not read.
+- **85 pppKeMatSN** (`0x1404c5d70`, construct `0x1404c5e30`; Cure 3). Builds, at `w0 + 0x40`,
+  the rotation (X, Y, Z order) by `previous angles − the angles at w1` with a (0, 0, 0, 1)
+  translation row, stores the angles at `w0 + 0x80` for next time and points a global at the
+  matrix. That global (`0x142b0edf8`) is written only by this and pppSMatrix and never read on
+  PC, so the program has no visible effect; `kh2-fx` fills the work area only.
+- **116 pppKeDMat** (`0x1404c80e0`) and **117 pppKeDMatFr** (`0x1404c8150`; Sora's and
+  Wisdom's elements 1, 110–112). DrawMatrix and DrawMatrixFront (§7.3) that also copy the view
+  space matrix (`V·Root·M`, or the billboard one before `P`) into the 64 bytes at `w1`. The
+  distortion programs (§7.10) read it from there.
+
+### 7.9 More model draws
+
+- **138 pppDrawMdlSemi3** (draw `0x1404ca2b0`; Sora's element 1). DrawMdl3 (§7.4) whose blend
+  always comes from the key: @4 model, @8 u16 = GS ALPHA low byte and FIX (in place of the
+  model's), @10 bits as DrawMdl3 @8, @11 → 0x200, @12 environment matrix, @13 → 0x100, @14 Z
+  matrix at `w2`. Colour from `w0`; skipped when the instance alpha is 0. **Checked.**
+- **218 pppDrawMdlLoop** (calc `0x1404ca8f0`, draw `0x1404caae0`, construct `0x1404caa80`,
+  reset `0x1404caab0`; Wisdom's element 20). DrawMdlLoopZ (§7.4) without the Z matrix: the
+  same key up to @37, the same scroll calc (u from @8 and v from @20 on first use, velocities
+  and accelerations from the key, wrapped at 32768, held while fast-forwarding). **Checked.**
+  Its reset (and LoopZ's, `0x1404caf00`) clears only the velocities and accelerations: the
+  scroll position and the "initialised" word carry over the loop.
+
+### 7.10 KeBornRnd6 and the distortion programs
+
+**184 pppKeBornRnd6** (calc `0x1404d6b90`, construct `0x1404d6c50`, picker `0x1404e3170`, per
+child `0x1404d6c70`; Sora's element 42). VertexApLc's spawner (§7.4) that also turns each
+child toward its vertex. Key (28 bytes): @4 i16 vertex set, @6 u8 children per burst, @7 u8
+interval (0 = the program does nothing), @8 u8 order (0: in turn from the cursor at `w0`,
+wrapping; else `rand() mod count`, from the C `rand`), @12 i32 child emitter (−1 = none), @16
+i32 child offset for the vertex, @20 i32 (−1 = none), @24 i32 child offset for three angles.
+Work `w0`: u16 cursor, u8 countdown. Not while fast-forwarding, once per tick: if the
+countdown is 0 it is set to the interval and (unless @12 or @20 is −1) a burst is spawned;
+then the countdown goes down by one. The vertices come from the instance's VtMime override
+when it has one, else from the set's model. Each child gets:
+- the vertex `(x, y, z)` (floats, model units) at @16;
+- at @24 + 8 the z angle that turns its y axis toward the vertex in the x-y plane, and at @24
+  + 0 the x angle of the vertex's elevation; both are atan-based quadrant cases written out in
+  the code (`kh2-fx`: `born6_angles`); an angle whose vector is zero is left as it is; @24 + 4
+  (y) is set to 0. Angles: `trunc(a · 32768 / π)`.
+
+**160 pppKeShpDtt** (calc `0x1404d1450` (empty), draw `0x1404d1480`, construct/reset
+`0x1404d1460`) and **238 pppSnoMdlDttNorm** (draw `0x1404cd590`, construct `0x1404cd550`,
+reset `0x1404cd570`, packet `0x1404cc710`): **screen distortion**. Both build GS packets whose
+texture is the frame buffer itself (a `TEX0` made from the display buffer's address and
+width), so they redraw what is behind a quad (Dtt) or a model's triangles (DttNorm, offset
+along the model's normals) with shifted coordinates: a heat-haze ripple. Their state is a
+strength `t`, its rate and acceleration at `w0` (`rate += accel; t += rate`, plus key deltas:
+KeShpDtt @4, @8, @12 once per drawn tick; SnoMdlDttNorm @8, @12, @16 on every drawn call, both
+frames of a tick, no computed check). KeShpDtt reads the view matrix KeDMatFr left at `w2`;
+key @0x10/@0x14 scale the quad by `rs`, @0x18 picks one of two frame buffers, @0x19 flags.
+SnoMdlDttNorm: @4 model, @0x15, @0x16 (scale the strength by `rs.x`), @0x17, @0x1C. **Inferred**
+(the packet code was skimmed, not traced in full). `kh2-fx` runs their state but draws nothing
+(`kh2_fx::draws_nothing`): its output is textured triangles, which cannot read the frame.
 
 ## 8. MegaBirth (type 201): sprite particle bursts
 
@@ -720,6 +912,24 @@ Same DPD. Only the parts that use the programs added for them are listed.
 | Finishing Leap (167) | 34 | 0x4000, z −9 | Eight VertexAp spawners. Five each place one flame spike (model 7, DrawMatrix, ZXY angles tilting it up and out, spinning about its long axis, about 340 units long at full size) at one corner of a pentagon flattened into a ring of radius about 160 at y −80. The other three put streaks (shape 2), white flares (shape 19) and, from tick 10, gold MegaBirth sparks at all five corners. Plus one DrawMatrixWood model (emitter 18). |
 | Aerial Finish (194) | 35–38 | 0x4000, rotated swirls | VtMime morphs model 24 → 23 in the DrawMdlTs3 swirl rings. |
 
+### 12.2 The spells
+
+Programs the spell packages use beyond §12 and §12.1, by the elements the mod plays (all
+three levels of each spell unless a level is named):
+
+| Package | Elements | Programs |
+|---|---|---|
+| `FIRE_n.mag` | 0, 2, 5, 8–12 (the fireballs and their bursts) | KeShpTail3X flame tails (§7.5); Fire 3 element 4 RyjMatrixNoRot |
+| `BLIZZARD_n.mag` | 2 (the ice shard) | the Loop integrators (§7.6); Blizzard 1 also MoveLoop and a KeShpTail3X sparkle trail |
+| `THUNDER_n.mag` | 0 (the bolt); Thunder 3 elements 3, 4 | SRandFV; KeParMatR; SRandUpFV |
+| `CURE_3.mag` | 3 | KeMatSN (no visible effect) |
+| `REFLECT_n.mag` | 4–6, 8–10, 14–16; 7 | KeShpTail2X streaks; RyjMatrixNoRot |
+| `P_EX100_MAGF.a.us` (Wisdom) | 20; 100; 110–112 | Loop integrators and DrawMdlLoop; SRandFV; KeDMatFr + KeShpDtt (distortion) |
+| `P_EX100.a.us` (Sora) | 1; 42; 56; 110, 111 | KeDMat, DrawMdlSemi3, SnoMdlDttNorm; KeBornRnd6, KeParMatR, RyjMatrixNoRot; RandFV; KeDMatFr + KeShpDtt |
+
+With these every element of those packages runs (`kh2-fx`'s test
+`spell_packages_fully_supported`, which needs the user's files in `local/re/`).
+
 ## 13. Function index
 
 | Address | What |
@@ -754,6 +964,15 @@ Same DPD. Only the parts that use the programs added for them are listed.
 | 0x1404BDDA0, 0x1404BD5D0, 0x1404BC630, 0x1404BD2A0, 0x1404BD7A0, 0x1404BE100 | MegaBirth. |
 | 0x1404D57F0, 0x1404D5740 | VertexApLc. |
 | 0x1404BB5F0, 0x1404BAC50, 0x1404BC480 | Shipoly ribbon: record, draw, spline. |
+| 0x1404D04A0, 0x1404D08E0, 0x1404D0830, 0x1404D08A0 | KeShpTail3X calc, draw, construct, reset (§7.5). |
+| 0x1404CEF40, 0x1404CF150, 0x1404CF120 | KeShpTail2X calc, draw, construct. |
+| 0x1404C1F00.. 0x1404C28D0 | MoveLoop, AngMoveLoop, PointLoop, AngleLoop, ScaleLoop (§7.6). |
+| 0x1404C4000, 0x1404C4D60, 0x1404C4ED0 | RandFV, SRandFV, SRandUpFV (§7.7). |
+| 0x1404C6AD0, 0x1404C7AE0, 0x1404C5D70, 0x1404C80E0, 0x1404C8150 | RyjMatrixNoRot, KeParMatR, KeMatSN, KeDMat, KeDMatFr (§7.8). |
+| 0x1404CA2B0, 0x1404CA8F0, 0x1404CAAE0 | DrawMdlSemi3; DrawMdlLoop calc, draw (§7.9). |
+| 0x1404D6B90, 0x1404E3170, 0x1404D6C70 | KeBornRnd6: countdown, vertex picker, child set-up (§7.10). |
+| 0x1404D1480, 0x1404CD590, 0x1404CC710 | KeShpDtt draw, SnoMdlDttNorm draw and packet (frame-buffer distortion). |
+| 0x140779730 | The calc slots skipped while fast-forwarding: MegaBirth, `0x1404bfbe0`, Shipoly. |
 | 0x1404AFC10, 0x1404B03A0, 0x1404AF1A0, 0x1404AF400 | Shape packet, immediate draw, quads. |
 | 0x1404B8250, 0x1404B8AC0, 0x1404B3F10.. 0x1404B5730 | Model packet and primitive emitters. |
 | 0x1404B0FD0 | Default GS state (TEST, ZBUF, TEX1, CLAMP, TEXA, FOGCOL). |
@@ -771,6 +990,8 @@ Same DPD. Only the parts that use the programs added for them are listed.
 | Camera up vector | Data-driven; `(0,−1,0)` assumed (y down on screen). |
 | `effect/texcommon.dpd` | Extracted (`local/re/fx/texcommon.dpd`) and used by `kh2-fx`. Several of its textures share a `TBP`: they are packed side by side in one page through their upload offsets (§15.6). |
 | Remastered (HD) textures | The PC uses them when present; finding/decoding them needs the egs reader to expose HD asset headers (name, original offset, sizes). |
+| Spell programs (§7.5–§7.9, KeBornRnd6) | **Checked (exe)**; the trails rendered offline for Fire, Blizzard and Reflect and look as described, not compared side by side with the game. The tails' Z matrix use for sprites away from the instance is inferred. |
+| KeShpDtt, SnoMdlDttNorm (§7.10) | State **checked**; the drawing (a frame-buffer distortion) only skimmed, and not drawn by `kh2-fx`. |
 | EiDrawShipoly (ribbon) | Recording, spline, width, strip, UV and alpha mapping traced (§15). Not traced: the scroll-draw variant (key @8 ≠ 0), mode ≥ 2's exact smoothing, space modes 2/3, the reset hook. None are used by Explosion or Magnet. |
 | Model OMD flag bit 2, draw flags 0x400/0x800, model flags 0x100/0x200/0x2000 (lighting, env), sorted-model path details | Not traced. |
 | Two-point elements (flag 0x10000), sound ids above 999000 | Not traced (not needed for these effects). |
@@ -799,6 +1020,16 @@ Function addresses as before; all **checked** unless marked.
 - Instance groups: an emitter's instances are drawn in group order, which is the first
   instance, then the **newest** children, back to the second-oldest (new ones are linked right
   after the group's first instance).
+- **Draw slots run only on drawn passes** (`0x1404b23d0`, its second argument): the catch-up
+  ticks of a long frame call the calc slots of the draw programs but not their draw slots.
+  KeShpTail3X's animation time and SnoMdlDttNorm's strength live in their draw slots, so they
+  do not advance on those ticks.
+- **Fast-forward** (`0x1404b1f40`) calls every program's calc slot except the three listed at
+  `0x140779730` (MegaBirth, `0x1404bfbe0`, Shipoly), never a draw slot, with the flag at
+  `0x142b0ee24` set (MoveLoop, AngMoveLoop, the DrawMdlLoop scroll, VertexAp(Lc) and
+  KeBornRnd6 test it).
+- **Instance byte +0x9D** is 0 for a new instance and set to 1 at every instance loop; the
+  shape trails fill their history with the current point only on frame 0 of a new instance.
 
 ### 15.2 Programs
 
@@ -826,6 +1057,9 @@ Function addresses as before; all **checked** unless marked.
   lowers only its projected depth in proportion to the key's view-z offset (divided by the
   clip w and the depth range): position from `D`, depth from the corrected matrix, as inferred
   in §7.3. `kh2-fx` reports the offset per draw for the host renderer to apply to depth only.
+- **DrawMdlTs3 / DrawMdlLoopZ resets**: Ts3's reset (`0x1404ca890`) clears its 24 bytes; LoopZ's
+  (`0x1404caf00`) only the velocities and accelerations (earlier `kh2-fx` versions cleared
+  LoopZ's position and "initialised" word too, restarting the scroll from the key at a loop).
 
 ### 15.3 MegaBirth details
 

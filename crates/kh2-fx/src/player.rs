@@ -16,6 +16,7 @@ use crate::math;
 use crate::megabirth::MegaBirth;
 use crate::rng::Rng;
 use crate::shipoly::Shipoly;
+use crate::tail;
 
 /// Program types (indices into the game's table, names in
 /// [`kh2_formats::dpd::PROGRAM_NAMES`]).
@@ -35,48 +36,150 @@ pub(crate) mod k {
     /// Vertex morph between two models (drawn by a later DrawMdl*).
     pub const VT_MIME: u32 = 49;
     pub const RAND_FLOAT: u32 = 51;
+    /// RandFloat for three floats with one factor.
+    pub const RAND_FV: u32 = 63;
     pub const RAND_IV: u32 = 66;
+    /// Three floats, a factor each, uniform in ±range.
+    pub const S_RAND_FV: u32 = 75;
+    /// Three floats, a factor each, in 0..range.
+    pub const S_RAND_UP_FV: u32 = 76;
+    /// A rotation by the change of an angle, kept for the S-matrix pointer.
+    pub const KE_MAT_SN: u32 = 85;
     pub const MATRIX_XYZ: u32 = 87;
     pub const MATRIX_YXZ: u32 = 90;
     pub const MATRIX_ZXY: u32 = 91;
     pub const MATRIX_SCL: u32 = 94;
+    /// `M` with the camera's inverse rotation: always faces the camera.
+    pub const RYJ_MATRIX_NO_ROT: u32 = 96;
     pub const PAR_MATRIX: u32 = 105;
+    /// ParMatrix that also inherits the parent's rotation.
+    pub const KE_PAR_MAT_R: u32 = 106;
     pub const DRAW_MATRIX: u32 = 112;
     pub const DRAW_MATRIX_FRONT: u32 = 113;
     /// Billboard turning only about the root's own y axis.
     pub const DRAW_MATRIX_WOOD: u32 = 115;
+    /// DrawMatrix that also keeps the view-space matrix in the work area.
+    pub const KE_D_MAT: u32 = 116;
+    /// DrawMatrixFront, likewise.
+    pub const KE_D_MAT_FR: u32 = 117;
     /// `D` through the root matrix saved when the instance was spawned.
     pub const RYJ_DRAW_MATRIX_WORLD: u32 = 120;
     pub const KE_Z_CRCT: u32 = 124;
     pub const KE_Z_CRCT_SHP: u32 = 125;
     pub const DRAW_MDL3: u32 = 137;
+    /// DrawMdl3 with the blend taken from the key.
+    pub const DRAW_MDL_SEMI3: u32 = 138;
     pub const DRAW_MDL_TS3: u32 = 139;
     pub const DRAW_SHAPE: u32 = 141;
     pub const DRAW_SHAPE_X: u32 = 142;
+    /// A trail of sprites along past positions (`crate::tail`).
+    pub const KE_SHP_TAIL2X: u32 = 155;
+    pub const KE_SHP_TAIL3X: u32 = 157;
+    /// Screen distortion quad (reads the frame buffer; not drawn here).
+    pub const KE_SHP_DTT: u32 = 160;
     /// VertexApLc with the vertex carried through the spawner's matrix.
     pub const VERTEX_AP: u32 = 174;
     pub const VERTEX_AP_LC: u32 = 177;
+    /// Spawns children at vertices, each also turned to face its vertex.
+    pub const KE_BORN_RND6: u32 = 184;
     pub const MEGA_BIRTH: u32 = 201;
+    /// The Loop integrators keep their values over an instance loop.
+    pub const MOVE_LOOP: u32 = 210;
+    pub const ANG_MOVE_LOOP: u32 = 211;
+    pub const POINT_LOOP: u32 = 213;
+    pub const ANGLE_LOOP: u32 = 214;
+    pub const SCALE_LOOP: u32 = 215;
     /// Same routine as MatrixXYZ.
     pub const MATRIX_LOOP: u32 = 216;
     pub const DRAW_MATRIX_LOOP: u32 = 217;
+    /// DrawMdlLoopZ without the Z matrix.
+    pub const DRAW_MDL_LOOP: u32 = 218;
     pub const DRAW_MDL_LOOP_Z: u32 = 219;
     /// Same routine as VertexApLc.
     pub const VERTEX_AP_LC_LOOP: u32 = 236;
+    /// Model distortion by its normals (reads the frame buffer; not drawn).
+    pub const SNO_MDL_DTT_NORM: u32 = 238;
     pub const SHIPOLY: u32 = 241;
 }
 
 /// Program types this crate runs.
+///
+/// Two of them, pppKeShpDtt (160) and pppSnoMdlDttNorm (238), are the
+/// game's screen distortion: they bend the already drawn frame behind a
+/// quad or a model. Their state runs, but they draw nothing, because the
+/// crate's output is textured triangles and cannot read the frame
+/// ([`draws_nothing`]).
 pub fn supported(kind: u32) -> bool {
     matches!(
         kind,
-        28..=31 | 36..=43 | 49 | 51 | 66 | 84 | 87 | 90 | 91 | 94 | 105 | 112 | 113 | 115 | 120 | 124 | 125 | 137 | 139 | 141 | 142 | 174 | 177 | 201 | 216 | 217 | 219 | 236 | 241
+        28..=31
+            | 36..=43
+            | 49
+            | 51
+            | 63
+            | 66
+            | 75
+            | 76
+            | 84
+            | 85
+            | 87
+            | 90
+            | 91
+            | 94
+            | 96
+            | 105
+            | 106
+            | 112
+            | 113
+            | 115..=117
+            | 120
+            | 124
+            | 125
+            | 137..=139
+            | 141
+            | 142
+            | 155
+            | 157
+            | 160
+            | 174
+            | 177
+            | 184
+            | 201
+            | 210
+            | 211
+            | 213..=219
+            | 236
+            | 238
+            | 241
     )
+}
+
+/// Supported programs whose drawing reads the frame buffer (a screen
+/// distortion), which this crate's triangle output cannot do: they run
+/// but emit nothing.
+pub fn draws_nothing(kind: u32) -> bool {
+    matches!(kind, k::KE_SHP_DTT | k::SNO_MDL_DTT_NORM)
 }
 
 /// Programs with a draw slot: they run in the draw pass.
 pub(crate) fn has_draw(kind: u32) -> bool {
-    matches!(kind, k::VT_MIME | k::DRAW_MDL3 | k::DRAW_MDL_TS3 | k::DRAW_SHAPE | k::DRAW_SHAPE_X | k::MEGA_BIRTH | k::DRAW_MDL_LOOP_Z | k::SHIPOLY)
+    matches!(
+        kind,
+        k::VT_MIME
+            | k::DRAW_MDL3
+            | k::DRAW_MDL_SEMI3
+            | k::DRAW_MDL_TS3
+            | k::DRAW_SHAPE
+            | k::DRAW_SHAPE_X
+            | k::KE_SHP_TAIL2X
+            | k::KE_SHP_TAIL3X
+            | k::KE_SHP_DTT
+            | k::MEGA_BIRTH
+            | k::DRAW_MDL_LOOP
+            | k::DRAW_MDL_LOOP_Z
+            | k::SNO_MDL_DTT_NORM
+            | k::SHIPOLY
+    )
 }
 
 /// Programs skipped while an instance is fast-forwarded after a loop.
@@ -89,7 +192,7 @@ fn skipped_in_fast_forward(kind: u32) -> bool {
 pub(crate) struct Work(Vec<u8>);
 
 impl Work {
-    fn new(size: usize) -> Work {
+    pub(crate) fn new(size: usize) -> Work {
         Work(vec![0; size])
     }
     fn get<const N: usize>(&self, o: i32) -> [u8; N] {
@@ -99,7 +202,7 @@ impl Work {
             _ => [0; N],
         }
     }
-    fn set<const N: usize>(&mut self, o: i32, v: [u8; N]) {
+    pub(crate) fn set<const N: usize>(&mut self, o: i32, v: [u8; N]) {
         if o < 0 {
             return;
         }
@@ -126,8 +229,20 @@ impl Work {
     pub fn set_u16(&mut self, o: i32, v: u16) {
         self.set(o, v.to_le_bytes())
     }
+    pub fn u8(&self, o: i32) -> u8 {
+        self.get::<1>(o)[0]
+    }
     pub fn set_u8(&mut self, o: i32, v: u8) {
         self.set(o, [v])
+    }
+    /// A 4×4 matrix as the game stores it (its rows are glam's columns).
+    pub fn mat4(&self, o: i32) -> Mat4 {
+        Mat4::from_cols_array(&std::array::from_fn(|i| self.f32(o + i as i32 * 4)))
+    }
+    pub fn set_mat4(&mut self, o: i32, m: Mat4) {
+        for (i, v) in m.to_cols_array().into_iter().enumerate() {
+            self.set_f32(o + i as i32 * 4, v);
+        }
     }
     pub fn vec3(&self, o: i32) -> Vec3 {
         Vec3::new(self.f32(o), self.f32(o + 4), self.f32(o + 8))
@@ -141,7 +256,7 @@ impl Work {
     pub fn rgba(&self, o: i32) -> [u8; 4] {
         self.get(o + 8)
     }
-    fn zero(&mut self, o: i32, n: usize) {
+    pub(crate) fn zero(&mut self, o: i32, n: usize) {
         if o < 0 {
             return;
         }
@@ -179,6 +294,9 @@ pub(crate) enum ProgState {
     None,
     MegaBirth(Box<MegaBirth>),
     Shipoly(Box<Shipoly>),
+    /// KeShpTail3X: the animation time its draw last used (the game draws
+    /// with the time from before the tick's increment).
+    TailTime(u32),
 }
 
 /// One live instance of an emitter ("pObj").
@@ -195,6 +313,9 @@ pub(crate) struct Instance {
     pub spawned: bool,
     /// Loop restarted with loop start 0: reset again before the next run.
     pub reset_pending: bool,
+    /// Has looped at least once (the game's +0x9D): the tails then keep
+    /// their history instead of refilling it on frame 0.
+    pub looped: bool,
     pub m: Mat4,
     pub d: DKind,
     /// The program (index) whose VtMime vertices replace the model's in
@@ -208,25 +329,22 @@ pub(crate) struct Instance {
 
 impl Instance {
     /// Program constructs that do more than zero their work: RyjDrawMatrixWorld
-    /// saves the current root matrix at its `w1`.
-    fn constructed(mut self, def: &EmitterDef, root: Mat4) -> Instance {
+    /// saves the current root matrix at its `w1`; KeShpTail2X sets its ring
+    /// length; KeShpTail3X draws its random seed (one C `rand()`).
+    fn constructed(mut self, def: &EmitterDef, root: Mat4, rng: &mut Rng) -> Instance {
         for prog in &def.programs {
-            if prog.kind == k::RYJ_DRAW_MATRIX_WORLD {
-                let o = w(prog, 1);
-                for (i, v) in root.to_cols_array().into_iter().enumerate() {
-                    self.work.set_f32(o + i as i32 * 4, v);
-                }
+            match prog.kind {
+                k::RYJ_DRAW_MATRIX_WORLD => self.work.set_mat4(w(prog, 1), root),
+                k::KE_SHP_TAIL2X => self.work.set_u8(w(prog, 0), tail::TAIL2_LEN),
+                k::KE_SHP_TAIL3X => self.work.set_u16(w(prog, 0) + tail::TAIL3_SEED, rng.rand() as u16),
+                _ => {}
             }
         }
         self
     }
 
     fn saved_matrix(&self, o: i32) -> Mat4 {
-        let mut a = [0.0; 16];
-        for (i, v) in a.iter_mut().enumerate() {
-            *v = self.work.f32(o + i as i32 * 4);
-        }
-        Mat4::from_cols_array(&a)
+        self.work.mat4(o)
     }
 
     pub fn key<'a>(&self, prog: &'a Program, pi: usize) -> Option<&'a Key> {
@@ -241,6 +359,24 @@ pub(crate) struct EffectView {
     pub rs: Vec3,
     /// RGBA multiplier for the Color programs (element fade in alpha).
     pub colour: [f32; 4],
+    /// The camera view of the last frame built (the game reads the current
+    /// one; the programs that need it in their calc, RyjMatrixNoRot and
+    /// KeDMat(Fr), run before this frame's camera is known).
+    pub view: Mat4,
+}
+
+impl EffectView {
+    /// `V · Root`.
+    pub fn vr(&self) -> Mat4 {
+        self.view * self.root
+    }
+
+    /// The billboard matrix of pppDrawMatrixFront for `m`, in view space:
+    /// `m`'s axes times the root scale lengths, at the view position of its
+    /// origin.
+    pub fn front(&self, m: Mat4) -> Mat4 {
+        Mat4::from_cols(m.x_axis * self.rs.x, m.y_axis * self.rs.y, m.z_axis * self.rs.z, self.vr().transform_point3(m.w_axis.truncate()).extend(1.0))
+    }
 }
 
 /// One emitter's runtime state.
@@ -253,11 +389,28 @@ struct EmitterRt {
     group: Vec<Instance>,
 }
 
+/// A child a program asks for, with the words to write into its work area
+/// (in order: later writes win where they overlap).
 struct Spawn {
     emitter: usize,
     parent: (usize, u64),
-    offset: i32,
-    value: Vec3,
+    writes: Vec<(i32, [u8; 4])>,
+}
+
+impl Spawn {
+    fn new(emitter: usize, parent: (usize, u64)) -> Spawn {
+        Spawn { emitter, parent, writes: Vec::new() }
+    }
+    fn vec3(mut self, offset: i32, v: Vec3) -> Spawn {
+        for (i, c) in v.to_array().into_iter().enumerate() {
+            self.writes.push((offset + i as i32 * 4, c.to_le_bytes()));
+        }
+        self
+    }
+    fn i32(mut self, offset: i32, v: i32) -> Spawn {
+        self.writes.push((offset, v.to_le_bytes()));
+        self
+    }
 }
 
 /// Runs one particle data.
@@ -293,7 +446,7 @@ impl Player {
             frame: 0,
             ended: false,
             finished: false,
-            fx: EffectView { root: Mat4::IDENTITY, rs: Vec3::ONE, colour: [1.0; 4] },
+            fx: EffectView { root: Mat4::IDENTITY, rs: Vec3::ONE, colour: [1.0; 4], view: Mat4::IDENTITY },
             emitters,
             priority,
             next_uid: 1,
@@ -327,7 +480,7 @@ impl Player {
         self.emitters.get(e)?.group.iter().find(|i| i.uid == uid)
     }
 
-    fn new_instance(&mut self, def: &EmitterDef) -> Instance {
+    fn new_instance(&mut self, def: &EmitterDef, rng: &mut Rng) -> Instance {
         let uid = self.next_uid;
         self.next_uid += 1;
         let size = (def.work_size.max(0xa0) as usize - 0xa0) + 64;
@@ -339,6 +492,7 @@ impl Player {
             computed: false,
             spawned: false,
             reset_pending: false,
+            looped: false,
             m: Mat4::IDENTITY,
             d: DKind::None,
             mime: None,
@@ -346,37 +500,39 @@ impl Player {
             cursor: vec![0; n],
             state: vec![ProgState::None; n],
         }
-        .constructed(def, self.fx.root)
+        .constructed(def, self.fx.root, rng)
     }
 
     /// Spawn emitters whose start frame has come (each fires once).
-    fn spawn_clock(&mut self, lib: &Library) {
+    fn spawn_clock(&mut self, lib: &Library, rng: &mut Rng) {
         let data = &lib.dpds[self.dpd].particles[self.pd];
         for (e, def) in data.emitters.iter().enumerate() {
             if self.emitters[e].start == SPAWNED || self.emitters[e].start > self.frame {
                 continue;
             }
             self.emitters[e].start = SPAWNED;
-            let inst = self.new_instance(def);
+            let inst = self.new_instance(def, rng);
             insert(&mut self.emitters[e].group, inst);
         }
     }
 
-    fn apply_spawns(&mut self, lib: &Library, spawns: Vec<Spawn>) {
+    fn apply_spawns(&mut self, lib: &Library, rng: &mut Rng, spawns: Vec<Spawn>) {
         let data = &lib.dpds[self.dpd].particles[self.pd];
         for s in spawns {
             let Some(def) = data.emitters.get(s.emitter) else { continue };
-            let mut inst = self.new_instance(def);
+            let mut inst = self.new_instance(def, rng);
             inst.parent = Some(s.parent);
             inst.spawned = true;
-            inst.work.set_vec3(s.offset, s.value);
+            for (o, b) in s.writes {
+                inst.work.set(o, b);
+            }
             insert(&mut self.emitters[s.emitter].group, inst);
         }
     }
 
     /// The calc pass: spawn, then every program without a draw slot.
     pub fn calc_pass(&mut self, lib: &Library, rng: &mut Rng) {
-        self.spawn_clock(lib);
+        self.spawn_clock(lib, rng);
         let data = &lib.dpds[self.dpd].particles[self.pd];
         for (e, def) in data.emitters.iter().enumerate() {
             for (pi, prog) in def.programs.iter().enumerate() {
@@ -392,17 +548,23 @@ impl Player {
                     let fx = self.fx;
                     let inst = &mut self.emitters[e].group[ii];
                     prepare(inst, def, pi, prog);
-                    calc(lib, self.dpd, rng, &fx, inst, (e, pi), prog, parent_m, false, &mut spawns);
+                    // KeBornRnd6 takes its vertices from a VtMime morph when
+                    // the instance has one (the game's vertex override).
+                    let morph = (prog.kind == k::KE_BORN_RND6).then(|| mime_vertices(&lib.dpds[self.dpd], &def.programs, inst)).flatten();
+                    let ctx = CalcCtx { lib, dpd: self.dpd, fx: &fx, parent_m, morph: morph.as_deref(), fast_forward: false };
+                    calc(&ctx, rng, inst, (e, pi), prog, &mut spawns);
                 }
-                self.apply_spawns(lib, spawns);
+                self.apply_spawns(lib, rng, spawns);
             }
         }
     }
 
     /// The draw pass minus the drawing: the draw programs' calc parts. On a
     /// repeat frame (`repeat`, the game's first of the two frames a tick is
-    /// shown) MegaBirth does not step its particles.
-    pub fn draw_pass(&mut self, lib: &Library, rng: &mut Rng, repeat: bool) {
+    /// shown) MegaBirth does not step its particles. `shown` is false for
+    /// the catch-up ticks that run without drawing: the game does not call
+    /// draw slots then, and some programs keep state in them.
+    pub fn draw_pass(&mut self, lib: &Library, rng: &mut Rng, repeat: bool, shown: bool) {
         let data = &lib.dpds[self.dpd].particles[self.pd];
         let fx = self.fx;
         for (e, def) in data.emitters.iter().enumerate() {
@@ -415,7 +577,7 @@ impl Player {
                         continue;
                     }
                     prepare(inst, def, pi, prog);
-                    draw_calc(lib, self.dpd, rng, &fx, inst, pi, prog, repeat);
+                    draw_calc(lib, self.dpd, rng, &fx, inst, pi, prog, repeat, shown);
                 }
             }
             if repeat {
@@ -493,6 +655,7 @@ impl Player {
         {
             let inst = &mut self.emitters[e].group[i];
             inst.frame = 0;
+            inst.looped = true;
             reset(inst, def);
         }
         let mut guard = 0;
@@ -524,10 +687,11 @@ impl Player {
             }
             advance_cursor(inst, pi, prog);
             if has_draw(prog.kind) {
-                draw_calc_ff(lib, self.dpd, inst, pi, prog);
+                draw_calc_ff(lib, self.dpd, &fx, inst, pi, prog);
             } else {
                 let mut none = Vec::new();
-                calc(lib, self.dpd, rng, &fx, inst, (e, pi), prog, parent_m, true, &mut none);
+                let ctx = CalcCtx { lib, dpd: self.dpd, fx: &fx, parent_m, morph: None, fast_forward: true };
+                calc(&ctx, rng, inst, (e, pi), prog, &mut none);
             }
         }
         inst.frame = ((inst.frame & !0xfff) + TICK).min(0x6fff_f000);
@@ -577,7 +741,35 @@ fn reset(inst: &mut Instance, def: &EmitterDef) {
             k::ACCELE | k::SCL_ACCELE | k::MOVE | k::SCL_MOVE | k::POINT | k::SCALE | k::ANG_ACCELE | k::ANG_MOVE | k::ANGLE => inst.work.zero(w0, 12),
             k::COL_ACCELE | k::COL_MOVE | k::COLOR => inst.work.zero(w0, 8),
             k::DRAW_SHAPE | k::DRAW_SHAPE_X => inst.work.zero(w0, 6),
-            k::DRAW_MDL_TS3 | k::DRAW_MDL_LOOP_Z => inst.work.zero(w(prog, 2), 28),
+            k::DRAW_MDL_TS3 => inst.work.zero(w(prog, 2), 24),
+            // Only the scroll velocities and accelerations: the position
+            // and the "initialised" word carry over the loop.
+            k::DRAW_MDL_LOOP | k::DRAW_MDL_LOOP_Z => {
+                inst.work.zero(w(prog, 2) + 8, 8);
+                inst.work.zero(w(prog, 2) + 20, 8);
+            }
+            // The Loop integrators: Move keeps its value, only the
+            // velocity restarts; Point, Angle and Scale take back the key
+            // they started from, which the replay from frame 0 adds again,
+            // so the value runs on across the loop.
+            k::MOVE_LOOP | k::ANG_MOVE_LOOP => inst.work.zero(w(prog, 1), 12),
+            k::POINT_LOOP | k::SCALE_LOOP | k::ANGLE_LOOP => {
+                let first = inst.work.i32(w0 + 12);
+                if let Some(key) = first.checked_sub(1).and_then(|i| prog.keys.get(i as usize)) {
+                    for c in 0..3 {
+                        let o = w0 + c * 4;
+                        if prog.kind == k::ANGLE_LOOP {
+                            inst.work.set_i32(o, inst.work.i32(o).wrapping_sub(key.i32(4 + c as usize * 4)));
+                        } else {
+                            inst.work.set_f32(o, inst.work.f32(o) - key.f32(4 + c as usize * 4));
+                        }
+                    }
+                }
+            }
+            // The colours and their rates; the ring and seed stay.
+            k::KE_SHP_TAIL3X => inst.work.zero(w0, 48),
+            // The distortion strength, its rate and acceleration.
+            k::KE_SHP_DTT | k::SNO_MDL_DTT_NORM => inst.work.zero(w0, 12),
             // VertexAp has no reset slot: its countdown carries over a loop.
             k::VERTEX_AP_LC | k::VERTEX_AP_LC_LOOP => inst.work.zero(w0, 4),
             // Reset clears t, its rate and acceleration (the buffer stays).
@@ -597,19 +789,46 @@ fn on_key(inst: &Instance, key: &Key) -> bool {
     !inst.computed && key.frame() == inst.frame
 }
 
-#[allow(clippy::too_many_arguments)]
-fn calc(
-    lib: &Library,
+/// What a calc-pass program reads besides its instance.
+struct CalcCtx<'a> {
+    lib: &'a Library,
     dpd: usize,
-    rng: &mut Rng,
-    fx: &EffectView,
-    inst: &mut Instance,
-    (_e, pi): (usize, usize),
-    prog: &Program,
+    fx: &'a EffectView,
+    /// The parent instance's `M` (children).
     parent_m: Option<Mat4>,
+    /// The instance's VtMime vertices, when it has some.
+    morph: Option<&'a [[i16; 3]]>,
+    /// Calc-only steps after an instance loop (the game's flag at
+    /// 0x142B0EE24).
     fast_forward: bool,
-    spawns: &mut Vec<Spawn>,
-) {
+}
+
+/// The vertices a VtMime program last pointed the instance at (the game's
+/// vertex override at +0x90), if any.
+pub(crate) fn mime_vertices(dpd: &kh2_formats::dpd::Dpd, progs: &[Program], inst: &Instance) -> Option<Vec<[i16; 3]>> {
+    let pi = inst.mime?;
+    let prog = progs.get(pi)?;
+    let key = inst.key(prog, pi)?;
+    let a = dpd.model(key.i32(4))?;
+    let b = dpd.model(key.i32(8))?;
+    Some(vt_mime_vertices(&a.vertices, &b.vertices, inst.work.f32(w(prog, 0))))
+}
+
+/// One factor of the S-random programs: `2u` (mode 0) or `u + u` for
+/// SRandFV, uniform in ±range after `range·r − range`; `u` or `(u + u)/2`
+/// for SRandUpFV, in 0..range after `range·r`.
+fn s_rand(rng: &mut Rng, mode: u8, up: bool) -> f32 {
+    let u = rng.rand01();
+    match (mode != 0, up) {
+        (false, false) => u * 2.0,
+        (true, false) => u + rng.rand01(),
+        (false, true) => u,
+        (true, true) => (rng.rand01() + u) * 0.5,
+    }
+}
+
+fn calc(cx: &CalcCtx, rng: &mut Rng, inst: &mut Instance, (_e, pi): (usize, usize), prog: &Program, spawns: &mut Vec<Spawn>) {
+    let (lib, dpd, fx, parent_m, fast_forward) = (cx.lib, cx.dpd, cx.fx, cx.parent_m, cx.fast_forward);
     let Some(key) = inst.key(prog, pi) else { return };
     let (w0, w1, w2) = (w(prog, 0), w(prog, 1), w(prog, 2));
     match prog.kind {
@@ -636,6 +855,65 @@ fn calc(
                     inst.work.set_i32(w1 + o, inst.work.i32(w1 + o).wrapping_add(key.i32(4 + o as usize)));
                 }
                 inst.work.set_i32(w0 + o, inst.work.i32(w0 + o).wrapping_add(inst.work.i32(w1 + o)));
+            }
+        }
+        // MoveLoop: Move whose value stands still while the instance is
+        // fast-forwarded after a loop (the velocity still takes its keys).
+        k::MOVE_LOOP => {
+            if inst.computed {
+                return;
+            }
+            if key.frame() == inst.frame {
+                let v = inst.work.vec3(w1) + Vec3::from(key.vec3(4));
+                inst.work.set_vec3(w1, v);
+            }
+            if !fast_forward {
+                let v = inst.work.vec3(w0) + inst.work.vec3(w1);
+                inst.work.set_vec3(w0, v);
+            }
+        }
+        k::ANG_MOVE_LOOP => {
+            if inst.computed {
+                return;
+            }
+            let on = key.frame() == inst.frame;
+            for c in 0..3 {
+                let o = c * 4;
+                if on {
+                    inst.work.set_i32(w1 + o, inst.work.i32(w1 + o).wrapping_add(key.i32(4 + o as usize)));
+                }
+                if !fast_forward {
+                    inst.work.set_i32(w0 + o, inst.work.i32(w0 + o).wrapping_add(inst.work.i32(w1 + o)));
+                }
+            }
+        }
+        // PointLoop, ScaleLoop, AngleLoop: on the first run the value is
+        // cleared and the current key remembered (at w0 + 12; here its
+        // index + 1); then, as Point, a key tick adds the key. Their reset
+        // subtracts the remembered key (see `reset`). AngleLoop brings each
+        // angle back below one turn (above 0x10000, minus 0x10000) after a
+        // key.
+        k::POINT_LOOP | k::SCALE_LOOP | k::ANGLE_LOOP => {
+            if inst.computed {
+                return;
+            }
+            if inst.work.i32(w0 + 12) == 0 {
+                inst.work.zero(w0, 12);
+                inst.work.set_i32(w0 + 12, inst.cursor[pi].min(prog.keys.len().saturating_sub(1)) as i32 + 1);
+            }
+            if key.frame() == inst.frame {
+                for c in 0..3 {
+                    let o = w0 + c * 4;
+                    if prog.kind == k::ANGLE_LOOP {
+                        let mut a = inst.work.i32(o).wrapping_add(key.i32(4 + c as usize * 4));
+                        while a > 0x10000 {
+                            a -= 0x10000;
+                        }
+                        inst.work.set_i32(o, a);
+                    } else {
+                        inst.work.set_f32(o, inst.work.f32(o) + key.f32(4 + c as usize * 4));
+                    }
+                }
             }
         }
         k::COL_ACCELE | k::COL_MOVE => {
@@ -712,6 +990,44 @@ fn calc(
                 }
             }
         }
+        // RandFV / SRandFV / SRandUpFV: RandFloat for three floats. Key @4
+        // target offset (-1 = a global), @8 three f32 ranges, @20 mode. The
+        // factors are drawn on frame 0 and stored at w0 (one for RandFV,
+        // one per axis for the S forms); frame 0 and every later key tick
+        // add `range·r − range` (`range·r` for SRandUpFV) to the target.
+        k::RAND_FV | k::S_RAND_FV | k::S_RAND_UP_FV => {
+            if inst.computed {
+                return;
+            }
+            let mode = key.u8(20);
+            if inst.frame == 0 {
+                match prog.kind {
+                    k::RAND_FV => {
+                        let r = if mode == 0 { rng.rand01() * 2.0 } else { rng.rand01() + rng.rand01() };
+                        inst.work.set_f32(w0, r);
+                    }
+                    kind => {
+                        for c in 0..3 {
+                            let r = s_rand(rng, mode, kind == k::S_RAND_UP_FV);
+                            inst.work.set_f32(w0 + c * 4, r);
+                        }
+                    }
+                }
+            } else if key.frame() != inst.frame {
+                return;
+            }
+            let target = key.i32(4);
+            if target == -1 {
+                return;
+            }
+            for c in 0..3 {
+                let r = inst.work.f32(if prog.kind == k::RAND_FV { w0 } else { w0 + c * 4 });
+                let range = key.f32(8 + c as usize * 4);
+                let add = if prog.kind == k::S_RAND_UP_FV { range * r } else { range * r - range };
+                let o = target + c * 4;
+                inst.work.set_f32(o, add + inst.work.f32(o));
+            }
+        }
         k::MATRIX_XYZ | k::MATRIX_LOOP | k::MATRIX_YXZ | k::MATRIX_ZXY => {
             let a = [inst.work.i32(w1), inst.work.i32(w1 + 4), inst.work.i32(w1 + 8)];
             let r = match prog.kind {
@@ -724,13 +1040,57 @@ fn calc(
         k::MATRIX_SCL => {
             inst.m = math::trs(inst.work.vec3(w0), glam::Mat3::IDENTITY, inst.work.vec3(w1));
         }
+        // RyjMatrixNoRot: the rotation is the camera's inverse (the view's
+        // rotation transposed), rows scaled by w2, translation w0; w1 is
+        // not read. Drawn through `V·Root` the instance keeps facing the
+        // camera in 3D.
+        k::RYJ_MATRIX_NO_ROT => {
+            let r = glam::Mat3::from_mat4(fx.view).transpose();
+            inst.m = math::trs(inst.work.vec3(w0), r, inst.work.vec3(w2));
+        }
+        // KeMatSN: the rotation by (previous angles − angles at w1) goes to
+        // w0 + 0x40 (translation row (0, 0, 0, 1)), the angles to w0 + 0x80,
+        // and a global pointer to it that nothing reads on PC (like
+        // SMatrix). Kept for the work area only.
+        k::KE_MAT_SN => {
+            let cur = [inst.work.i32(w1), inst.work.i32(w1 + 4), inst.work.i32(w1 + 8)];
+            let prev = [inst.work.i32(w0 + 0x80), inst.work.i32(w0 + 0x84), inst.work.i32(w0 + 0x88)];
+            for (c, v) in cur.iter().enumerate() {
+                inst.work.set_i32(w0 + 0x80 + c as i32 * 4, *v);
+            }
+            let delta = std::array::from_fn(|c| prev[c].wrapping_sub(cur[c]));
+            inst.work.set_mat4(w0 + 0x40, Mat4::from_mat3(math::euler_xyz_i(delta)));
+        }
         k::PAR_MATRIX => {
             if let Some(pm) = parent_m {
                 let t = pm.transform_point3(inst.m.w_axis.truncate());
                 inst.m.w_axis = t.extend(inst.m.w_axis.w);
             }
         }
+        // KeParMatR: ParMatrix plus the parent's rotation without its scale:
+        // `M = R · M` with `R` the parent's normalised axes, then the
+        // translation is the parent's `M` applied to the old one.
+        k::KE_PAR_MAT_R => {
+            if let Some(pm) = parent_m {
+                let t = pm.transform_point3(inst.m.w_axis.truncate());
+                let axis = |v: glam::Vec4| v.truncate().normalize_or_zero();
+                let r = glam::Mat3::from_cols(axis(pm.x_axis), axis(pm.y_axis), axis(pm.z_axis));
+                inst.m = Mat4::from_mat3(r) * inst.m;
+                inst.m.w_axis = t.extend(1.0);
+            }
+        }
         k::DRAW_MATRIX | k::DRAW_MATRIX_LOOP => inst.d = DKind::Full,
+        // KeDMat / KeDMatFr: DrawMatrix / DrawMatrixFront that also leave
+        // the view-space matrix (`V·Root·M`, or the billboard one) at w1,
+        // for the distortion programs.
+        k::KE_D_MAT => {
+            inst.d = DKind::Full;
+            inst.work.set_mat4(w1, fx.vr() * inst.m);
+        }
+        k::KE_D_MAT_FR => {
+            inst.d = DKind::Front;
+            inst.work.set_mat4(w1, fx.front(inst.m));
+        }
         k::DRAW_MATRIX_FRONT => inst.d = DKind::Front,
         k::DRAW_MATRIX_WOOD => inst.d = DKind::Wood,
         k::RYJ_DRAW_MATRIX_WORLD => inst.d = DKind::World(inst.saved_matrix(w1)),
@@ -750,12 +1110,7 @@ fn calc(
                     let mut pick = |idx: usize| {
                         let v = vs.indices.get(idx).and_then(|&i| verts.get(i as usize)).copied().unwrap_or([0; 3]);
                         let v = Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
-                        spawns.push(Spawn {
-                            emitter: key.i32(12) as usize,
-                            parent: (_e, inst.uid),
-                            offset: key.i32(16),
-                            value: carry.map_or(v, |m| m.transform_point3(v)),
-                        });
+                        spawns.push(Spawn::new(key.i32(12) as usize, (_e, inst.uid)).vec3(key.i32(16), carry.map_or(v, |m| m.transform_point3(v))));
                     };
                     if key.i32(12) != -1 && !vs.indices.is_empty() {
                         if key.u8(8) == 0 {
@@ -779,16 +1134,150 @@ fn calc(
             }
             inst.work.set_u16(w0 + 2, count.wrapping_sub(1));
         }
+        // KeBornRnd6: VertexApLc's spawner with an 8-bit countdown (w0 + 2)
+        // that only runs while the key's interval (@7) is non-zero, and
+        // children that are also turned toward their vertex. Key: @4 i16
+        // vertex set, @6 count, @7 interval, @8 order (0 in turn from the
+        // cursor at w0, else random), @12 child emitter, @16 child offset
+        // for the vertex (x, y, z), @20 must not be -1, @24 child offset for
+        // the angles (`born6_angles`).
+        k::KE_BORN_RND6 => {
+            if fast_forward || inst.computed || key.u8(7) == 0 {
+                return;
+            }
+            let mut count = inst.work.u8(w0 + 2);
+            if count == 0 {
+                count = key.u8(7);
+                inst.work.set_u8(w0 + 2, count);
+                if key.i32(12) == -1 || key.i32(20) == -1 {
+                    return;
+                }
+                let d = &lib.dpds[dpd];
+                if let Some(vs) = d.vertex_set(key.i16(4) as i32) {
+                    let model = d.model(vs.model).map(|m| m.vertices.as_slice()).unwrap_or(&[]);
+                    let verts = cx.morph.unwrap_or(model);
+                    let n = vs.indices.len();
+                    if n > 0 {
+                        let random = key.u8(8) != 0;
+                        let pick = |rng: &mut Rng| (rng.rand() as usize) % n;
+                        let mut idx = if random { pick(rng) } else { inst.work.u16(w0) as usize };
+                        for _ in 0..key.u8(6) {
+                            let v = vs.indices.get(idx).and_then(|&i| verts.get(i as usize)).copied().unwrap_or([0; 3]);
+                            let v = Vec3::new(v[0] as f32, v[1] as f32, v[2] as f32);
+                            let mut s = Spawn::new(key.i32(12) as usize, (_e, inst.uid)).vec3(key.i32(16), v);
+                            let at = key.i32(24);
+                            let (z, x) = born6_angles(v);
+                            if let Some(z) = z {
+                                s = s.i32(at + 8, z);
+                            }
+                            if let Some(x) = x {
+                                s = s.i32(at, x);
+                            }
+                            spawns.push(s.i32(at + 4, 0));
+                            idx = if random {
+                                pick(rng)
+                            } else if idx + 1 >= n {
+                                0
+                            } else {
+                                idx + 1
+                            };
+                        }
+                        inst.work.set_u16(w0, idx as u16);
+                    }
+                }
+                count = inst.work.u8(w0 + 2);
+            }
+            inst.work.set_u8(w0 + 2, count.wrapping_sub(1));
+        }
         // S-matrix pointer (unused on PC), Z correction (built at draw time).
         _ => {}
     }
 }
 
-/// The calc part of the draw programs.
+/// The angles KeBornRnd6 gives a child for vertex `v` (65536 = one turn):
+/// z turns the child's y axis toward the vertex in the x-y plane, x tilts
+/// it by the vertex's elevation. Each is `None` when the vector it is
+/// built from is zero (the game then leaves that angle as it is). Written
+/// as the game's atan cases, quadrant by quadrant, in its precision.
+pub(crate) fn born6_angles(v: Vec3) -> (Option<i32>, Option<i32>) {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let atan = |r: f32| (r as f64).atan();
+    // One of the game's atan2 forms: `a` the numerator side, `b` the
+    // reference axis.
+    let quad = |a: f32, b: f32, half_b_neg: f32| -> Option<f32> {
+        let p = a * b;
+        if p > 0.0 {
+            let base = if b > 0.0 { 0.0 } else { -PI };
+            Some((atan(a / b) + base as f64) as f32)
+        } else if p < 0.0 {
+            let base = if a > 0.0 { FRAC_PI_2 } else { -FRAC_PI_2 };
+            Some((base as f64 - atan(b / a)) as f32)
+        } else if b != 0.0 {
+            Some(if b > 0.0 { 0.0 } else { half_b_neg })
+        } else if a != 0.0 {
+            Some(if a > 0.0 { FRAC_PI_2 } else { -FRAC_PI_2 })
+        } else {
+            None
+        }
+    };
+    let units = |a: f32| (a * 32768.0 / PI) as i32;
+    let z = quad(v.x, -v.y, PI).map(units);
+    let h = (v.x * v.x + v.y * v.y).sqrt();
+    let x = quad(-v.z, h, PI).map(units);
+    (z, x)
+}
+
+/// The calc part of the draw programs. `shown`: this pass is drawn (the
+/// game calls draw slots only then).
 #[allow(clippy::too_many_arguments)]
-fn draw_calc(lib: &Library, dpd: usize, rng: &mut Rng, fx: &EffectView, inst: &mut Instance, pi: usize, prog: &Program, repeat: bool) {
+fn draw_calc(lib: &Library, dpd: usize, rng: &mut Rng, fx: &EffectView, inst: &mut Instance, pi: usize, prog: &Program, repeat: bool, shown: bool) {
     let Some(key) = inst.key(prog, pi) else { return };
     match prog.kind {
+        // The tails' calc slots: once per tick (the ring and colours, 2X's
+        // animation).
+        k::KE_SHP_TAIL3X => {
+            let o = w(prog, 0);
+            if !inst.computed {
+                tail::tail3_calc(&mut inst.work, o, key, inst.frame, inst.looped, &inst.m, &fx.root);
+            }
+            // The draw then uses the time and adds the key's speed (@8),
+            // once per tick, only on a drawn pass.
+            let time = inst.work.i32(o + tail::TAIL3_TIME) as u32;
+            if shown && !inst.computed {
+                inst.state[pi] = ProgState::TailTime(time);
+                inst.work.set_i32(o + tail::TAIL3_TIME, (time as i32).wrapping_add(key.i32(8)));
+            } else if shown {
+                inst.state[pi] = ProgState::TailTime(time);
+            }
+        }
+        k::KE_SHP_TAIL2X => {
+            if !inst.computed {
+                let sh = lib.dpds[dpd].shape(key.i32(4));
+                tail::tail2_calc(&mut inst.work, w(prog, 0), key, inst.frame, inst.looped, &inst.m, &fx.root, sh);
+            }
+        }
+        // The distortion programs only integrate their strength (t, rate,
+        // acceleration at w0; on a key tick the key's three deltas) and
+        // draw nothing here. KeShpDtt once per tick (keys @4); SnoMdlDttNorm
+        // on every drawn call, both frames of a tick (keys @8).
+        k::KE_SHP_DTT | k::SNO_MDL_DTT_NORM => {
+            let dtt = prog.kind == k::KE_SHP_DTT;
+            if !shown || (dtt && inst.computed) {
+                return;
+            }
+            let o = w(prog, 0);
+            let wk = &mut inst.work;
+            let accel = wk.f32(o + 8);
+            let rate = accel + wk.f32(o + 4);
+            let t = rate + wk.f32(o);
+            let on = key.frame() == inst.frame;
+            let at = if dtt { 4 } else { 8 };
+            let add = |i: usize| if on { key.f32(at + i * 4) } else { 0.0 };
+            wk.set_f32(o, t + add(0));
+            wk.set_f32(o + 4, rate + add(1));
+            wk.set_f32(o + 8, accel + add(2));
+        }
+        k::DRAW_MDL_LOOP => loop_z(inst, prog, key, false),
         k::DRAW_SHAPE | k::DRAW_SHAPE_X => {
             if !inst.computed {
                 shape_anim(lib, dpd, &mut inst.work, w(prog, 0), key.i32(4), key.i16(8));
@@ -852,12 +1341,18 @@ fn draw_calc(lib: &Library, dpd: usize, rng: &mut Rng, fx: &EffectView, inst: &m
     }
 }
 
-/// Draw programs' calc while fast-forwarding (no ribbons or particles).
-fn draw_calc_ff(lib: &Library, dpd: usize, inst: &mut Instance, pi: usize, prog: &Program) {
+/// Draw programs' calc while fast-forwarding (no ribbons or particles; no
+/// draw slots, so neither the tail's time nor the distortion strength).
+fn draw_calc_ff(lib: &Library, dpd: usize, fx: &EffectView, inst: &mut Instance, pi: usize, prog: &Program) {
     let Some(key) = inst.key(prog, pi) else { return };
     match prog.kind {
         k::DRAW_SHAPE | k::DRAW_SHAPE_X => shape_anim(lib, dpd, &mut inst.work, w(prog, 0), key.i32(4), key.i16(8)),
-        k::DRAW_MDL_LOOP_Z => loop_z(inst, prog, key, true),
+        k::DRAW_MDL_LOOP | k::DRAW_MDL_LOOP_Z => loop_z(inst, prog, key, true),
+        k::KE_SHP_TAIL3X => tail::tail3_calc(&mut inst.work, w(prog, 0), key, inst.frame, inst.looped, &inst.m, &fx.root),
+        k::KE_SHP_TAIL2X => {
+            let sh = lib.dpds[dpd].shape(key.i32(4));
+            tail::tail2_calc(&mut inst.work, w(prog, 0), key, inst.frame, inst.looped, &inst.m, &fx.root, sh);
+        }
         _ => {}
     }
 }
@@ -991,6 +1486,366 @@ mod tests {
             assert!(supported(kind), "{kind}");
         }
         assert!(has_draw(k::VT_MIME) && !has_draw(k::DRAW_MATRIX_WOOD) && !has_draw(k::RYJ_DRAW_MATRIX_WORLD) && !has_draw(k::VERTEX_AP));
+        // The spells' programs (Fire, Blizzard, Thunder, Cure, Reflect,
+        // Wisdom Form's package).
+        for kind in [63, 75, 76, 85, 96, 106, 116, 117, 138, 155, 157, 160, 184, 210, 211, 213, 214, 215, 218, 238] {
+            assert!(supported(kind), "{kind}");
+        }
+        for kind in [k::DRAW_MDL_SEMI3, k::KE_SHP_TAIL2X, k::KE_SHP_TAIL3X, k::KE_SHP_DTT, k::DRAW_MDL_LOOP, k::SNO_MDL_DTT_NORM] {
+            assert!(has_draw(kind), "{kind}");
+        }
+        for kind in [k::POINT_LOOP, k::KE_PAR_MAT_R, k::KE_D_MAT, k::KE_BORN_RND6, k::RYJ_MATRIX_NO_ROT] {
+            assert!(!has_draw(kind), "{kind}");
+        }
+        assert!(draws_nothing(160) && draws_nothing(238) && !draws_nothing(157));
+        // Neighbours that no spell uses stay unsupported.
+        assert!(!supported(212) && !supported(156) && !supported(64));
+    }
+
+    /// A key: frame (ticks), then bytes placed at their offsets.
+    fn kb(tick: i32, len: usize, fields: &[(usize, &[u8])]) -> Key {
+        let mut data = vec![0u8; len];
+        data[..4].copy_from_slice(&(tick * TICK).to_le_bytes());
+        for (at, b) in fields {
+            data[*at..*at + b.len()].copy_from_slice(b);
+        }
+        Key { data }
+    }
+
+    fn f3b(v: [f32; 3]) -> Vec<u8> {
+        v.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
+
+    fn i3b(v: [i32; 3]) -> Vec<u8> {
+        v.iter().flat_map(|x| x.to_le_bytes()).collect()
+    }
+
+    fn prog(kind: u32, keys: Vec<Key>, work: Vec<i32>) -> Program {
+        let key_size = keys.first().map_or(0, |k| k.data.len() as u16);
+        Program { kind, key_size, keys, work }
+    }
+
+    fn inst(n: usize) -> Instance {
+        Instance {
+            uid: 1,
+            parent: None,
+            frame: 0,
+            computed: false,
+            spawned: false,
+            reset_pending: false,
+            looped: false,
+            m: Mat4::IDENTITY,
+            d: DKind::None,
+            mime: None,
+            work: Work::new(0x400),
+            cursor: vec![0; n],
+            state: vec![ProgState::None; n],
+        }
+    }
+
+    fn fx() -> EffectView {
+        EffectView { root: Mat4::IDENTITY, rs: Vec3::ONE, colour: [1.0; 4], view: Mat4::IDENTITY }
+    }
+
+    /// Run program 0 of `progs` at tick `t` (key cursor advanced as the
+    /// game does), returning the children it asked for.
+    fn step(lib: &Library, fx: &EffectView, rng: &mut Rng, inst: &mut Instance, p: &Program, t: i32, ff: bool) -> Vec<Spawn> {
+        inst.frame = t * TICK;
+        advance_cursor(inst, 0, p);
+        let mut spawns = Vec::new();
+        let cx = CalcCtx { lib, dpd: 0, fx, parent_m: None, morph: None, fast_forward: ff };
+        calc(&cx, rng, inst, (0, 0), p, &mut spawns);
+        spawns
+    }
+
+    fn empty_lib() -> Library {
+        crate::library::tests::lib_with_dpds(vec![kh2_formats::dpd::Dpd { particles: vec![], textures: vec![], shapes: vec![], models: vec![], vertex_sets: vec![], vram: [0; 4] }])
+    }
+
+    fn def(programs: Vec<Program>) -> EmitterDef {
+        EmitterDef { start: 0, total: 100 * TICK, loop_start: 0, loop_end: 0, work_size: 0x4a0, priority: 0, programs }
+    }
+
+    #[test]
+    fn point_loop_runs_on_across_a_loop() {
+        let lib = empty_lib();
+        let (fx, mut rng) = (fx(), Rng::new(1));
+        let p = prog(k::POINT_LOOP, vec![kb(0, 16, &[(4, &f3b([1.0, 2.0, 3.0]))]), kb(2, 16, &[(4, &f3b([10.0, 0.0, 0.0]))])], vec![0]);
+        let mut i = inst(1);
+        // Whatever was there is cleared on the first run.
+        i.work.set_vec3(0, Vec3::splat(99.0));
+        for t in 0..3 {
+            step(&lib, &fx, &mut rng, &mut i, &p, t, false);
+        }
+        assert_eq!(i.work.vec3(0), Vec3::new(11.0, 2.0, 3.0));
+        assert_eq!(i.work.i32(12), 1);
+        // The loop takes back key 0; replaying frame 0 adds it again.
+        let d = def(vec![p.clone()]);
+        reset(&mut i, &d);
+        assert_eq!(i.work.vec3(0), Vec3::new(10.0, 0.0, 0.0));
+        step(&lib, &fx, &mut rng, &mut i, &p, 0, true);
+        assert_eq!(i.work.vec3(0), Vec3::new(11.0, 2.0, 3.0));
+    }
+
+    #[test]
+    fn angle_loop_wraps_and_move_loop_holds_in_fast_forward() {
+        let lib = empty_lib();
+        let (fx, mut rng) = (fx(), Rng::new(1));
+        let a = prog(k::ANGLE_LOOP, vec![kb(0, 16, &[(4, &i3b([0x18000, 0x10000, -0x18000]))])], vec![0]);
+        let mut i = inst(1);
+        step(&lib, &fx, &mut rng, &mut i, &a, 0, false);
+        // Above one turn comes back by turns; exactly one turn and negative
+        // angles stay.
+        assert_eq!([i.work.i32(0), i.work.i32(4), i.work.i32(8)], [0x8000, 0x10000, -0x18000]);
+
+        let m = prog(k::MOVE_LOOP, vec![kb(0, 16, &[(4, &f3b([1.0, 0.0, 0.0]))])], vec![0, 16]);
+        let mut i = inst(1);
+        step(&lib, &fx, &mut rng, &mut i, &m, 0, false);
+        step(&lib, &fx, &mut rng, &mut i, &m, 1, false);
+        assert_eq!((i.work.vec3(0).x, i.work.vec3(16).x), (2.0, 1.0));
+        // Fast-forwarding: the velocity takes its key, the value holds.
+        step(&lib, &fx, &mut rng, &mut i, &m, 0, true);
+        assert_eq!((i.work.vec3(0).x, i.work.vec3(16).x), (2.0, 2.0));
+        // Its reset clears only the velocity.
+        reset(&mut i, &def(vec![m]));
+        assert_eq!((i.work.vec3(0).x, i.work.vec3(16).x), (2.0, 0.0));
+    }
+
+    #[test]
+    fn random_vectors() {
+        let lib = empty_lib();
+        let fx = fx();
+        let ranges = f3b([10.0, 20.0, 40.0]);
+        let key0 = |mode: u8| kb(0, 24, &[(4, &64i32.to_le_bytes()), (8, &ranges), (20, &[mode])]);
+        let keys = |mode: u8| vec![key0(mode), kb(2, 24, &[(4, &64i32.to_le_bytes()), (8, &ranges), (20, &[mode])])];
+        // RandFV: one factor for all three: each component is range·(r − 1).
+        let mut rng = Rng::new(5);
+        let p = prog(k::RAND_FV, keys(0), vec![0]);
+        let mut i = inst(1);
+        step(&lib, &fx, &mut rng, &mut i, &p, 0, false);
+        let v = i.work.vec3(64);
+        let r = i.work.f32(0);
+        assert!((0.0..=2.0).contains(&r));
+        assert!((v - Vec3::new(10.0, 20.0, 40.0) * (r - 1.0)).length() < 1e-4);
+        // Not a key tick: nothing; key tick 2: the same factor again.
+        step(&lib, &fx, &mut rng, &mut i, &p, 1, false);
+        assert_eq!(i.work.vec3(64), v);
+        step(&lib, &fx, &mut rng, &mut i, &p, 2, false);
+        assert!((i.work.vec3(64) - v * 2.0).length() < 1e-4);
+        // SRandFV: a factor per axis, each in ±range.
+        let p = prog(k::S_RAND_FV, keys(1), vec![0]);
+        let mut seen = Vec::new();
+        for seed in 0..50 {
+            let mut rng = Rng::new(seed);
+            let mut i = inst(1);
+            step(&lib, &fx, &mut rng, &mut i, &p, 0, false);
+            let v = i.work.vec3(64);
+            assert!(v.x.abs() <= 10.0 && v.y.abs() <= 20.0 && v.z.abs() <= 40.0, "{v}");
+            for c in 0..3 {
+                let r = i.work.f32(c * 4);
+                assert!((0.0..=2.0).contains(&r));
+            }
+            seen.push(v.x / 10.0 - v.y / 20.0);
+        }
+        // Independent factors: the normalised components differ.
+        assert!(seen.iter().any(|d| d.abs() > 0.05));
+        // SRandUpFV: 0..range, (u + u)/2 in mode 1.
+        let p = prog(k::S_RAND_UP_FV, keys(1), vec![0]);
+        for seed in 0..50 {
+            let mut rng = Rng::new(seed);
+            let mut i = inst(1);
+            step(&lib, &fx, &mut rng, &mut i, &p, 0, false);
+            let v = i.work.vec3(64);
+            assert!((0.0..=10.0).contains(&v.x) && (0.0..=20.0).contains(&v.y) && (0.0..=40.0).contains(&v.z), "{v}");
+        }
+        // Target -1 writes nowhere.
+        let p = prog(k::S_RAND_FV, vec![kb(0, 24, &[(4, &(-1i32).to_le_bytes()), (8, &ranges)])], vec![0]);
+        let mut i = inst(1);
+        step(&lib, &fx, &mut Rng::new(1), &mut i, &p, 0, false);
+        assert_eq!(i.work.vec3(64), Vec3::ZERO);
+    }
+
+    #[test]
+    fn no_rot_matrix_faces_the_camera() {
+        let lib = empty_lib();
+        let mut fx = fx();
+        fx.view = Mat4::from_translation(Vec3::new(5.0, 6.0, 7.0)) * Mat4::from_rotation_y(0.5) * Mat4::from_rotation_x(-0.3);
+        let p = prog(k::RYJ_MATRIX_NO_ROT, vec![kb(0, 4, &[])], vec![0, 16, 32]);
+        let mut i = inst(1);
+        i.work.set_vec3(0, Vec3::new(1.0, 2.0, 3.0));
+        i.work.set_vec3(32, Vec3::splat(2.0));
+        step(&lib, &fx, &mut Rng::new(1), &mut i, &p, 0, false);
+        assert_eq!(i.m.w_axis, glam::Vec4::new(1.0, 2.0, 3.0, 1.0));
+        // Through V·Root (root = identity) the rotation cancels: only the scale is left.
+        let vm = glam::Mat3::from_mat4(fx.vr() * i.m);
+        assert!((vm.x_axis - Vec3::X * 2.0).length() < 1e-5 && (vm.y_axis - Vec3::Y * 2.0).length() < 1e-5 && (vm.z_axis - Vec3::Z * 2.0).length() < 1e-5);
+    }
+
+    #[test]
+    fn par_mat_r_inherits_rotation_without_scale() {
+        let lib = empty_lib();
+        let fx = fx();
+        let p = prog(k::KE_PAR_MAT_R, vec![kb(0, 12, &[])], vec![96]);
+        let parent = Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0)) * Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2) * Mat4::from_scale(Vec3::splat(3.0));
+        let mut i = inst(1);
+        i.m = Mat4::from_translation(Vec3::new(1.0, 0.0, 0.0)) * Mat4::from_scale(Vec3::splat(2.0));
+        let mut spawns = Vec::new();
+        let cx = CalcCtx { lib: &lib, dpd: 0, fx: &fx, parent_m: Some(parent), morph: None, fast_forward: false };
+        calc(&cx, &mut Rng::new(1), &mut i, (0, 0), &p, &mut spawns);
+        // The position goes through the whole parent matrix ...
+        assert!((i.m.w_axis.truncate() - Vec3::new(10.0, 3.0, 0.0)).length() < 1e-5);
+        // ... the axes through its rotation only: x turned to y, length kept.
+        assert!((i.m.x_axis.truncate() - Vec3::new(0.0, 2.0, 0.0)).length() < 1e-5);
+        // Without a parent nothing changes.
+        let before = i.m;
+        step(&lib, &fx, &mut Rng::new(1), &mut i, &p, 0, false);
+        assert_eq!(i.m, before);
+    }
+
+    #[test]
+    fn ke_d_mat_keeps_the_view_matrix() {
+        let lib = empty_lib();
+        let mut fx = fx();
+        fx.view = Mat4::from_translation(Vec3::new(0.0, 0.0, 100.0));
+        fx.root = Mat4::from_rotation_y(0.4) * Mat4::from_scale(Vec3::new(2.0, 3.0, 4.0));
+        fx.rs = Vec3::new(2.0, 3.0, 4.0);
+        let mut i = inst(1);
+        i.m = Mat4::from_translation(Vec3::new(1.0, 2.0, 3.0));
+        let p = prog(k::KE_D_MAT, vec![kb(0, 4, &[])], vec![0, 64]);
+        step(&lib, &fx, &mut Rng::new(1), &mut i, &p, 0, false);
+        assert_eq!(i.d, DKind::Full);
+        assert_eq!(i.work.mat4(64), fx.vr() * i.m);
+        let p = prog(k::KE_D_MAT_FR, vec![kb(0, 4, &[])], vec![0, 128]);
+        step(&lib, &fx, &mut Rng::new(1), &mut i, &p, 0, false);
+        assert_eq!(i.d, DKind::Front);
+        let f = i.work.mat4(128);
+        // Billboard: axes are the root scale lengths, position the view position.
+        assert_eq!(f.x_axis.truncate(), Vec3::new(2.0, 0.0, 0.0));
+        assert!((f.w_axis.truncate() - fx.vr().transform_point3(Vec3::new(1.0, 2.0, 3.0))).length() < 1e-4);
+    }
+
+    #[test]
+    fn ke_mat_sn_rotates_by_the_angle_change() {
+        let lib = empty_lib();
+        let fx = fx();
+        let p = prog(k::KE_MAT_SN, vec![kb(0, 4, &[])], vec![0, 0x100]);
+        let mut i = inst(1);
+        i.work.set_i32(0x100, 0x4000);
+        step(&lib, &fx, &mut Rng::new(1), &mut i, &p, 0, false);
+        assert_eq!(i.work.i32(0x80), 0x4000);
+        // previous (0) − current (a quarter turn about x): y goes to −z.
+        let m = i.work.mat4(0x40);
+        assert!((m.y_axis.truncate() - Vec3::new(0.0, 0.0, -1.0)).length() < 1e-5);
+        assert_eq!(m.w_axis, glam::Vec4::W);
+        // No change since: identity.
+        step(&lib, &fx, &mut Rng::new(1), &mut i, &p, 1, false);
+        assert!((i.work.mat4(0x40) - Mat4::IDENTITY).abs_diff_eq(Mat4::ZERO, 1e-6));
+    }
+
+    #[test]
+    fn born6_angles_face_the_vertex() {
+        // Up (y down in KH2) gives no turn; +x a quarter turn about z.
+        assert_eq!(born6_angles(Vec3::new(0.0, -1.0, 0.0)), (Some(0), Some(0)));
+        assert_eq!(born6_angles(Vec3::new(1.0, 0.0, 0.0)), (Some(0x4000), Some(0)));
+        assert_eq!(born6_angles(Vec3::new(-1.0, 0.0, 0.0)), (Some(-0x4000), Some(0)));
+        assert_eq!(born6_angles(Vec3::new(0.0, 1.0, 0.0)), (Some(0x8000), Some(0)));
+        assert_eq!(born6_angles(Vec3::new(1.0, -1.0, 0.0)), (Some(0x2000), Some(0)));
+        // Elevation: toward −z tilts by +x.
+        assert_eq!(born6_angles(Vec3::new(0.0, -1.0, -1.0)), (Some(0), Some(0x2000)));
+        assert_eq!(born6_angles(Vec3::new(0.0, 0.0, -1.0)), (None, Some(0x4000)));
+        assert_eq!(born6_angles(Vec3::ZERO), (None, None));
+    }
+
+    #[test]
+    fn born_rnd6_spawns_at_vertices_with_angles() {
+        use kh2_formats::dpd::{Dpd, Model, VertexSet};
+        let model = Model { number: 3, flags: 0, blend: 0, blend_fix: 0, groups: vec![], vertices: vec![[10, 0, 0], [0, -10, 0], [0, 0, -10]], normals: vec![] };
+        let vs = VertexSet { number: 7, model: 3, indices: vec![0, 1, 2] };
+        let lib = crate::library::tests::lib_with_dpds(vec![Dpd { particles: vec![], textures: vec![], shapes: vec![], models: vec![model], vertex_sets: vec![vs], vram: [0; 4] }]);
+        let fx = fx();
+        // Set 7, two per burst every 2 ticks, in order, emitter 1, vertex at
+        // child +64, angles at child +80.
+        let key = kb(0, 28, &[(4, &7i16.to_le_bytes()), (6, &[2, 2, 0]), (12, &1i32.to_le_bytes()), (16, &64i32.to_le_bytes()), (20, &1i32.to_le_bytes()), (24, &80i32.to_le_bytes())]);
+        let p = prog(k::KE_BORN_RND6, vec![key], vec![0, 0]);
+        let mut i = inst(1);
+        let mut rng = Rng::new(1);
+        let words = |s: &Spawn| s.writes.iter().map(|(o, b)| (*o, i32::from_le_bytes(*b))).collect::<Vec<_>>();
+        let s0 = step(&lib, &fx, &mut rng, &mut i, &p, 0, false);
+        assert_eq!(s0.len(), 2);
+        assert_eq!(s0[0].emitter, 1);
+        // Vertex (10, 0, 0): position, then z a quarter turn, no x (zero
+        // elevation vector... (h = 10, -z = 0) gives 0), y = 0.
+        assert_eq!(words(&s0[0]), vec![(64, 10f32.to_bits() as i32), (68, 0), (72, 0), (88, 0x4000), (80, 0), (84, 0)]);
+        assert_eq!(words(&s0[1])[0], (64, 0));
+        assert_eq!(words(&s0[1])[1], (68, (-10f32).to_bits() as i32));
+        assert_eq!((i.work.u16(0), i.work.u8(2)), (2, 1));
+        // Countdown: nothing on tick 1, the next burst on tick 2 wraps the cursor.
+        assert!(step(&lib, &fx, &mut rng, &mut i, &p, 1, false).is_empty());
+        let s2 = step(&lib, &fx, &mut rng, &mut i, &p, 2, false);
+        assert_eq!(s2.len(), 2);
+        assert_eq!(words(&s2[0])[2], (72, (-10f32).to_bits() as i32));
+        assert_eq!(words(&s2[1])[0], (64, 10f32.to_bits() as i32));
+        // Never while fast-forwarding; an interval of 0 switches it off.
+        assert!(step(&lib, &fx, &mut rng, &mut i, &p, 3, true).is_empty());
+        let off = prog(k::KE_BORN_RND6, vec![kb(0, 28, &[(4, &7i16.to_le_bytes()), (6, &[2, 0, 0]), (12, &1i32.to_le_bytes())])], vec![0]);
+        let mut j = inst(1);
+        assert!(step(&lib, &fx, &mut rng, &mut j, &off, 0, false).is_empty());
+        assert_eq!(j.work.u8(2), 0);
+        // A -1 at @20: the countdown is set but nothing spawns.
+        let none = prog(k::KE_BORN_RND6, vec![kb(0, 28, &[(4, &7i16.to_le_bytes()), (6, &[2, 3, 0]), (12, &1i32.to_le_bytes()), (20, &(-1i32).to_le_bytes())])], vec![0]);
+        let mut j = inst(1);
+        assert!(step(&lib, &fx, &mut rng, &mut j, &none, 0, false).is_empty());
+        assert_eq!(j.work.u8(2), 3);
+    }
+
+    #[test]
+    fn tail3_draw_time_and_distortion_strength() {
+        let lib = empty_lib();
+        let fx = fx();
+        let mut rng = Rng::new(1);
+        let tail = prog(k::KE_SHP_TAIL3X, vec![kb(0, 0x58, &[(8, &0x200i32.to_le_bytes())])], vec![0, 0x300]);
+        let mut i = inst(1);
+        // First frame of tick 0: drawn with time 0, then the speed is added.
+        draw_calc(&lib, 0, &mut rng, &fx, &mut i, 0, &tail, true, true);
+        assert!(matches!(i.state[0], ProgState::TailTime(0)));
+        assert_eq!(i.work.i32(tail::TAIL3_TIME), 0x200);
+        // Second frame (computed): drawn with the new time, no increment.
+        i.computed = true;
+        draw_calc(&lib, 0, &mut rng, &fx, &mut i, 0, &tail, false, true);
+        assert!(matches!(i.state[0], ProgState::TailTime(0x200)));
+        assert_eq!(i.work.i32(tail::TAIL3_TIME), 0x200);
+        // A catch-up tick (not shown) records but does not advance the time.
+        i.computed = false;
+        i.frame = TICK;
+        draw_calc(&lib, 0, &mut rng, &fx, &mut i, 0, &tail, false, false);
+        assert_eq!(i.work.i32(tail::TAIL3_TIME), 0x200);
+        assert_eq!(i.work.u8(0x1fa), 26);
+
+        // KeShpDtt: once per tick; SnoMdlDttNorm: on every drawn call.
+        // Deltas at @4 for KeShpDtt, at @8 for SnoMdlDttNorm.
+        let dtt = prog(k::KE_SHP_DTT, vec![kb(0, 0x20, &[(4, &f3b([1.0, 0.5, 0.25]))])], vec![0]);
+        let sno = prog(k::SNO_MDL_DTT_NORM, vec![kb(0, 0x20, &[(8, &f3b([1.0, 0.5, 0.25]))])], vec![0x40, 0x80]);
+        let mut i = inst(1);
+        for computed in [false, true] {
+            i.computed = computed;
+            draw_calc(&lib, 0, &mut rng, &fx, &mut i, 0, &dtt, false, true);
+            draw_calc(&lib, 0, &mut rng, &fx, &mut i, 0, &sno, false, true);
+        }
+        // Key tick 0 (both calls for Sno): t, rate, accel = key; then rate += accel, t += rate.
+        assert_eq!((i.work.f32(0), i.work.f32(4), i.work.f32(8)), (1.0, 0.5, 0.25));
+        assert_eq!((i.work.f32(0x40), i.work.f32(0x44), i.work.f32(0x48)), (2.75, 1.25, 0.5));
+    }
+
+    #[test]
+    fn loop_resets_keep_the_scroll_position() {
+        let p = prog(k::DRAW_MDL_LOOP, vec![kb(0, 40, &[])], vec![0, 0, 32]);
+        let mut i = inst(1);
+        for (n, v) in [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0].iter().enumerate() {
+            i.work.set_f32(32 + n as i32 * 4, *v);
+        }
+        reset(&mut i, &def(vec![p]));
+        let got: Vec<f32> = (0..7).map(|n| i.work.f32(32 + n * 4)).collect();
+        assert_eq!(got, vec![1.0, 2.0, 0.0, 0.0, 5.0, 0.0, 0.0]);
     }
 
     fn key(frame: i32, words: &[f32]) -> Key {

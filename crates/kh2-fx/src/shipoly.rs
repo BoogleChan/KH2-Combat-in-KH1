@@ -342,7 +342,7 @@ mod tests {
         let k = key(&[(9, &[1]), (11, &[6]), (12, &10.0f32.to_le_bytes()), (0x12, &[8])]);
         let mut rng = Rng::new(1);
         let mut s = Shipoly::new(&k, &mut rng);
-        let fx = EffectView { root: Mat4::IDENTITY, rs: Vec3::ONE, colour: [1.0; 4] };
+        let fx = EffectView { root: Mat4::IDENTITY, rs: Vec3::ONE, colour: [1.0; 4], view: Mat4::IDENTITY };
         for t in 0..10 {
             let m = Mat4::from_translation(Vec3::new(t as f32 * 10.0, 0.0, 100.0));
             s.record(&k, t * 4096, m, &fx);

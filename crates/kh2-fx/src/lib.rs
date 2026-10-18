@@ -55,6 +55,14 @@
 //! VtMime, VertexAp, VertexApLc, RyjMegaBirth and EiDrawShipoly,
 //! plus MatrixLoop and VertexApLcLoop (the same routines as MatrixXYZ and
 //! VertexApLc in the game's table).
+//!
+//! And everything the spell packages use (Fire, Blizzard, Thunder, Cure,
+//! Reflect and Wisdom Form's package): the shape trails KeShpTail2X and
+//! KeShpTail3X (the flame and light tails), the Loop integrators (Move,
+//! AngMove, Point, Angle, Scale), RandFV, SRandFV, SRandUpFV,
+//! RyjMatrixNoRot, KeParMatR, KeMatSN, KeDMat, KeDMatFr, DrawMdlSemi3,
+//! DrawMdlLoop and KeBornRnd6. The two frame-buffer distortions, KeShpDtt
+//! and SnoMdlDttNorm, run but draw nothing ([`draws_nothing`]).
 //! Other types are skipped and counted ([`Effects::skipped_programs`],
 //! [`Library::unsupported_programs`]).
 //!
@@ -63,6 +71,9 @@
 //! - The game's "Z correction" (sprites drawn with their depth pulled
 //!   toward the camera) is reported per batch as
 //!   [`Batch::depth_offset`] for the renderer to apply to depth only.
+//! - RyjMatrixNoRot and KeDMat(Fr) read the camera in their calc; they use
+//!   the camera of the last [`Effects::build`] unless the host calls
+//!   [`Effects::set_camera`] before [`Effects::tick`].
 //! - Depth-sorted draws (rare here) go after the immediate ones, farthest
 //!   first; the game's ordering-table placement is inferred.
 //! - Colours follow the PS2 modulate rule the PC's particle path uses; the
@@ -85,10 +96,11 @@ pub mod output;
 mod player;
 pub mod rng;
 mod shipoly;
+mod tail;
 
 pub use camera::Camera;
 pub use effects::{element_transform, EffectHandle, Effects};
 pub use library::{Library, LoadError, Texture, TextureId, TextureSource};
 pub use output::{Batch, Blend, BlendMode, D3dFactor, D3dOp, Frame, Vertex};
-pub use player::supported;
+pub use player::{draws_nothing, supported};
 pub use rng::Rng;

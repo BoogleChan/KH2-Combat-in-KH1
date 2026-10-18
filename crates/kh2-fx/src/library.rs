@@ -439,6 +439,11 @@ pub(crate) mod tests {
         out
     }
 
+    /// A library of the given DPDs only (no elements, no textures).
+    pub(crate) fn lib_with_dpds(dpds: Vec<Dpd>) -> Library {
+        Library { elements: vec![], dpds, effects: HashMap::new(), common: None, textures: vec![], sources: vec![], tex_ids: HashMap::new(), warnings: vec![] }
+    }
+
     fn lib_with_common(dpd: Dpd) -> Library {
         Library { elements: vec![], dpds: vec![], effects: HashMap::new(), common: Some(dpd), textures: vec![], sources: vec![], tex_ids: HashMap::new(), warnings: vec![] }
     }

@@ -2257,3 +2257,14 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   swaps the source textures of mesh-table entries 0 and 1 for recoloured copies (red → hue 225°,
   the rest untouched) made with KH1's own texture creator, in the form only. The PKG's remastered
   assets are readable now (`egs::Archive::read_remastered`, `Kh1Install::read_remastered`).
+
+### 2026-10-18: Stage 196 (every KH2 particle program the spells use)
+- "wisdom form's fire is lackluster, add all the KH2 vfx": a helper session audited every spell
+  package the mod plays (Fire / Blizzard / Thunder / Cure / Reflect, Wisdom's and Sora's) and
+  implemented the 20 program types kh2-fx skipped (`docs/kh2-effects.md` §7.5..7.10): the shape
+  trails (155 / 157, `kh2-fx/src/tail.rs`: Fire's flame tails, Blizzard's sparkles, Reflect's
+  streaks), the loop integrators (210..215), random vectors (63 / 75 / 76), the camera-facing
+  and parent matrices, two model draws and vertex births. KH2's heat haze (160, 238) runs but
+  draws nothing (it needs the screen behind it). Test `spell_packages_fully_supported` (with
+  `KH2_FX_DIR`). The hook now passes the frame's camera before the effects tick
+  (`Effects::set_camera`).

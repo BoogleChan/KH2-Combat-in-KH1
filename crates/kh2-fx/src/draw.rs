@@ -13,7 +13,8 @@ use kh2_formats::dpd::{Key, Model, Program, ShapeFrame};
 use crate::camera::Camera;
 use crate::library::Library;
 use crate::output::{Blend, DrawState, Frame, Vertex};
-use crate::player::{k, vt_mime_vertices, DKind, Instance, Player, ProgState};
+use crate::math;
+use crate::player::{k, mime_vertices, DKind, Instance, Player, ProgState};
 
 /// Colour bytes (0x80 = 1.0) times a vertex colour, in 0x80 units,
 /// clamped like the PC's vertex path.
@@ -158,6 +159,25 @@ struct MdlDraw {
     z: Option<Mat4>,
 }
 
+/// A DrawMdl program's draw settings from its key and work, and the work
+/// offset of its Z matrix when the key asks for one.
+fn mdl_params(prog: &Program, key: &Key, wk: &crate::player::Work) -> (MdlDraw, Option<i32>) {
+    let s = w(prog, 2);
+    match prog.kind {
+        k::DRAW_MDL3 => (MdlDraw { blend: None, bits: key.u8(8), scroll: (0.0, 0.0), z: None }, (key.u8(12) != 0).then(|| w(prog, 2))),
+        // DrawMdl3 with the blend from the key (@8, the GS ALPHA byte and
+        // FIX, always used) and its other bytes two later.
+        k::DRAW_MDL_SEMI3 => (MdlDraw { blend: Some(key.u16(8)), bits: key.u8(10), scroll: (0.0, 0.0), z: None }, (key.u8(14) != 0).then(|| w(prog, 2))),
+        k::DRAW_MDL_TS3 => (MdlDraw { blend: None, bits: key.u8(32), scroll: (wk.f32(s), wk.f32(s + 12)), z: None }, (key.u8(36) != 0).then(|| w(prog, 3))),
+        // DrawMdlLoop: LoopZ's draw without the Z matrix.
+        k::DRAW_MDL_LOOP => (MdlDraw { blend: (key.i8(32) != -1).then(|| key.u16(32)), bits: key.u8(34), scroll: (wk.f32(s + 4), wk.f32(s + 16)), z: None }, None),
+        _ => (
+            MdlDraw { blend: (key.i8(32) != -1).then(|| key.u16(32)), bits: key.u8(34), scroll: (wk.f32(s + 4), wk.f32(s + 16)), z: None },
+            (key.u8(38) != 0).then(|| w(prog, 3)),
+        ),
+    }
+}
+
 fn model(cx: &Ctx, out: &mut Frame, mdl: &Model, verts: &[[i16; 3]], d: &Mat4, colour: [u8; 4], o: MdlDraw) {
     let immediate = o.bits & 2 != 0;
     let per_tri = !immediate && o.bits & 1 != 0;
@@ -222,26 +242,19 @@ pub(crate) fn build(lib: &Library, p: &Player, cam: &Camera, out: &mut Frame) {
                         };
                         shape_frame(&cx, out, &step.frame, &d, colour, SpriteDepth { test, offset: z_offset(&d, z), sorted });
                     }
-                    k::DRAW_MDL3 | k::DRAW_MDL_TS3 | k::DRAW_MDL_LOOP_Z => {
+                    k::DRAW_MDL3 | k::DRAW_MDL_SEMI3 | k::DRAW_MDL_TS3 | k::DRAW_MDL_LOOP | k::DRAW_MDL_LOOP_Z => {
                         let (Some(d), Some(mdl)) = (cx.d(inst), dpd.model(key.i32(4))) else { continue };
                         let wk = &inst.work;
                         let colour = wk.rgba(w(prog, 0));
                         if colour[3] == 0 || key.i32(4) == 0xffff {
                             continue;
                         }
-                        let s = w(prog, 2);
-                        let (o, zat) = match prog.kind {
-                            k::DRAW_MDL3 => (MdlDraw { blend: None, bits: key.u8(8), scroll: (0.0, 0.0), z: None }, (key.u8(12) != 0).then(|| w(prog, 2))),
-                            k::DRAW_MDL_TS3 => (MdlDraw { blend: None, bits: key.u8(32), scroll: (wk.f32(s), wk.f32(s + 12)), z: None }, (key.u8(36) != 0).then(|| w(prog, 3))),
-                            _ => (
-                                MdlDraw { blend: (key.i8(32) != -1).then(|| key.u16(32)), bits: key.u8(34), scroll: (wk.f32(s + 4), wk.f32(s + 16)), z: None },
-                                (key.u8(38) != 0).then(|| w(prog, 3)),
-                            ),
-                        };
+                        let (o, zat) = mdl_params(prog, key, wk);
                         let z = zat.and_then(|at| cx.z(&def.programs, inst, at));
-                        let morphed = inst.mime.and_then(|mi| mime(dpd, &def.programs, inst, mi));
+                        let morphed = mime_vertices(dpd, &def.programs, inst);
                         model(&cx, out, mdl, morphed.as_deref().unwrap_or(&mdl.vertices), &d, colour, MdlDraw { z, ..o });
                     }
+                    k::KE_SHP_TAIL2X | k::KE_SHP_TAIL3X => tail(&cx, out, &def.programs, inst, pi, prog, key),
                     k::MEGA_BIRTH => megabirth(&cx, out, inst, pi, prog, key),
                     k::SHIPOLY => shipoly(&cx, out, inst, pi, prog, key),
                     _ => {}
@@ -251,13 +264,55 @@ pub(crate) fn build(lib: &Library, p: &Player, cam: &Camera, out: &mut Frame) {
     }
 }
 
-/// The vertices a VtMime program (index `pi`) last pointed the instance at.
-fn mime(dpd: &kh2_formats::dpd::Dpd, progs: &[Program], inst: &Instance, pi: usize) -> Option<Vec<[i16; 3]>> {
-    let prog = progs.get(pi)?;
-    let key = inst.key(prog, pi)?;
-    let a = dpd.model(key.i32(4))?;
-    let b = dpd.model(key.i32(8))?;
-    Some(vt_mime_vertices(&a.vertices, &b.vertices, inst.work.f32(w(prog, 0))))
+/// pppKeShpTail2X / 3X: one camera-facing sprite per trail point
+/// (`crate::tail`). Each sprite's axes are the instance's `M` axes times
+/// the root scale lengths and the sprite size, used as they are in view
+/// space (like DrawMatrixFront); its position is the trail point through
+/// `V·Root`, or `V` for points recorded in world space. 3X can also turn
+/// each sprite by its random value and shows it at its own animation
+/// phase; 2X draws the one step it animates.
+fn tail(cx: &Ctx, out: &mut Frame, progs: &[Program], inst: &Instance, pi: usize, prog: &Program, key: &Key) {
+    if key.i32(4) == 0xffff {
+        return;
+    }
+    let Some(sh) = cx.lib.dpds[cx.dpd].shape(key.i32(4)) else { return };
+    let o = w(prog, 0);
+    let colour = inst.work.rgba(w(prog, 1));
+    let tail3 = prog.kind == k::KE_SHP_TAIL3X;
+    // Key bytes: Z matrix, world space, immediate draw, no depth test.
+    let (z_at, world, sort, no_test) = if tail3 { (0x52, 0x53, 0x54, 0x55) } else { (0x25, 0x26, 0x27, 0x28) };
+    let space = if key.u8(world) != 0 { cx.view } else { cx.vr };
+    // The instance's Z matrix serves every sprite: the depth shift it
+    // gives the instance itself.
+    let z = (key.u8(z_at) != 0).then(|| cx.z(progs, inst, w(prog, 3))).flatten();
+    let d = cx.d(inst).unwrap_or_else(|| Mat4::from_translation(cx.vr.transform_point3(inst.m.w_axis.truncate())));
+    let depth = SpriteDepth { test: key.u8(no_test) != 1, offset: z_offset(&d, z), sorted: key.u8(sort) == 0 };
+    let m = inst.m;
+    let (ax, ay, az) = (m.x_axis * cx.rs.x, m.y_axis * cx.rs.y, m.z_axis * cx.rs.z);
+    let at = |p: Vec3| space.transform_point3(p).extend(1.0);
+    if tail3 {
+        let time = match inst.state[pi] {
+            ProgState::TailTime(t) => t,
+            _ => inst.work.i32(o + crate::tail::TAIL3_TIME) as u32,
+        };
+        let spin = key.i16(0x1e) != 0;
+        for s in crate::tail::tail3_sprites(&inst.work, o, key, colour) {
+            let (mut x, mut y) = (ax * s.sprite.size, ay * s.sprite.size);
+            if spin {
+                let (sn, cs) = (math::sin_i(s.seed as i32), math::cos_i(s.seed as i32));
+                (x, y) = (x * cs + y * sn, y * cs - x * sn);
+            }
+            let Some(step) = sh.sequence.get(crate::tail::tail3_step(sh, time, s.seed)) else { continue };
+            let mm = Mat4::from_cols(x, y, glam::Vec4::ZERO, at(s.sprite.pos));
+            shape_frame(cx, out, &step.frame, &mm, s.sprite.colour, depth);
+        }
+    } else {
+        let Some(step) = sh.sequence.get(inst.work.u16(o + 6) as usize) else { return };
+        for s in crate::tail::tail2_sprites(&inst.work, o, key, colour) {
+            let mm = Mat4::from_cols(ax * s.size, ay * s.size, az * s.size, at(s.pos));
+            shape_frame(cx, out, &step.frame, &mm, s.colour, depth);
+        }
+    }
 }
 
 fn megabirth(cx: &Ctx, out: &mut Frame, inst: &Instance, pi: usize, prog: &Program, key: &Key) {
@@ -430,6 +485,33 @@ mod tests {
         assert_eq!(c[1], 0.0);
         assert_eq!(c[2], 0.5);
         assert_eq!(c[3], 0.5);
+    }
+
+    #[test]
+    fn model_programs_key_layouts() {
+        let key = |bytes: &[(usize, u8)]| {
+            let mut data = vec![0u8; 44];
+            for &(at, b) in bytes {
+                data[at] = b;
+            }
+            Key { data }
+        };
+        let prog = |kind: u32| Program { kind, key_size: 44, keys: vec![], work: vec![0, 0, 16, 64] };
+        let mut wk = crate::player::Work::new(128);
+        for (i, v) in [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0].iter().enumerate() {
+            wk.set_f32(16 + i as i32 * 4, *v);
+        }
+        // DrawMdlSemi3: blend @8 (ALPHA byte, FIX) always, bits @10, Z @14 at w2.
+        let (o, z) = mdl_params(&prog(k::DRAW_MDL_SEMI3), &key(&[(8, 0x48), (9, 0x40), (10, 2), (14, 1)]), &wk);
+        assert_eq!((o.blend, o.bits, o.scroll, z), (Some(0x4048), 2, (0.0, 0.0), Some(16)));
+        let (o, z) = mdl_params(&prog(k::DRAW_MDL_SEMI3), &key(&[]), &wk);
+        assert_eq!((o.blend, z), (Some(0), None));
+        // DrawMdlLoop: LoopZ's blend (0xFF = the model's), bits and scroll,
+        // never a Z matrix even with LoopZ's byte set.
+        let (o, z) = mdl_params(&prog(k::DRAW_MDL_LOOP), &key(&[(32, 0xff), (34, 1), (38, 1)]), &wk);
+        assert_eq!((o.blend, o.bits, o.scroll, z), (None, 1, (2.0, 5.0), None));
+        let (_, z) = mdl_params(&prog(k::DRAW_MDL_LOOP_Z), &key(&[(32, 0xff), (38, 1)]), &wk);
+        assert_eq!(z, Some(64));
     }
 
     #[test]

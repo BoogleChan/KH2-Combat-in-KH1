@@ -64,7 +64,8 @@ fn particle_data(total_ticks: u32, end_ticks: u32, progs: &[Prog]) -> Vec<u8> {
     w32(&mut b, p(e + 20), total_ticks * TICK);
     w32(&mut b, p(e + 24), 0x7000_0000);
     w32(&mut b, p(e + 28), 0x7000_0000);
-    w32(&mut b, p(e + 32), 0xa0 + 256);
+    // Room for a trail's ring (KeShpTail3X needs 0x1FB bytes).
+    w32(&mut b, p(e + 32), 0xa0 + 0x400);
     put(&mut b, p(e + 36), &0i16.to_le_bytes());
     put(&mut b, p(e + 38), &(n as i16).to_le_bytes());
     for (i, (kind, size, keys, work)) in progs.iter().enumerate() {
@@ -357,5 +358,133 @@ fn wood_billboard_stays_upright() {
     for v in vs {
         assert!(v.pos[2].abs() < 1e-3, "{:?}", v.pos);
         assert!((v.pos[0] - 10.0).abs() > 31.9 && (v.pos[1]).abs() > 31.9, "{:?}", v.pos);
+    }
+}
+
+/// A shot moving 10 units along +x per tick (Move, Point, Scale, Color,
+/// MatrixScl) with a trail program drawing shape 0 behind it.
+fn trail_effect(trail: (u32, u16, Vec<u8>)) -> Vec<u8> {
+    let (kind, size, key) = trail;
+    let progs: Vec<Prog> = vec![
+        (36, 16, vec![(0, f3(10.0, 0.0, 0.0))], vec![0, 32]),
+        (40, 16, vec![(0, f3(0.0, 0.0, 0.0))], vec![0]),
+        (42, 16, vec![(0, f3(1.0, 1.0, 1.0))], vec![16]),
+        (43, 12, vec![(0, [0x00, 0x40, 0x00, 0x40, 0x00, 0x40, 0x00, 0x40].to_vec())], vec![48]),
+        (94, 4, vec![(0, vec![])], vec![0, 16]),
+        (kind, size, vec![(0, key)], vec![256, 48, 0, 0]),
+    ];
+    dpd(particle_data(20, 20, &progs))
+}
+
+/// Key bytes (without the frame word) with fields at their key offsets.
+fn key_bytes(len: usize, fields: &[(usize, &[u8])]) -> Vec<u8> {
+    let mut k = vec![0u8; len - 4];
+    for (at, b) in fields {
+        k[at - 4..at - 4 + b.len()].copy_from_slice(b);
+    }
+    k
+}
+
+/// Centres of the drawn quads, in draw order.
+fn quad_centres(f: &Frame) -> Vec<Vec3> {
+    f.vertices.chunks(6).map(|q| q.iter().map(|v| Vec3::from(v.pos)).sum::<Vec3>() / 6.0).collect()
+}
+
+fn run_trail(trail: (u32, u16, Vec<u8>), frames: usize) -> Frame {
+    let lib = Library::load(&pax(7, 0, 0.0, 0, trail_effect(trail)), None).unwrap();
+    assert!(lib.unsupported_programs(7).is_empty());
+    let mut fx = Effects::new(Arc::new(lib));
+    let cam = Camera::look_at(Vec3::new(20.0, 0.0, -200.0), Vec3::new(20.0, 0.0, 0.0), Vec3::NEG_Y);
+    let mut bones = |_: u16| Some(Mat4::IDENTITY);
+    fx.start(7, &mut bones).unwrap();
+    let mut f = Frame::new();
+    for _ in 0..frames {
+        fx.tick(1.0, &mut bones);
+        fx.build(&cam, &mut f);
+    }
+    f
+}
+
+#[test]
+fn shape_trail_3x_follows_the_shot() {
+    // Shape 0, size 1 → 1, spacing 10, 4 sprites from the head, immediate,
+    // head and tail colours 0x80 (0x4000 in 8.8) in every channel.
+    let colour: Vec<u8> = [0x4000i16; 4].iter().flat_map(|c| c.to_le_bytes()).collect();
+    let key = key_bytes(
+        0x58,
+        &[(0xc, &1f32.to_le_bytes()), (0x10, &1f32.to_le_bytes()), (0x18, &10f32.to_le_bytes()), (0x1c, &[4, 1]), (0x20, &colour), (0x28, &colour), (0x54, &[1])],
+    );
+    // Five ticks: the shot has been at x = 10, 20, 30, 40, 50.
+    let f = run_trail((157, 0x58, key), 10);
+    let c = quad_centres(&f);
+    assert_eq!(c.len(), 4, "{c:?}");
+    for (q, x) in c.iter().zip([50.0, 40.0, 30.0, 20.0]) {
+        assert!((*q - Vec3::new(x, 0.0, 0.0)).length() < 1e-3, "{c:?}");
+    }
+    // 32-unit sprites (shape 0 at size 1), full colour.
+    let xs: Vec<f32> = f.vertices[..6].iter().map(|v| v.pos[0]).collect();
+    assert!((xs.iter().cloned().fold(f32::MIN, f32::max) - xs.iter().cloned().fold(f32::MAX, f32::min) - 32.0).abs() < 1e-3);
+    assert_eq!(f.vertices[0].color, [1.0; 4]);
+}
+
+#[test]
+fn shape_trail_2x_shrinks_and_fades() {
+    // Size 2 → 1 over 3 sprites, spacing 10 (shrinking with the size: 7.5,
+    // 5), head colour 0x80 fading to alpha 0 at the tail.
+    let key = key_bytes(
+        0x2c,
+        &[
+            (0xc, &2f32.to_le_bytes()),
+            (0x10, &1f32.to_le_bytes()),
+            (0x14, &[0x80, 0x80, 0x80, 0x80]),
+            (0x18, &[0x80, 0x80, 0x80, 0]),
+            (0x1c, &10f32.to_le_bytes()),
+            (0x20, &3u16.to_le_bytes()),
+            (0x22, &[1]),
+            (0x27, &[1]),
+        ],
+    );
+    let f = run_trail((155, 0x2c, key), 10);
+    let c = quad_centres(&f);
+    assert_eq!(c.len(), 3, "{c:?}");
+    // Head at 50; the second sprite at the first spacing (10) back, the
+    // third the second spacing (7.5) further.
+    for (q, x) in c.iter().zip([50.0, 40.0, 32.5]) {
+        assert!((q.x - x).abs() < 1e-3, "{c:?}");
+    }
+    let alpha: Vec<f32> = f.vertices.chunks(6).map(|q| q[0].color[3]).collect();
+    assert_eq!(alpha, vec![1.0, 0.5, 0.0]);
+    let width = |q: &[kh2_fx::Vertex]| q.iter().map(|v| v.pos[0]).fold(f32::MIN, f32::max) - q.iter().map(|v| v.pos[0]).fold(f32::MAX, f32::min);
+    let w: Vec<f32> = f.vertices.chunks(6).map(width).collect();
+    assert!((w[0] - 64.0).abs() < 1e-3 && (w[1] - 48.0).abs() < 1e-3 && (w[2] - 32.0).abs() < 1e-3, "{w:?}");
+}
+
+/// The spell packages the mod plays use no program this crate skips.
+/// Needs the user's own files in `local/re/` (or the folder in
+/// `KH2_FX_DIR`); skipped when they are missing.
+#[test]
+fn spell_packages_fully_supported() {
+    let dir = std::env::var("KH2_FX_DIR").map(std::path::PathBuf::from).unwrap_or_else(|_| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../local/re"));
+    let mut files: Vec<(String, Option<&str>)> = Vec::new();
+    for s in ["FIRE", "BLIZZARD", "THUNDER", "CURE", "REFLECT"] {
+        for n in 1..=3 {
+            files.push((format!("{s}_{n}.mag"), None));
+        }
+    }
+    files.push(("P_EX100_MAGF.a.us".into(), Some("p_ex")));
+    files.push(("P_EX100.a.us".into(), Some("p_ex")));
+    let common = std::fs::read(dir.join("fx/texcommon.dpd")).ok();
+    let mut checked = 0;
+    for (f, name) in &files {
+        let Ok(bytes) = std::fs::read(dir.join(f)) else { continue };
+        let lib = Library::load_named(&bytes, *name, common.as_deref()).unwrap_or_else(|e| panic!("{f}: {e}"));
+        for el in lib.elements() {
+            let u = lib.unsupported_programs(el.id);
+            assert!(u.is_empty(), "{f} element {}: {u:?}", el.id);
+        }
+        checked += 1;
+    }
+    if checked == 0 {
+        eprintln!("spell_packages_fully_supported: no files in {}, skipped", dir.display());
     }
 }

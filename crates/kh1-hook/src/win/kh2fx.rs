@@ -376,6 +376,15 @@ fn step(s: &mut State, motion: Option<u16>) {
         }
     }
     let tip = s.tip_local;
+    // This frame's camera for the programs that face it while ticking (kh2-fx: camera-facing
+    // matrices; else they used the last frame built's, a frame late).
+    if let Some((view, _)) = unsafe { fx12::camera(BASE.load(Ordering::Relaxed)) } {
+        let cam = Camera::from_view(view);
+        s.fx.set_camera(&cam);
+        for sp in s.spell.iter_mut().flatten() {
+            sp.fx.set_camera(&cam);
+        }
+    }
     s.fx.tick(1.0, &mut |c| bone(c, tip));
     for sp in s.spell.iter_mut().flatten() {
         sp.fx.tick(1.0, &mut |c| bone(c, tip));
