@@ -2306,3 +2306,15 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   when the value that stores yellow mp reaches zero then we take away one bar of blue mp": that
   is exactly KH1's payment of a cost under 100 (`docs/kh1-drive.md`): the form pays 1 every 2
   frames of battle (4 out of it); out of MP (KH1's own test fails for 1), Revert.
+
+### 2026-10-18: Stage 201 (hair, hood and keychain move as KH2 animates them)
+- "add the animations for soras hair and chain on each kh2 animation instead [of the physics],
+  don't affect the KH1 animations": a helper session matched KH1's 14 hair spikes to KH2's 11
+  (nearest roots on scaled heads, blended with the second nearest), the hood (KH1 80/81 ← KH2
+  72, 82/83 ← 73) and the keychain (KH1 283..291 ← KH2 weapon 3..11, same places in the two
+  binds), and `kh1-data/src/secondary.rs` turns them as KH2's motion turns its own (hair and
+  hood relative to the head and chest, the chain link by link from KH1's pommel), lengths kept,
+  guarded against the head and spine (`docs/kh1-secondary-motion.md`). The KH2 pose the hook
+  keeps now carries the Keyblade's bones too. The physics swing runs only for chains KH2 didn't
+  pose (the dream weapons and wooden sword). Ini: `physics = off` (all off), `kh2_hair = off`
+  (the old swing). KH1's own animations never reach this.

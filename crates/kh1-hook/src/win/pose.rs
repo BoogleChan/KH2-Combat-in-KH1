@@ -229,6 +229,11 @@ struct Sora {
     /// The hair, hood and keychain's swing under KH2's poses (`kh1_data::jiggle`), and when it
     /// last moved.
     jiggle: Option<(kh1_data::jiggle::Jiggle, u64)>,
+    /// KH1's hair, hood and keychain following KH2's own animation of them
+    /// (`kh1_data::secondary`), built with the retarget.
+    secondary: Option<kh1_data::secondary::Secondary>,
+    /// The KH2 pose (Sora's bones, the Keyblade's) the pose being drawn came from, if KH2's.
+    kh2_now: Option<(Vec<Mat4>, Vec<Mat4>)>,
 }
 
 /// The pass's world matrix as the model → world the bones are drawn with: the pass flips the
@@ -595,6 +600,12 @@ unsafe fn kh1_wrist(pose: &mut [Mat4], parents: &[i16], orig_world: Option<usize
     }
 }
 
+/// Sora's weapon (KH1 item id, save `+0x36`), if the save reads.
+unsafe fn held_weapon() -> Option<u8> {
+    let save = rd::<u64>(BASE.load(Ordering::Relaxed) + Rva(0x28695A0)) as usize;
+    (save >= 0x10000).then(|| rd::<u8>(save + 0x36))
+}
+
 /// Every Keyblade turned half round about its own length in his hand (the user: "every keyblade
 /// is held backwards", the teeth to the ground): the grip (`GRIP_BONE`) hangs from the hand as
 /// in KH1's rest pose, whose roll of the blade is not KH2's. The blade and its keychain lie along
@@ -638,6 +649,7 @@ unsafe fn keyblade_teeth_up(pose: &mut [Mat4], parents: &[i16]) {
 /// The model-space pose to draw for the current mode, if any.
 fn wanted(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4>> {
     let mode = MODE.load(Ordering::Relaxed);
+    s.kh2_now = None;
     match mode {
         0 => {
             // KH1's area script walks him (zone entries and exits): KH1's own animation.
@@ -649,12 +661,14 @@ fn wanted(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
             // game's frames, not the clock: after one, the old pose went stale and KH1's slot was
             // drawn until KH2's next frame; the user: paused mid KH2 move, resumed in KH1's).
             let kh2_frame = super::takeover::kh2_frame();
-            let fresh = super::takeover::POSE.try_lock().ok().and_then(|p| p.as_ref().filter(|(_, t)| kh2_frame || t.elapsed().as_secs_f32() < 0.15).map(|(b, _)| b.clone()));
+            let fresh = super::takeover::POSE.try_lock().ok().and_then(|p| p.as_ref().filter(|(_, _, t)| kh2_frame || t.elapsed().as_secs_f32() < 0.15).map(|(b, w, _)| (b.clone(), w.clone())));
             match (fresh, s.retarget.as_ref()) {
-                (Some(b), Some(r)) => {
+                (Some((b, w)), Some(r)) => {
                     s.follow.slot = slot;
                     note_kh2(&b, to_world);
-                    Some(r.pose_grip(&b, super::takeover::GRIP.load(Ordering::Relaxed)))
+                    let pose = r.pose_grip(&b, super::takeover::GRIP.load(Ordering::Relaxed));
+                    s.kh2_now = Some((b, w));
+                    Some(pose)
                 }
                 // KH1's own jump, fall and landing while KH1 has him (dropping off a ladder or a
                 // vine, out of water): KH1's own animation (the user: KH2's fall, its arms
@@ -675,10 +689,25 @@ fn wanted(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
             let frames = CLOCK.get_or_init(Instant::now).elapsed().as_secs_f32() * 60.0;
             let t = kh2_anim::key_time(m, frames, true);
             let pose = kh2_anim::evaluate(&kh2.rig.skeleton, m, t, kh2_anim::Options::default()).bones;
-            Some(r.pose(&pose))
+            let weapon = kh2_weapon(&kh2.rig, if mode == 4 { character_core::motion::IDLE } else { character_core::motion::RUN }, frames, true, &pose);
+            let kh1 = r.pose(&pose);
+            s.kh2_now = Some((pose, weapon));
+            Some(kh1)
         }
         _ => None,
     }
+}
+
+/// KH2's Keyblade (the rig's first weapon) in Sora's model space for a body pose: its own motion
+/// of the same id at the same time, on its hand bone, as `kh2_rig::RigAnim` places it.
+fn kh2_weapon(rig: &Rig, motion: u16, frames: f32, looping: bool, body: &[Mat4]) -> Vec<Mat4> {
+    let Some(w) = rig.weapons.first() else { return Vec::new() };
+    let Some(hand) = w.bone.and_then(|b| body.get(b)).copied() else { return Vec::new() };
+    let local = match w.motions.get(&motion).or_else(|| w.motions.get(&0)) {
+        Some(m) => kh2_anim::evaluate(&w.skeleton, m, kh2_anim::key_time(m, frames, looping), kh2_anim::Options::default()).bones,
+        None => kh2_anim::Pose::bind(&w.skeleton).bones,
+    };
+    local.iter().map(|l| hand * *l).collect()
 }
 
 fn decompose(v: &[Mat4]) -> Vec<(Vec3, Quat, Vec3)> {
@@ -799,6 +828,10 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
     let frames = f.since.map_or(0.0, |t| now.duration_since(t).as_secs_f32() * f.rate);
     let t = kh2_anim::key_time(clip, frames, looping);
     let mut pose = kh2_anim::evaluate(&kh2.rig.skeleton, clip, t, kh2_anim::Options::default()).bones;
+    // The Keyblade's bones after Sora's (the lunge and the blend apply to both; split off below).
+    let body_len = pose.len();
+    let weapon = kh2_weapon(&kh2.rig, motion, frames, looping, &pose);
+    pose.extend(weapon);
     // A swing's lunge: KH1 moves him, so take KH2's root travel out of the pose.
     if matches!(play, Play::Swing { .. }) {
         if let Some(root) = kh2.roots.get(&motion).and_then(|r| r.get((frames as usize).min(r.len().saturating_sub(1)))) {
@@ -820,8 +853,11 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
         }
     }
     f.last = pose.clone();
+    let weapon = pose.split_off(body_len.min(pose.len()));
     note_kh2(&pose, to_world);
-    Some(r.pose(&pose))
+    let kh1 = r.pose(&pose);
+    s.kh2_now = Some((pose, weapon));
+    Some(kh1)
 }
 
 /// The slot of the KH1 motion the instance plays.
@@ -908,7 +944,7 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
         };
         log(&format!("Sora's instance {instance:#x} (bones at {table:#x})"));
         let bind = kh2_anim::Pose::bind(&kh1).bones;
-        *g = Some(Sora { instance, retarget: None, bind, calls: 0, checked: false, follow: Follow::default(), to_world: None, wrote_root: None, last_drawn: None, param_agree: 0, param_ok: PARAM_OK.load(Ordering::Relaxed), jumps: 0, parents: kh1.iter().map(|b| b.parent).collect(), jiggle: None });
+        *g = Some(Sora { instance, retarget: None, bind, calls: 0, checked: false, follow: Follow::default(), to_world: None, wrote_root: None, last_drawn: None, param_agree: 0, param_ok: PARAM_OK.load(Ordering::Relaxed), jumps: 0, parents: kh1.iter().map(|b| b.parent).collect(), jiggle: None, secondary: None, kh2_now: None });
         KH1_BONES.lock().map(|mut b| *b = kh1).ok();
     }
     let s = g.as_mut().unwrap();
@@ -926,6 +962,15 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
                 }
                 log(&format!("retarget ready: {} of {} KH1 bones follow KH2 (the rest hang as in KH1's battle idle: {})", r.mapped(), b.len(), rest.is_some()));
                 s.retarget = Some(r);
+                let sec = kh1_data::secondary::Secondary::new(&b, &kh2.rig.skeleton, kh2.rig.weapons.first().map(|w| w.skeleton.as_slice()));
+                log(&format!(
+                    "KH2's own hair, hood and keychain: {} spikes ({}), {} hood joints, {} chain links",
+                    sec.hair().len(),
+                    sec.hair().iter().map(|l| format!("{}<-{}", l.kh1, l.kh2)).collect::<Vec<_>>().join(" "),
+                    sec.hood().len(),
+                    sec.chain().len()
+                ));
+                s.secondary = Some(sec);
             }
         }
     }
@@ -1039,11 +1084,25 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
     super::feet::place(BASE.load(Ordering::Relaxed), &mut pose, &s.parents, &to_world, kh2_feet);
     kh1_wrist(&mut pose, &s.parents, (!ours).then_some(world));
     keyblade_teeth_up(&mut pose, &s.parents);
-    if super::settings::get().physics {
-        // One step per game frame (Sora's physics frames), not by the clock: frames come 13..22
-        // ms apart, and a draw with no step left the chains at his last place (the user: the
-        // animations stuttered). A gap of more than half a second (KH1's own animation, a
-        // pause) starts the swing over.
+    let set = super::settings::get();
+    if set.physics {
+        // KH2's own animation of the hair, hood and keychain (the user: "add the animations for
+        // sora's hair and chain on each KH2 animation instead"), on every pose KH2 gave; the
+        // keychain only on a Keyblade (not the dream weapons or the wooden sword).
+        let mut driven = kh1_data::secondary::Parts::default();
+        if let (true, Some((body, weapon)), Some(sec)) = (set.kh2_hair, s.kh2_now.as_ref(), s.secondary.as_ref()) {
+            let want = kh1_data::secondary::Parts { hair: true, hood: true, chain: !held_weapon().is_some_and(|w| (0x52..=0x55).contains(&w)) };
+            let rep = sec.apply(&mut pose, body, (!weapon.is_empty()).then_some(weapon.as_slice()), want);
+            driven = rep.parts;
+            static LOGGED: AtomicU32 = AtomicU32::new(0);
+            if LOGGED.fetch_add(1, Ordering::Relaxed) == 0 {
+                log(&format!("hair, hood and keychain from KH2's own animation: {:?} (asked {want:?})", rep.parts));
+            }
+        }
+        // The swing (`kh1_data::jiggle`) for any chain KH2 didn't pose. One step per game frame
+        // (Sora's physics frames), not by the clock: frames come 13..22 ms apart, and a draw
+        // with no step left the chains at his last place (the user: the animations stuttered).
+        // A gap of more than half a second (KH1's own animation, a pause) starts it over.
         let frame = super::takeover::GAME_FRAME.load(Ordering::Relaxed);
         let (j, last) = s.jiggle.get_or_insert_with(|| (kh1_data::jiggle::Jiggle::new(kh1_data::jiggle::sora_chains()), frame));
         let steps = frame.saturating_sub(*last);
@@ -1051,7 +1110,7 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
             j.reset();
         }
         *last = frame;
-        j.apply(&mut pose, &s.parents, &to_world, steps.min(3) as usize);
+        j.apply_except(&mut pose, &s.parents, &to_world, steps.min(3) as usize, |b| driven.covers(b));
     }
     for (i, m) in pose.iter().enumerate().take(SORA_BONES as usize) {
         std::ptr::write_unaligned((world + i * 0x40) as *mut [f32; 16], (to_world * *m).to_cols_array());

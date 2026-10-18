@@ -90,6 +90,9 @@ Each line in the file explains itself. The ones you are most likely to want:
   kh2_sounds = off            turns KH2's sound effects off
   shortcuts = 3               back to KH1's three shortcuts
   drive = off                 no second menu page and no Wisdom Form
+  kh2_hair = off              hair, hood and keychain swing with the older
+                              physics instead of KH2's own animation of them
+  physics = off               hair, hood and keychain stay still in KH2's moves
 
 
 UNINSTALL

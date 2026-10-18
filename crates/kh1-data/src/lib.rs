@@ -13,6 +13,7 @@ pub mod jiggle;
 pub mod mdls;
 pub mod mset;
 pub mod retarget;
+pub mod secondary;
 
 use kh2_formats::egs::{Archive, KeyTable};
 use kh2_formats::{Error, Result};

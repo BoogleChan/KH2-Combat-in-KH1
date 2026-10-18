@@ -7,6 +7,9 @@
 //! particles in world space (so running, turning and swinging carry them), pulled back toward
 //! where the pose puts them, with gravity and a breeze, kept at the bones' lengths; each bone is
 //! then turned to point at its simulated child.
+//!
+//! KH2's own animation of these parts now drives them under KH2's moves (`secondary`);
+//! this swing is left for chains KH2's data doesn't animate (`Jiggle::apply_except`).
 
 use glam::{Mat4, Quat, Vec3};
 
@@ -86,6 +89,12 @@ impl Jiggle {
     /// bones in `pose` (model space, bones in parent-before-child order, `parents` their
     /// parents) toward where they swing to. `to_world`: the model's place in the world, y up.
     pub fn apply(&mut self, pose: &mut [Mat4], parents: &[i16], to_world: &Mat4, steps: usize) {
+        self.apply_except(pose, parents, to_world, steps, |_| false);
+    }
+
+    /// As `apply`, leaving out every chain with a bone `skip` names (posed another way: KH2's
+    /// own animation of them, `secondary`). A chain left out starts over when it comes back.
+    pub fn apply_except(&mut self, pose: &mut [Mat4], parents: &[i16], to_world: &Mat4, steps: usize, skip: impl Fn(usize) -> bool) {
         let from_world = to_world.inverse();
         if !from_world.is_finite() {
             return;
@@ -97,6 +106,10 @@ impl Jiggle {
         for ci in 0..self.chains.len() {
             let c = self.chains[ci].clone();
             if c.bones.iter().any(|&b| b >= pose.len()) || c.bones.len() < 2 {
+                continue;
+            }
+            if c.bones.iter().any(|&b| skip(b)) {
+                self.state[ci].p.clear();
                 continue;
             }
             let target: Vec<Vec3> = c.bones.iter().map(|&b| at(pose, b)).collect();
@@ -321,5 +334,27 @@ mod down_tests {
             tip = p[3].w_axis.truncate();
         }
         assert!(tip.y < 100.0 - 13.0, "not hanging in model space: {tip:?}");
+    }
+}
+
+#[cfg(test)]
+mod skip_tests {
+    use super::*;
+
+    #[test]
+    fn a_skipped_chain_is_left_as_posed() {
+        let pose: Vec<Mat4> = (0..4).map(|i| Mat4::from_translation(Vec3::new(i as f32 * 5.0, 100.0, 0.0))).collect();
+        let parents = vec![-1, 0, 1, 2];
+        let c = Chain { bones: vec![0, 1, 2, 3], stiffness: 0.0, damping: 0.12, gravity: 1.0, wind: 0.0, max_turn: 170f32.to_radians() };
+        let mut j = Jiggle::new(vec![c]);
+        for _ in 0..60 {
+            let mut p = pose.clone();
+            j.apply_except(&mut p, &parents, &Mat4::IDENTITY, 1, |b| b == 2);
+            assert!(p == pose);
+        }
+        // Not skipped, it hangs.
+        let mut p = pose.clone();
+        j.apply(&mut p, &parents, &Mat4::IDENTITY, 1);
+        assert!(p[3].w_axis.y < 100.0 - 1.0);
     }
 }

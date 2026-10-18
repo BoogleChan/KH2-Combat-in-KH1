@@ -75,8 +75,11 @@ reflect = on\r\n\
 ; keyblade_turn: on = every Keyblade held with its teeth up, as KH2 holds it (KH1's grip held\r\n\
 ; them to the ground under KH2's moves); off = as before\r\n\
 keyblade_turn = on\r\n\
-; physics: on = Sora's hair, hood and keychain swing and sway during KH2's moves; off = rigid\r\n\
+; physics: on = Sora's hair, hood and keychain move during KH2's moves; off = rigid\r\n\
 physics = on\r\n\
+; kh2_hair: on = (physics = on) they move as KH2 animates its own hair, hood and keychain in\r\n\
+; each move; off = the older swing and sway (a breeze and gravity) instead\r\n\
+kh2_hair = on\r\n\
 ; drive: on = D-pad left at the battle menu's top flips to a second page (Attack, Magic, Items,\r\n\
 ; Drive), Drive listing KH2's forms; off = KH1's menu only\r\n\
 drive = on\r\n";
@@ -117,8 +120,12 @@ pub struct Settings {
     pub reflect: bool,
     /// Keyblades turned teeth up in his hand (`keyblade_turn = on`, `pose::keyblade_teeth_up`).
     pub keyblade_turn: bool,
-    /// Hair, hood and keychain swing under KH2's moves (`physics = on`, `kh1_data::jiggle`).
+    /// Hair, hood and keychain move under KH2's moves (`physics = on`); off, they keep KH1's rest
+    /// pose.
     pub physics: bool,
+    /// They follow KH2's own animation of them (`kh2_hair = on`, `kh1_data::secondary`) rather
+    /// than the swing (`kh1_data::jiggle`).
+    pub kh2_hair: bool,
     /// The second command page with Drive (`drive = on`).
     pub drive: bool,
 }
@@ -192,6 +199,7 @@ pub fn get() -> &'static Settings {
             reflect: on(&text, "reflect", "on", true),
             keyblade_turn: on(&text, "keyblade_turn", "on", true),
             physics: on(&text, "physics", "on", true),
+            kh2_hair: on(&text, "kh2_hair", "on", true),
             drive: on(&text, "drive", "on", true),
         };
         log(&format!("settings ({path}): {s:?}"));

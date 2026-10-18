@@ -86,7 +86,8 @@ override for the head.
   to Sora's bone 178.
   - The blade is rigid on its bone 2 and points along that bone's −X, where the attack
     spheres are.
-  - Bones 3–11 are the keychain, which the weapon motions swing.
+  - Bones 3–11 are the keychain, which the weapon motions swing. The KH1 port puts this
+    animation, and KH2's hair and hood animation, on KH1 Sora (`kh1-secondary-motion.md`).
 - **Blending. Checked (exe).** Every motion start passes a blend length in 60 Hz frames.
   Lengths of 2 or less mean no blend.
   - **The blend clock** starts at 2 and advances 1 per frame. The weight from the old pose

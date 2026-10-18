@@ -229,8 +229,9 @@ struct Driver {
 }
 
 static DRIVER: Mutex<Option<Driver>> = Mutex::new(None);
-/// KH2's pose this frame (KH2 model space), for `pose` to draw.
-pub static POSE: Mutex<Option<(Vec<Mat4>, Instant)>> = Mutex::new(None);
+/// KH2's pose this frame (KH2 model space): Sora's bones and the Keyblade's (its keychain drives
+/// KH1's, `kh1_data::secondary`), for `pose` to draw.
+pub static POSE: Mutex<Option<(Vec<Mat4>, Vec<Mat4>, Instant)>> = Mutex::new(None);
 
 unsafe fn rd<T: Copy>(p: usize) -> T {
     std::ptr::read_unaligned(p as *const T)
@@ -1370,7 +1371,7 @@ unsafe fn takeover(actor: usize) -> bool {
     d.last_out = Some(out.clone());
     KH2_MOTION.store(out.motion as u32, Ordering::Relaxed);
     if let Ok(mut pz) = POSE.try_lock() {
-        *pz = Some((d.anim.bones.clone(), Instant::now()));
+        *pz = Some((d.anim.bones.clone(), d.anim.weapons.first().cloned().unwrap_or_default(), Instant::now()));
     }
     // The Keyblade during attacks (the user: invisible while attacking): every 15 frames.
     static ATTACK_FRAMES: AtomicU32 = AtomicU32::new(0);
