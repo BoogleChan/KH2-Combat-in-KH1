@@ -1666,7 +1666,9 @@ impl Character {
                 WindowKind::Invulnerable => fo.invulnerable = true,
                 // (A host may have air casts fall as they play: KH1's do, the user wanted Reflect
                 // in the air to as well.)
-                WindowKind::NoGravity if !(self.air_magic_falls && matches!(act.kind, ActionKind::Magic)) => fo.no_gravity = true,
+                // (Nor in a moving attack, Wisdom Form's air shots: he falls as he shoots, the user,
+                // "sora also has gravity".)
+                WindowKind::NoGravity if !(self.air_magic_falls && matches!(act.kind, ActionKind::Magic)) && !(matches!(act.kind, ActionKind::Attack { .. }) && clip.windows.iter().any(|w| matches!(w.kind, WindowKind::AllowMovement))) => fo.no_gravity = true,
                 WindowKind::WeaponTrail => fo.weapon_trail = true,
                 WindowKind::Guard { attack, group, weapon } => {
                     fo.guarding = true;
@@ -1679,7 +1681,7 @@ impl Character {
             fo.events.push(e.kind);
         }
         // Moving in an allow-movement range with nothing to aim at: he turns with the stick.
-        if target.is_none() && len2(input.stick) > DEAD_ZONE && !self.airborne && matches!(act.kind, ActionKind::Attack { .. } | ActionKind::Magic) && clip.has(f, |k| matches!(k, WindowKind::AllowMovement)) {
+        if target.is_none() && len2(input.stick) > DEAD_ZONE && matches!(act.kind, ActionKind::Attack { .. } | ActionKind::Magic) && clip.has(f, |k| matches!(k, WindowKind::AllowMovement)) {
             self.facing = turn_toward(self.facing, yaw_of(input.stick), self.params.turn_speed);
         }
 
@@ -2109,7 +2111,10 @@ impl Character {
                 ActionKind::AerialDodge => self.vel_h = air_control(self, true),
                 ActionKind::Attack { row } => {
                     if row.is_jump() || self.airborne {
-                        self.vel_h = air_control(self, false);
+                        // (Steered by the stick in an allow-movement range: Wisdom Form's air
+                        // shots, the user.)
+                        let steer = self.clip_has(act.motion, act.frame, |k| matches!(k, WindowKind::AllowMovement));
+                        self.vel_h = air_control(self, steer);
                     } else {
                         let before_hit = {
                             let clip = self.moveset.clips.get(&act.motion);

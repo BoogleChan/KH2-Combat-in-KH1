@@ -2241,3 +2241,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - "revert the recent aerial dodge change": s183's air control (the stick steering what he has,
   an Aerial Dodge's speed kept under it) is back to KH2's plain steer toward the stick's
   speed; its test `dodge_momentum_kept_with_the_stick` is gone.
+
+### 2026-10-18: Stage 194 (Wisdom's air shots move and fall)
+- "in KH2, wisdom forms aerial combat allows you to move in the air while the attack plays,
+  and sora also has gravity": an attack whose motion has an allow-movement range steers in the
+  air with the stick (air control as in a jump) and ignores its no-gravity ranges (181: 16..40),
+  turning with the stick when nothing is targeted. Test `moving_air_attack_steers_and_falls`.
+- A public copy of the KH1 mod alone was made (fresh history, `local/export_public.py`), on the PC beside
+  this repo (`kh2-combat-public`).

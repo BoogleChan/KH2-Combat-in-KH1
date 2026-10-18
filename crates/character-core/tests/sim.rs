@@ -1006,3 +1006,29 @@ fn attack_moves_in_its_allow_movement_range() {
     assert!(outs.iter().all(|o| o.state == StateName::Attack));
     assert!((w.pos[0] - x0).abs() < 1e-3);
 }
+
+/// Wisdom Form's air shots (an allow-movement range over the whole motion, a no-gravity range
+/// in it): he steers with the stick and falls as he shoots (the user: "wisdom forms aerial
+/// combat allows you to move in the air while the attack plays, and sora also has gravity").
+#[test]
+fn moving_air_attack_steers_and_falls() {
+    let mut ch = sora();
+    let mut clip = attack_clip(120, 30, (5, 10), 4, 15);
+    clip.windows.push(Window { start: 0, end: None, kind: WindowKind::AllowMovement });
+    clip.windows.push(Window { start: 0, end: Some(25), kind: WindowKind::NoGravity });
+    ch.moveset.clips.insert(120, clip);
+    let mut w = World::new(ch);
+    w.step(Pad { jump: true, ..IDLE });
+    w.run(14, Pad { jump: true, ..IDLE });
+    let h0 = w.pos[1];
+    assert!(h0 > 30.0, "up {h0}");
+    let x0 = w.pos[0];
+    w.step(Pad { attack: true, ..IDLE });
+    let outs = w.run(10, Pad { stick: [1.0, 0.0], ..IDLE });
+    assert!(outs.iter().all(|o| o.state == StateName::Attack), "{:?}", outs.iter().map(|o| o.state).collect::<Vec<_>>());
+    assert!(w.pos[0] - x0 > 10.0, "steered {}", w.pos[0] - x0);
+    // Falling: his height goes down over the shots (no hover).
+    let h1 = w.pos[1];
+    let more = w.run(10, Pad { stick: [1.0, 0.0], ..IDLE });
+    assert!(w.pos[1] < h1 || more.iter().any(|o| o.state != StateName::Attack), "fell from {h1} to {}", w.pos[1]);
+}
