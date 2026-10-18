@@ -5,8 +5,8 @@
 //!   the form's moveset, motions and combo rows (`P_EX100_MAGF`, moveset 3), his facing and
 //!   lock kept, and its arrival (53). Its abilities: Sora's support abilities, not his action
 //!   or growth ones, and the form's own growth ability, Quick Run, at MAX (the user);
-//! - the form runs on Sora's MP (the user): 1 MP every 3 s of battle, every 6 s out of it
-//!   (KH2's gauge drains half as fast out of battle); at 0 MP, or on the Revert command (the same Drive entry), back to Sora with
+//! - the form runs on Sora's MP (the user): its yellow part drained bit by bit, a blue bar
+//!   broken into it when it runs out (KH1's own payment; `after_step`); out of MP, or on the Revert command (the same Drive entry), back to Sora with
 //!   the revert motion (4), on the ground. Knocked out: back at once;
 //! - its shots and its spells: `formmagic`.
 //! The cost is MP (`COST`, KH1's own payment), not a Drive gauge, which KH1 has none of.
@@ -30,8 +30,10 @@ pub const COST_MP: i32 = 3;
 const COST: i32 = COST_MP * 100;
 /// The form's level (KH1 has no form experience): Lv 1, 40 s of battle.
 const LEVEL: u32 = 1;
-/// Frames of battle per MP the form uses up (half as fast out of battle).
-const MP_DRAIN_FRAMES: u32 = 180;
+/// Frames of battle per unit of yellow MP the form uses up (half as fast out of battle). A blue
+/// bar breaks into its number × 30 units (KH1's own conversion), so the top bar lasts that many
+/// units.
+const DRAIN_FRAMES: u32 = 2;
 /// KH2's magic sub offset in Wisdom Form.
 pub const MAGIC_SUB: i32 = 10;
 
@@ -253,7 +255,7 @@ unsafe fn arrive(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     ch.play(ARRIVE_MOTION, true);
     d.form = Some(InForm { left: 0, sora, own, logged_s: 0 });
     IN_FORM.store(true, Ordering::Relaxed);
-    log(&format!("Wisdom Form (Lv{LEVEL}): 1 MP every {:.0} s of battle (twice that out of it), Quick Run MAX", MP_DRAIN_FRAMES as f32 / 60.0));
+    log(&format!("Wisdom Form (Lv{LEVEL}): yellow MP drained 1 every {DRAIN_FRAMES} frames of battle (half as fast out of it), Quick Run MAX"));
 }
 
 unsafe fn revert(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &pose::Kh2, motion: bool, why: &str) {
@@ -292,29 +294,41 @@ pub fn abilities(d: &mut Drive, ch: &mut Character) {
 
 /// After KH2's step: the look (`tint`), the MP the form uses up, its end.
 ///
-/// The form's gauge is Sora's MP (the user: "drive forms consume mp over time, if mp reaches
-/// zero it reverts back"): 1 MP every `MP_DRAIN_FRAMES` in battle, half as fast out of it
-/// (KH2's gauge drains so); at 0 MP, back to Sora (on the ground, `before_step`).
+/// The form's gauge is Sora's MP (the user: "drive forms consume mp over time"), drained the
+/// way KH1 takes a cost under one bar (the user: "drain yellow mp incrementally, when the value
+/// that stores yellow mp reaches zero then we take away one bar of blue mp"): KH1's payment
+/// (`0x1402A39D0`) with a cost below 100 takes it from the yellow part (stats `+0xBE`) and, when
+/// that runs out, breaks the top blue bar into yellow. One unit every `DRAIN_FRAMES` in battle,
+/// half as often out of it (KH2's gauge drains so); with none left, back to Sora (on the
+/// ground, `before_step`).
 pub unsafe fn after_step(d: &mut Drive, actor: usize, battle: bool) {
     super::tint::refresh(actor, d.form.is_some());
     let Some(f) = d.form.as_mut() else { return };
     f.left += if battle { 2 } else { 1 };
-    if f.left >= MP_DRAIN_FRAMES * 2 {
+    if f.left >= DRAIN_FRAMES * 2 {
         f.left = 0;
-        let before = mp(actor);
-        if before > 0 {
-            super::reflect::pay_mp(actor, 100);
-        }
-        let now = mp(actor);
-        if f.logged_s < 40 {
-            f.logged_s += 1;
-            log(&format!("Wisdom Form: MP {before} -> {now}"));
+        if super::reflect::has_mp(actor, 1) {
+            let before = (mp(actor), yellow(actor));
+            super::reflect::pay_mp(actor, 1);
+            if mp(actor) != before.0 && f.logged_s < 40 {
+                f.logged_s += 1;
+                log(&format!("Wisdom Form: a blue bar broken into yellow: MP {} -> {} (yellow {} -> {})", before.0, mp(actor), before.1, yellow(actor)));
+            }
         }
     }
-    if mp(actor) <= 0 && !d.revert {
+    if !super::reflect::has_mp(actor, 1) && !d.revert {
         d.revert = true;
         log("Wisdom Form: out of MP");
     }
+}
+
+/// The yellow part of Sora's MP (stats `+0xBE`).
+unsafe fn yellow(sora: usize) -> u16 {
+    let stats = pose::ptr(rd::<u32>(sora + 0x6C));
+    if stats < 0x10000 {
+        return 0;
+    }
+    rd::<u16>(stats + 0xBE)
 }
 
 /// Sora's Drive and revert motions: their effects and sounds play whatever the ini's lists

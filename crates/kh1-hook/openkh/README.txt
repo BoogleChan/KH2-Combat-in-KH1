@@ -56,9 +56,10 @@ Square ............ Dodge Roll / Quick Run while moving, Guard while standing,
 L1 + cancel ....... the fourth shortcut (set it in the Customize menu)
 Right stick ....... KH2's camera (turn and zoom); R3 resets it
 D-pad left ........ at the battle menu: the second page (Attack, Magic, Items,
-                    Drive). Drive > Wisdom Form costs 3 MP and then uses
-                    1 MP every 3 s of battle (6 s out of battle); at 0 MP
-                    Sora reverts. In the form the same entry is Revert, and
+                    Drive). Drive > Wisdom Form costs 3 MP, then drains
+                    the yellow part of the MP gauge bit by bit (a blue bar
+                    breaks into yellow when it runs out; half as fast out
+                    of battle); out of MP, Sora reverts. In the form the same entry is Revert, and
                     Fire, Blizzard, Thunder and Cure cast KH2's Wisdom versions.
 Magic, items, summons and specials stay KH1's own.
 The Config menu has a "Camera Style" row to switch between KH1's and KH2's

@@ -285,6 +285,16 @@ pub(super) unsafe fn can_pay(sora: usize, cost: i32) -> bool {
     check(sora, cost) & 0xFF != 0
 }
 
+/// Whether Sora has `cost` MP (KH1's own test, `0x1402A2A80`, without the magic checks): below
+/// 100 it counts the yellow part (stats `+0xBE`) and what breaking blue bars into it would give.
+pub(super) unsafe fn has_mp(sora: usize, cost: i32) -> bool {
+    if sora < 0x10000 {
+        return false;
+    }
+    let check: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(base() + MP_CHECK_RVA);
+    check(sora, cost) & 0xFF != 0
+}
+
 /// Plays one of KH1's menu sounds (4: can't).
 pub(super) unsafe fn menu_sound(n: i32) {
     let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base() + SOUND_RVA);

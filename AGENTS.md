@@ -2300,3 +2300,9 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   having a blue or orange reticle on it is met": with the combo's direction locked, the swings'
   turn windows run again when a target is locked (KH1's reticle, either kind, is the lock), and
   stay off without one. Test `combo_keeps_its_direction` extended.
+
+### 2026-10-18: Stage 200 (forms drain yellow MP)
+- "for drive forms, instead draining one bar of blue mp we have it drain yellow mp incrementally,
+  when the value that stores yellow mp reaches zero then we take away one bar of blue mp": that
+  is exactly KH1's payment of a cost under 100 (`docs/kh1-drive.md`): the form pays 1 every 2
+  frames of battle (4 out of it); out of MP (KH1's own test fails for 1), Revert.

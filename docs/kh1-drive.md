@@ -176,3 +176,11 @@ Page 2 differs from page 1 only in row 3, so reuse KH1's Summon path end to end:
 - Stage 197: the form runs on Sora's MP instead of a timer (the user): 1 MP every 180 frames
   of battle, every 360 out of it; at 0 MP he reverts (on the ground). Entering needs more than
   its 3 MP cost.
+- Stage 200: the drain is KH1's own partial payment (the user: "drain yellow mp incrementally,
+  when the value that stores yellow mp reaches zero then we take away one bar of blue mp").
+  KH1's MP payment `0x1402A39D0 (actor, cost)`: a cost of 100 or more takes `cost / 100` blue
+  bars (through `0x1402A2870 (actor, bars)`); below 100 it comes off the yellow part, the u16 at
+  stats `+0xBE` (also written to `[stats + 0xC8] + 0x38`, the gauge's copy), and when that goes
+  below 0 the top blue bar breaks into it (bar n gives n × 30), capped at max bars × 30. KH1's
+  test `0x1402A2A80` counts the same way. The form pays 1 every 2 frames of battle (every 4
+  out of it) and reverts once even 1 can't be paid.
