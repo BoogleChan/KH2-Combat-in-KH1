@@ -2568,3 +2568,13 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   Slash (row 37, motion 167, ability 95) is copied into Valor's data at load
   (`pose::port_moves`: the row, the clip, the body's and the right Keyblade's animation), usable
   while Sora has Upper Slash equipped.
+
+### 2026-10-19: Stage 215 (sounds: Reflect for everyone, Valor's own)
+- "the reflect sound FX arent working for some people": Reflect's (and the forms') sounds were
+  loaded only with `kh2_sounds` on, and one unreadable file (Sora's `P_EX100.a.us`, a sound bank
+  that didn't parse) dropped every KH2 sound. Now Reflect's and the forms' load whatever
+  `kh2_sounds` says (it decides Sora's moves only), and a missing package or bank costs only its
+  own sounds (logged).
+- "make sure also that valor form has its proper sound FX": Valor's effect elements' sounds (its
+  archive's PAX, package `kh2fx::VALOR`, played as they start), its Keyblades' swing sounds and
+  voices (its clips' frame triggers 8 / 14) load and play in the form.

@@ -277,6 +277,7 @@ pub fn form_event(motion: u16, el: i16) {
     let ends = sp.fx.library().element(el as u16).is_some_and(|e| e.flags & ENDS_WITH_MOTION != 0);
     match sp.fx.start(el as u16, &mut |c| bone(c, tip)) {
         Some(h) => {
+            unsafe { super::kh2sound::spell_element(VALOR, el as u16) };
             s.form_running.push((spell_handle(VALOR, h), motion, ends));
             s.started += 1;
             if s.started <= 40 {

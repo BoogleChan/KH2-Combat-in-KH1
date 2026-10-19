@@ -73,11 +73,14 @@ fn allowed(motion: u16) -> bool {
 /// Loads, in the background once KH2 Sora is there, the sounds of the effect elements the
 /// chosen motions start.
 pub fn start() {
-    if super::settings::get().kh2_sounds.is_none() {
-        log("KH2 sounds: off (kh2_sounds = off)");
-        return;
+    // (With `kh2_sounds = off` Sora's moves keep KH1's sounds, but what KH1 has no sound of its own
+    // for, Reflect and the Drive Forms, still gets KH2's: the user, "the reflect sound FX arent
+    // working for some people".)
+    let moves = super::settings::get().kh2_sounds.is_some();
+    if !moves {
+        log("KH2 sounds: Sora's moves keep KH1's (kh2_sounds = off); Reflect's and the forms' still load");
     }
-    std::thread::spawn(|| {
+    std::thread::spawn(move || {
         let t = std::time::Instant::now();
         let kh2 = loop {
             if let Some(k) = super::pose::kh2() {
@@ -94,9 +97,15 @@ pub fn start() {
             .moveset
             .clips
             .iter()
-            .filter(|(m, _)| allowed(**m) || super::form::own_motion(**m))
+            .filter(|(m, _)| moves && allowed(**m) || super::form::own_motion(**m))
             .flat_map(|(_, c)| c.events.iter().map(|e| e.kind))
             .collect();
+        // Valor Form's own: its Keyblades' swings (frame trigger 8 on its weapon motion sets) and
+        // its voices; its effect elements' sounds come with the forms' below (the user: "make
+        // sure also that valor form has its proper sound FX").
+        if let Some(v) = kh2.valor.as_ref() {
+            events.extend(v.character.moveset.clips.values().flat_map(|c| c.events.iter().map(|e| e.kind)).filter(|k| matches!(k, character_core::EventKind::Sound(_) | character_core::EventKind::Voice(_))));
+        }
         // Reflect (the user: its sounds): its cast voices (MAGC, played by KH2's cast code, not a
         // motion trigger; only with `kh2_voice`) and its effect elements' sounds.
         let mut spell: Vec<(u8, u16, i32)> = Vec::new();
@@ -131,10 +140,14 @@ fn load(events: &[character_core::EventKind], spell: &[(u8, u16, i32)]) -> Resul
     let exe = format!("{}\\KINGDOM HEARTS II FINAL MIX.exe", super::exe_dir());
     let install = kh2_data::Install::locate(&exe).map_err(|e| e.to_string())?;
     let src = if install.has_backup() { kh2_data::Source::Backup } else { kh2_data::Source::Live };
-    let pack = install.read_any(src, "obj/P_EX100.a.us").map_err(|e| e.to_string())?;
-    let bar = kh2_formats::bar::Bar::parse(&pack).map_err(|e| e.to_string())?;
-    let pax = bar.entries.iter().find(|e| e.data.starts_with(b"PAX_")).ok_or("no effect package")?;
-    let pax = kh2_formats::pax::Pax::parse(pax.data).map_err(|e| e.to_string())?;
+    // (Sora's effect package names his elements' sounds; without it the rest still loads.)
+    let pack = install.read_any(src, "obj/P_EX100.a.us");
+    if let Err(e) = &pack {
+        log(&format!("KH2 sounds: Sora's effect package not read ({e}): his elements have no sounds"));
+    }
+    let pack = pack.unwrap_or_default();
+    let bar = kh2_formats::bar::Bar::parse(&pack).ok();
+    let pax = bar.as_ref().and_then(|b| b.entries.iter().find(|e| e.data.starts_with(b"PAX_"))).and_then(|p| kh2_formats::pax::Pax::parse(p.data).ok());
     let volume = super::settings::get().kh2_volume.clamp(0.0, 4.0);
     // Every sound id wanted, and who wants it.
     enum Want {
@@ -146,7 +159,7 @@ fn load(events: &[character_core::EventKind], spell: &[(u8, u16, i32)]) -> Resul
     let mut voice_ids: Vec<i16> = Vec::new();
     for e in events {
         match *e {
-            EventKind::Effect(el) => match pax.element(el as u16) {
+            EventKind::Effect(el) => match pax.as_ref().and_then(|p| p.element(el as u16)) {
                 Some(p) if p.sound >= 0 => wants.push((p.sound as u32, Want::Element(el))),
                 _ => log(&format!("KH2 sounds: effect element {el} has no sound")),
             },
@@ -183,13 +196,20 @@ fn load(events: &[character_core::EventKind], spell: &[(u8, u16, i32)]) -> Resul
                 }
             }
         }
-        let scd = kh2_formats::scd::Scd::parse(&banks[&bank]).map_err(|e| e.to_string())?;
+        // (A bank that doesn't parse costs its own sounds, not all of them.)
+        let scd = match kh2_formats::scd::Scd::parse(&banks[&bank]) {
+            Ok(s) => s,
+            Err(e) => {
+                log(&format!("KH2 sounds: bank {bank} not readable ({e})"));
+                continue;
+            }
+        };
         match scd.sound_id(index) {
             Ok(p) => {
                 let of = match want {
                     Want::Element(el) => format!(" (effect element {el})"),
                     Want::Sound(_) => String::new(),
-                    Want::Spell(level, el) => format!(" (Reflect level {level}'s element {el})"),
+                    Want::Spell(level, el) => format!(" (package {level}'s element {el})"),
                 };
                 log(&format!("KH2 sound {id}{of}: {} Hz, {} ch, {:.2} s, volume {:.2}", p.rate, p.channels, p.samples.len() as f32 / p.channels.max(1) as f32 / p.rate.max(1) as f32, p.volume));
                 let snd = decode(p);
@@ -246,7 +266,9 @@ pub fn covers(motion: u16) -> bool {
 /// Sora's `motion` reached a KH2 event: its sound, if it has one.
 pub unsafe fn event(motion: u16, kind: character_core::EventKind) {
     use character_core::EventKind;
-    if !(allowed(motion) || super::form::own_motion(motion)) {
+    // (Valor's swings and voices are its own, whatever `kh2_sounds` lists: `start`.)
+    let valor = super::form::in_valor() && matches!(kind, EventKind::Sound(_) | EventKind::Voice(_));
+    if !(allowed(motion) || super::form::own_motion(motion) || valor) {
         return;
     }
     let Ok(g) = LOADED.try_lock() else { return };
@@ -277,9 +299,6 @@ pub unsafe fn event(motion: u16, kind: character_core::EventKind) {
 /// A Reflect level's effect element `el` started (`reflect`): its sound, as Sora's elements'
 /// (the game's effects and volume sliders).
 pub unsafe fn spell_element(level: u8, el: u16) {
-    if super::settings::get().kh2_sounds.is_none() {
-        return;
-    }
     let Ok(g) = LOADED.try_lock() else { return };
     if let Some(s) = g.as_ref().and_then(|l| l.spell_elements.get(&(level, el))) {
         play(s, Channel::Effects);
