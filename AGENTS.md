@@ -2683,3 +2683,25 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   (`hold_air_cast`, 54 frames without gravity) is no longer asked for: the air cast sinks at
   `air_cast_fall`'s share of gravity (s206) and lands into KH2's landing (s177). Everything else
   of Reflect's (barrier, guard, counter, sounds, menu, combo) is as it was.
+
+### 2026-10-19: Stage 226 (the user's Reflect / Explosion / air magic list; dream weapons)
+- Air casts (Reflect): his fall stops as the cast starts, then full gravity from rest
+  (`air_cast_fall` default 1.0; test `air_cast_stops_the_fall_one_frame_then_falls`).
+- No spell in KH2's landing (`cast_window`: `Land` no longer takes one; test
+  `no_cast_during_the_landing`).
+- Reflect (helper, `refl-fix`): one counter at the barrier's end whatever Sora does, all hits
+  counted; melee attacks meeting the barrier are counted, not clashed (that recoil looked like a
+  counter per hit); its element 11 plays where each attack meets the barrier (sound 139, element
+  11's own 174 is empty on PC). Sora is untouchable as in KH1's dodge roll (actor flag 0x40, which
+  the hit pass skips: no record, no hit effect, no grab) through KH2's invulnerable frames (Dodge
+  Roll, Quick Run, Aerial Dodge, Aerial Recovery) and Reflect (`docs/kh1-intangible.md`).
+- Explosion's last blast (ATKP 912: up 15, sideways 30) launches as KH2's default blow's height
+  and twice its distance (`combat::FARTHER`).
+- KH1's air spells: KH2 lands him on KH1's ground state alone (its height above the floor could
+  still be the last frame's, and that frame went to KH1's landing and its jump), only once KH1
+  had him in the air for it; KH1 doesn't see jump or Square through the air cast (`probe::pad`).
+  KH2's sideways speed is carried into KH1's air state (`+0x3C0`) as the air command starts.
+- Dream weapons and the wooden sword (`0x52..=0x55`; a tester: the Dream Sword stretched as a
+  movement began, the Dream Shield held otherwise in battle than in cutscenes): every weapon bone
+  held rigidly as KH1 holds it from his hand (`pose::dream_hold`, noted from KH1's own pose), also
+  through the blend back to KH1's animation.

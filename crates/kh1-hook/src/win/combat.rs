@@ -320,7 +320,14 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
         wr(actor + 0x3B8, 0.0f32);
         wr(actor + 0x3BC, 0.0f32);
         wr(actor + 0x3B4, y);
-        wr(actor + 0x3C0, [0.0f32; 4]);
+        // KH2's jump's sideways speed carried into KH1's air state (`+0x3C0`: x, y, z, its
+        // length; KH1's command step then slows it as for its own air casts), the user: "when sora
+        // does aerial magic the kh1 animation currently does not carry momentum from kh2s jump".
+        let [vx, vz] = takeover::kh2_sideways();
+        let n = (vx * vx + vz * vz).sqrt();
+        let k = if n > 30.0 { 30.0 / n } else { 1.0 };
+        wr(actor + 0x3C0, [vx * k, 0.0f32, vz * k, n * k]);
+        cmd_log(format!("air command: KH2's sideways speed {:.1}/frame carried into KH1's air state", n * k));
         wr(actor + 0x3D0, 0u32);
         wr(actor, rd::<u32>(actor) & !0x1_0000);
     }
@@ -1306,7 +1313,8 @@ impl Strikes {
                 // (Not for the big and the immovable: KH1's own reaction stays, the user: Magnet
                 // Burst and Aerial Finish moved Dragon Maleficent.)
                 if let Ok(mut p) = PENDING.lock() {
-                    *p = (finisher && !b.fixed).then(|| Launch::kh2(row.knockback_1, row.knockback_2, &character.reaction));
+                    let (k1, k2) = farther(h.attack).unwrap_or((row.knockback_1, row.knockback_2));
+                    *p = (finisher && !b.fixed).then(|| Launch::kh2(k1, k2, &character.reaction));
                 }
                 // A holding blow (Aerial Finish's spin) flinches the foe where it is: KH1's
                 // flinch knocks an airborne foe along the record's direction, and spin after
@@ -1449,14 +1457,20 @@ impl Strikes {
     /// gets KH1's clash record on its owner (the recoil its script plays), with KH1's spark.
     /// Once per barrier (`key`) and attack. Returns the shots turned back (they never reach
     /// Sora, so `reflect` counts them for its counter; melee hits still reach `hurt`).
-    pub unsafe fn barrier_meet(&mut self, sora: usize, key: u64, shapes: &[Shape]) -> u32 {
+    /// Every enemy attack meeting a Reflect barrier for the first time (one per attack object
+    /// and barrier): where it met it (KH1 world). A melee attack only counts (it passes through
+    /// Sora, intangible meanwhile: no recoil on its owner, which read as Reflect hitting back at
+    /// every hit, the user); a shot is stopped as KH1's guard stops one (turned back when KH1
+    /// lets it be).
+    pub unsafe fn barrier_meet(&mut self, sora: usize, key: u64, shapes: &[Shape]) -> Vec<[f32; 3]> {
         if !self.rows_tried {
             self.rows_tried = true;
             self.rows = sora_rows(sora);
         }
-        let Some(rows) = self.rows else { return 0 };
+        let mut met = Vec::new();
+        let Some(rows) = self.rows else { return met };
         if shapes.is_empty() {
-            return 0;
+            return met;
         }
         let base = BASE.load(Ordering::Relaxed);
         let free_bit: unsafe extern "system" fn() -> u32 = std::mem::transmute(base + FREE_BIT_RVA);
@@ -1465,27 +1479,32 @@ impl Strikes {
         let half: unsafe extern "system" fn(usize, usize) -> u32 = std::mem::transmute(base + CLASH_HALF_RVA);
         // (A new barrier forgets the last one's meetings.)
         self.barrier_met.retain(|(k, _)| *k == key);
-        let mut turned = 0;
         for shot in &self.shots {
             if self.barrier_met.contains(&(key, shot.obj)) {
                 continue;
             }
             let Some((ai, ti)) = first_overlap(shapes, &shot.shapes) else { continue };
             self.barrier_met.insert((key, shot.obj));
-            // KH1 leaves an attack that already clashed this pass alone (`+4`).
-            if rd::<u32>(shot.obj + 4) & 0x30 != 0 {
+            // Where they meet: the attack's side of the barrier (KH1 world, y down).
+            let (b, t) = (shapes[ai].center, shot.shapes[ti].center);
+            let d = [t[0] - b[0], t[1] - b[1], t[2] - b[2]];
+            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-3);
+            let r = shapes[ai].radius.min(l);
+            let at = [b[0] + d[0] / l * r, -(b[1] + d[1] / l * r), b[2] + d[2] / l * r];
+            met.push(at);
+            // KH1 leaves an attack that already clashed this pass alone (`+4`); a melee attack
+            // is only counted.
+            if !shot.free || rd::<u32>(shot.obj + 4) & 0x30 != 0 {
+                static MELEE: AtomicU32 = AtomicU32::new(0);
+                if MELEE.fetch_add(1, Ordering::Relaxed) < 100 {
+                    log(&format!("Reflect barrier met enemy {} {:#x} of {:#x}: counted", if shot.free { "shot" } else { "attack" }, shot.obj, shot.owner));
+                }
                 continue;
             }
             let obj = new_attack(sora, free_bit(), base + ATTACK_DATA_RVA + rows[0].data as usize);
             if obj < 0x10000 {
                 continue;
             }
-            // Where they meet: the shot's side of the barrier (KH1 world, y down).
-            let (b, t) = (shapes[ai].center, shot.shapes[ti].center);
-            let d = [t[0] - b[0], t[1] - b[1], t[2] - b[2]];
-            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-3);
-            let r = shapes[ai].radius.min(l);
-            let at = [b[0] + d[0] / l * r, -(b[1] + d[1] / l * r), b[2] + d[2] / l * r];
             let c = [at[0], at[1], at[2], 1.0f32];
             wr(obj + 0x10, c);
             wr(obj + 0x40, c);
@@ -1495,13 +1514,7 @@ impl Strikes {
             wr(obj + 0x68, GUARD_PRIORITY);
             let res = half(shot.obj, obj);
             free(obj);
-            let back = shot.free && rd::<u32>(shot.obj) & 0x0100_0000 != 0;
-            if res > 0 || back {
-                clang(at);
-            }
-            if back {
-                turned += 1;
-            }
+            let back = rd::<u32>(shot.obj) & 0x0100_0000 != 0;
             static MET: AtomicU32 = AtomicU32::new(0);
             if MET.fetch_add(1, Ordering::Relaxed) < 200 {
                 log(&format!(
@@ -1509,11 +1522,11 @@ impl Strikes {
                     if shot.free { "shot" } else { "attack" },
                     shot.obj,
                     shot.owner,
-                    if back { "turned back" } else if shot.free { "not turned back" } else if res > 0 { "clash record on its owner (recoil)" } else { "no clash" }
+                    if back { "turned back" } else { "not turned back" }
                 ));
             }
         }
-        turned
+        met
     }
 }
 
@@ -1679,6 +1692,16 @@ impl Launch {
         }
         Launch { h: h.max(1.0), t: t.max(2.0), speed: speed.abs() }
     }
+}
+
+/// KH2 launches sent farther than their ATKP's knockback (up, sideways): Explosion's last blast
+/// (ATKP 912: reaction 11, up 15, sideways 30) left the foe beside Sora (the user: "the finishing
+/// hitbox on explosion doesn't send the enemies far away enough to give them a chance to
+/// recover"): KH2's default blow's height and twice its distance.
+const FARTHER: [(u16, (i16, i16)); 1] = [(912, (24, 60))];
+
+fn farther(attack: u16) -> Option<(i16, i16)> {
+    FARTHER.iter().find(|(id, _)| *id == attack).map(|(_, k)| *k)
 }
 
 /// How long a holding blow keeps its foe beside Sora (frames), how far out and how high.

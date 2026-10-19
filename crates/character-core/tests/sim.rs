@@ -614,6 +614,30 @@ fn falling_air_cast_lands_into_the_landing() {
     assert!(w.pos[1] <= 0.0);
 }
 
+/// No spell during KH2's landing (the user: "reflect can also be used during the landing
+/// animation, we need to disable this"): refused there, nothing kept for after, and allowed once
+/// it is over.
+#[test]
+fn no_cast_during_the_landing() {
+    // Jump, and stop on the landing's first frame.
+    let mut w = World::new(sora());
+    w.run(3, Pad { jump: true, ..IDLE });
+    let mut on_land = false;
+    for _ in 0..200 {
+        let o = w.run(1, IDLE);
+        if o[0].state == StateName::Land {
+            on_land = true;
+            break;
+        }
+    }
+    assert!(on_land);
+    assert!(!w.ch.can_cast() && !w.ch.magic_later(), "a spell in the landing");
+    assert_eq!(w.ch.cast(CastMotions { ground: 71, finisher: Some(72), air: 73 }), None);
+    let outs = w.run(60, IDLE);
+    assert!(outs.iter().any(|o| o.state != StateName::Land));
+    assert!(w.ch.can_cast(), "no spell after the landing");
+}
+
 /// An air cast with a share of gravity (KH1's slow sink, the user: "falls too fast"): the cast
 /// stops the fall, he sinks slower than a plain fall from the same height, and the fall after the
 /// cast goes on from the speed reached (no jump in speed).
@@ -649,6 +673,34 @@ fn air_cast_sinks_at_its_share_of_gravity() {
     for p in steps.windows(2) {
         assert!(p[1] - p[0] < 6.0, "fall speed jumped: {steps:?}");
     }
+}
+
+/// An air cast at full gravity (KH1's air spells, the user: Reflect "resets soras downward
+/// velocity for one frame ... then after have it fall to the ground with soras normal gravity"):
+/// falling fast, the cast stops his fall, then he falls from rest as a plain fall.
+#[test]
+fn air_cast_stops_the_fall_one_frame_then_falls() {
+    let mut ch = sora();
+    let mut cast = Clip::plain(73, 60);
+    cast.windows.push(Window { start: 0, end: Some(50), kind: WindowKind::NoGravity });
+    ch.moveset.clips.insert(73, cast);
+    ch.air_magic_falls = true;
+    ch.air_magic_gravity = 1.0;
+    let mut w = World::new(ch);
+    w.run(3, Pad { jump: true, ..IDLE });
+    w.run(40, IDLE);
+    let before = w.run(1, IDLE)[0].displacement[1];
+    assert!(before < -1.0, "not falling yet: {before}");
+    assert!(w.ch.cast(CastMotions { ground: 71, finisher: Some(72), air: 73 }).is_some());
+    let outs = w.run(6, IDLE);
+    assert!(outs.iter().all(|o| o.motion == 73));
+    let d: Vec<f32> = outs.iter().map(|o| -o.displacement[1]).collect();
+    // (The fall's arc from rest: its first step is a fraction of a unit.)
+    assert!(d[0] >= 0.0 && d[0] < 1.0 && d[0] < before.abs() * 0.2, "not stopped: {d:?}");
+    for p in d[1..].windows(2) {
+        assert!(p[1] >= p[0], "full gravity speeds him up: {d:?}");
+    }
+    assert!(d[5] > d[1], "full gravity speeds him up: {d:?}");
 }
 
 /// Gliding in place is KH2's hover (motion 208): a glide started with the stick neutral hovers

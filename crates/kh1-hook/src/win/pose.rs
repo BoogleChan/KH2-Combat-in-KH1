@@ -652,6 +652,68 @@ unsafe fn kh1_wrist(pose: &mut [Mat4], parents: &[i16], orig_world: Option<usize
     }
 }
 
+/// The dream weapons and the wooden sword (KH1 items `0x52..=0x55`): not Keyblades, so held as
+/// KH1 holds them.
+fn dream_weapon(w: u8) -> bool {
+    (0x52..=0x55).contains(&w)
+}
+
+/// KH1's hold of a dream weapon, by weapon: the grip relative to the hand, then each weapon bone
+/// after the grip relative to the grip, from KH1's own pose of a frame (`dream_hold`).
+static DREAM_HOLD: Mutex<Option<(u8, Vec<Mat4>)>> = Mutex::new(None);
+const WEAPON_BONES: usize = 13;
+
+/// A dream weapon held rigidly as KH1 holds it (the tester: the Dream Sword "stretches" the
+/// split second a movement begins, the rest of him not, and the Dream Shield is held another
+/// way in battle than in the cutscenes): its bones were posed one by one (blends, the keychain
+/// swing), so the mesh between them stretched. `kh1_world`: KH1's world matrices when it posed
+/// him this frame (its hold is noted from them); then every weapon bone is put where KH1's hold
+/// puts it from the hand drawn.
+unsafe fn dream_hold(pose: &mut [Mat4], parents: &[i16], kh1_world: Option<usize>) {
+    let Some(w) = held_weapon().filter(|w| dream_weapon(*w)) else { return };
+    let grip = kh1_data::retarget::GRIP_BONE;
+    let Some(hand) = parents.get(grip).copied().filter(|p| *p >= 0).map(|p| p as usize) else { return };
+    if pose.len() < grip + WEAPON_BONES || hand >= pose.len() {
+        return;
+    }
+    if let Some(world) = kh1_world {
+        let g = mat(world + grip * 0x40);
+        let mut rel = vec![mat(world + hand * 0x40).inverse() * g];
+        let gi = g.inverse();
+        rel.extend((1..WEAPON_BONES).map(|i| gi * mat(world + (grip + i) * 0x40)));
+        if rel.iter().all(|m| m.is_finite()) {
+            if let Ok(mut h) = DREAM_HOLD.lock() {
+                let new = h.as_ref().map_or(true, |(id, _)| *id != w);
+                *h = Some((w, rel));
+                if new {
+                    log(&format!("weapon {w:#x}: held rigidly as KH1 holds it (its hold noted from KH1's pose)"));
+                }
+            }
+        }
+    }
+    let Some(rel) = DREAM_HOLD.lock().ok().and_then(|h| h.as_ref().filter(|(id, _)| *id == w).map(|(_, r)| r.clone())) else { return };
+    let g = pose[hand] * rel[0];
+    pose[grip] = g;
+    for i in 1..WEAPON_BONES {
+        pose[grip + i] = g * rel[i];
+    }
+}
+
+/// The same on world matrices (KH1's own animation blending back in).
+unsafe fn dream_hold_world(world: usize, parents: &[i16]) {
+    let Some(w) = held_weapon().filter(|w| dream_weapon(*w)) else { return };
+    let grip = kh1_data::retarget::GRIP_BONE;
+    let Some(hand) = parents.get(grip).copied().filter(|p| *p >= 0).map(|p| p as usize) else { return };
+    let Some(rel) = DREAM_HOLD.lock().ok().and_then(|h| h.as_ref().filter(|(id, _)| *id == w).map(|(_, r)| r.clone())) else { return };
+    let g = mat(world + hand * 0x40) * rel[0];
+    for i in 0..WEAPON_BONES {
+        let m = if i == 0 { g } else { g * rel[i] };
+        if m.is_finite() {
+            std::ptr::write_unaligned((world + (grip + i) * 0x40) as *mut [f32; 16], m.to_cols_array());
+        }
+    }
+}
+
 /// Sora's weapon (KH1 item id, save `+0x36`), if the save reads.
 unsafe fn held_weapon() -> Option<u8> {
     let save = rd::<u64>(BASE.load(Ordering::Relaxed) + Rva(0x28695A0)) as usize;
@@ -1142,6 +1204,8 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
                         std::ptr::write_unaligned((world + i * 0x40) as *mut [f32; 16], (to_world * m).to_cols_array());
                     }
                 }
+                // (The dream weapons kept whole through the blend.)
+                dream_hold_world(world, &s.parents);
             } else {
                 s.last_drawn = None;
             }
@@ -1185,6 +1249,8 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
         *last = frame;
         j.apply_except(&mut pose, &s.parents, &to_world, steps.min(3) as usize, |b| driven.covers(b));
     }
+    // A dream weapon whole, as KH1 holds it.
+    dream_hold(&mut pose, &s.parents, (!ours).then_some(world));
     for (i, m) in pose.iter().enumerate().take(SORA_BONES as usize) {
         std::ptr::write_unaligned((world + i * 0x40) as *mut [f32; 16], (to_world * *m).to_cols_array());
     }

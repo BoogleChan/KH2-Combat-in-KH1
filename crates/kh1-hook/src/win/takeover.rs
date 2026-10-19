@@ -906,7 +906,20 @@ unsafe fn takeover(actor: usize) -> bool {
         // (s222: back to s207's, the user: "revert the changes made to aerial magic to before
         // s207"; s208's touchdown a frame early, s219's and s221's KH1 motion and height resets
         // on it, and s209's form casts ended in the air are out.)
-        let cast_landed = air_cast().is_some() && state == 0 && above <= STEP_DOWN;
+        // (KH1's ground state alone: its height above the floor can still be the last frame's on
+        // the landing frame, and that frame went to KH1's landing, its jump with it, the user:
+        // "there's a chance that the conditions aren't met and you can still go into kh1 landing
+        // animation state for a frame and be able to input kh1 jump".)
+        // (Only once KH1 had him in the air for it: a cast KH1 turned into its ground one is
+        // left to play.)
+        static CAST_AIRBORNE: AtomicBool = AtomicBool::new(false);
+        if frames == 0 {
+            CAST_AIRBORNE.store(false, Ordering::Relaxed);
+        }
+        if air_cast().is_some() && state != 0 {
+            CAST_AIRBORNE.store(true, Ordering::Relaxed);
+        }
+        let cast_landed = air_cast().is_some() && state == 0 && CAST_AIRBORNE.load(Ordering::Relaxed);
         // An Attack during a spell: KH2's once the spell is out (its end frames; the user: KH2's
         // magic can be cut by an attack to go on with the combo), not before (it would cut the
         // spell). In the air too.
@@ -982,7 +995,7 @@ unsafe fn takeover(actor: usize) -> bool {
         }
         // (A spell chosen during the cast, which is now over: it runs at once from the queue.)
         let magic_waits = magic_after && done;
-        if frames >= 3 && cast_landed || frames >= 2 && air_free || frames >= 10 && (falling || jump || cancel || magic_waits || matches!(state, 0 | 1) && (kh1_moving() || free || square || attack)) {
+        if frames >= 1 && cast_landed || frames >= 2 && air_free || frames >= 10 && (falling || jump || cancel || magic_waits || matches!(state, 0 | 1) && (kh1_moving() || free || square || attack)) {
             let falling = falling || air_free;
             JUMP_NOW.store(jump, Ordering::Relaxed);
             // The spell's combo goes on only with an Attack or a spell that cut it or was chosen
@@ -2127,6 +2140,17 @@ pub fn kh2_airborne() -> bool {
     kh2_has() && KH2_AIR.load(Ordering::Relaxed)
 }
 static KH2_AIR: AtomicBool = AtomicBool::new(false);
+
+/// KH2's movement over its last step, sideways (KH1's x / z, per frame): an air spell's KH1 cast
+/// goes on with it (`combat::command`).
+pub fn kh2_sideways() -> [f32; 2] {
+    DRIVER
+        .try_lock()
+        .ok()
+        .and_then(|d| d.as_ref().and_then(|d| d.last_out.as_ref().map(|o| [o.displacement[0], o.displacement[2]])))
+        .filter(|v| v.iter().all(|x| x.is_finite()))
+        .unwrap_or([0.0; 2])
+}
 
 /// KH1 takes Sora for one of its own actions (a command): it keeps him until it has him
 /// standing in a movement motion again (see `HANDOFF`).

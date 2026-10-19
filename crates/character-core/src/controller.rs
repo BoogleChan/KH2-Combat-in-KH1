@@ -650,7 +650,8 @@ impl Character {
             ActionKind::Attack { .. } => has(&|k| matches!(k, WindowKind::ComboMagic | WindowKind::Combo)),
             ActionKind::Magic if self.cast_finisher => next_finisher(),
             ActionKind::Magic => has(&|k| matches!(k, WindowKind::ComboMagic)),
-            ActionKind::Land => true,
+            // Not in the landing (the user: "reflect can also be used during the landing
+            // animation, we need to disable this"); once it is over.
             _ => false,
         }
     }

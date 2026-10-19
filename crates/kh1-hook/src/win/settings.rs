@@ -39,9 +39,9 @@ damage_scale = 1.0\r\n\
 magic_scale = 1.0\r\n\
 ; glide: square = Square in the air glides (as KH1's Superglide); jump = hold jump in the air\r\n\
 glide = square\r\n\
-; air_cast_fall: how fast Sora sinks while Reflect plays in the air (0 = he hangs, 1 = full\r\n\
-;   gravity); his fall is stopped when the cast starts, as KH1's spells do\r\n\
-air_cast_fall = 0.3\r\n\
+; air_cast_fall: how fast Sora falls while Reflect plays in the air (0 = he hangs, 1 = full\r\n\
+;   gravity); his fall is stopped for a frame when the cast starts, as KH1's spells do\r\n\
+air_cast_fall = 1.0\r\n\
 ; kh2_voice: on = Sora's KH2 battle voice on those moves instead of KH1's; off = KH1's voice\r\n\
 kh2_voice = off\r\n\
 ; bonus_ap: on = (abilities = kh1) Sora's max AP grows by the AP of each KH2 ability he learns\r\n\
@@ -244,6 +244,7 @@ pub fn save(key: &str, value: &str) {
     let _ = std::fs::write(&path, out.join("\r\n") + "\r\n");
 }
 
-/// The default `air_cast_fall`: a third of gravity (estimated against KH1's own air spells,
-/// which sink well short of a fall; not measured).
-pub const AIR_CAST_FALL: f32 = 0.3;
+/// The default `air_cast_fall`: full gravity (the user: Reflect should stop his fall for one
+/// frame, "then after have it fall to the ground with soras normal gravity physics. Right now
+/// sora just slowly falls to the ground which is not accurate to how kh1 magic works").
+pub const AIR_CAST_FALL: f32 = 1.0;

@@ -274,7 +274,10 @@ unsafe extern "system" fn pad(src: usize, out: usize, cfg: usize) {
     // too, spec 3.2.)
     let l1_menu = super::shortcuts::menu_on_l1(b_all);
     let shortcuts = l1_menu || super::shortcuts::submenu_open();
-    if super::takeover::active() && !shortcuts {
+    // (Also through KH1's air spell, to its landing: KH1 has him then, and its landing took a
+    // jump pressed on its first frame, the user.)
+    let air_cast = super::takeover::air_cast().is_some();
+    if (super::takeover::active() || air_cast) && !shortcuts {
         std::ptr::write_unaligned(out as *mut u16, b & !(super::takeover::jump_button() | super::takeover::SQUARE));
     } else if super::takeover::active() && !l1_menu {
         std::ptr::write_unaligned(out as *mut u16, b & !super::takeover::SQUARE);

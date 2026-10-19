@@ -638,11 +638,20 @@ struct Runtime {
     carry: u32,
     /// Burst attacks whose sound has played.
     burst_heard: std::collections::HashSet<u64>,
+    /// KH1 has had Sora since (the Reflect paused, `kh1_frame`).
+    paused: Option<Instant>,
 }
 
 /// The counter's burst attacks (tiers 1..3) and the element whose sound is the burst's.
 const BURSTS: [u16; 3] = [667, 668, 669];
+/// The party's actors (Sora first).
+const PARTY_RVA: Rva = Rva(0x2D37C80);
 const BURST_ELEMENT: u16 = 7;
+/// The barrier's contact effect (element 11) and the element whose sound plays with it.
+const CONTACT_ELEMENT: u16 = 11;
+const CONTACT_SOUND_ELEMENT: u16 = 1;
+/// KH1 having Sora this long pauses a Reflect (`kh1_frame`); longer, it ends.
+const PAUSE_MAX_S: f32 = 3.0;
 
 /// The barrier held while attacks keep hitting it (the user: "can we have reflect keep shielding
 /// until attacks have stopped"). The scripts' barrier (ATKP 573) stands 27 frames at every level
@@ -775,7 +784,7 @@ fn runtime(g: &mut Option<Runtime>) -> Option<&mut Runtime> {
         if levels.is_empty() {
             return None;
         }
-        *g = Some(Runtime { magic, spells, levels, fresh: None, casting: None, fx: HashMap::new(), barrier: false, hold: Hold::default(), blocks: 0, counter_hits: 0, started: None, carry: 0, burst_heard: Default::default() });
+        *g = Some(Runtime { magic, spells, levels, fresh: None, casting: None, fx: HashMap::new(), barrier: false, hold: Hold::default(), blocks: 0, counter_hits: 0, started: None, carry: 0, burst_heard: Default::default(), paused: None });
     }
     g.as_mut()
 }
@@ -895,11 +904,52 @@ impl World for KhWorld {
 
 /// After KH2's step (Sora moved and posed, his swings struck): the spell's frame.
 pub unsafe fn after_step(actor: usize, out: &Output, airborne: bool, strikes: &mut combat::Strikes, battle: &Battle, lock: Option<u32>) {
+    step(actor, out, airborne, strikes, battle, lock);
+    // Out of reach of every hit while KH2 has him invulnerable (a dodge, Quick Run, Aerial
+    // Dodge, Aerial Recovery, the Drive) or behind Reflect (its cast and barrier), as KH1's
+    // dodge roll is (`intangible`).
+    let reflecting = BARRIER.load(Ordering::Relaxed) || (out.state == StateName::Magic && cast_motion(out.motion));
+    intangible(actor, out.invulnerable || reflecting);
+}
+
+/// The actor flag KH1's hit pass skips an actor by (`0x14028FEE0`: hittable only while its flags
+/// word `& 0x8048` is `0x8000`): its motion events `0x2B` / `0x2A` set and clear it
+/// (`0x14028C550`), its dodge roll's untouchable frames. With it, no attack queues a hit on him,
+/// sets off its hit effect on him, or takes hold of him (a grab), as during KH1's roll.
+const UNTOUCHABLE: u32 = 0x40;
+/// We set `UNTOUCHABLE` on Sora (and take it off again only then).
+static OURS: AtomicBool = AtomicBool::new(false);
+
+/// Sora out of reach of KH1's hits (`on`) or back in it; only a flag of ours is taken off.
+pub unsafe fn intangible(actor: usize, on: bool) {
+    if actor < 0x10000 || !super::settings::get().hurt {
+        return;
+    }
+    let flags = rd::<u32>(actor);
+    if on {
+        if flags & UNTOUCHABLE == 0 {
+            wr(actor, flags | UNTOUCHABLE);
+            if !OURS.swap(true, Ordering::Relaxed) {
+                static N: AtomicU32 = AtomicU32::new(0);
+                if N.fetch_add(1, Ordering::Relaxed) < 40 {
+                    log("Sora untouchable (KH1's dodge-roll flag): KH2's invulnerable frames or Reflect");
+                }
+            }
+        }
+    } else if OURS.swap(false, Ordering::Relaxed) {
+        wr(actor, flags & !UNTOUCHABLE);
+    }
+}
+
+unsafe fn step(actor: usize, out: &Output, airborne: bool, strikes: &mut combat::Strikes, battle: &Battle, lock: Option<u32>) {
     let Ok(mut g) = RT.lock() else { return };
     let Some(rt) = g.as_mut() else {
         BARRIER.store(false, Ordering::Relaxed);
         return;
     };
+    if rt.paused.take().is_some() {
+        note("Reflect goes on: KH2 has Sora again".to_string());
+    }
     if rt.fresh.is_none() && rt.magic.casts.is_empty() && rt.magic.effects.is_empty() && rt.fx.is_empty() {
         BARRIER.store(false, Ordering::Relaxed);
         BLOCKS.store(0, Ordering::Relaxed);
@@ -977,7 +1027,10 @@ pub unsafe fn after_step(actor: usize, out: &Output, airborne: bool, strikes: &m
     }
     // (Waiting for the combo only with something else in it: a Reflect is now a combo's first
     // step on its own, and alone it bursts as before.)
-    let held = hold(rt, blocks, out.combo_live && out.combo_count >= 2);
+    // (The counter no longer waits for Sora's combo: it fires as the barrier goes, whatever he is
+    // doing, the user: "the only two conditions that matter for spawning reflects hitboxes is if
+    // soras reflect got hit, if it did get hit then if the reflect animation is at the end".)
+    let held = hold(rt, blocks, false);
     let combo_wait = rt.hold.combo;
     for e in rt.magic.update(&mut world).into_iter().chain(rt.magic.take_events()) {
         match e {
@@ -1063,11 +1116,20 @@ pub unsafe fn after_step(actor: usize, out: &Output, airborne: bool, strikes: &m
     // The barrier as a guard: enemy shots it touches turned back (counted, they never reach
     // Sora), melee attacks repelled (KH1's recoil on the attacker; their hit is `hurt`'s). Not
     // while it waits for the combo (hidden, stopping nothing).
+    // Each attack meeting it: counted (the counter, once, at the barrier's end), and the
+    // barrier's contact effect where it met (element 11, which the script never starts itself:
+    // KH2 plays it on a blocked hit; its sound 174 is empty in the PC files, so the barrier's
+    // own chime, element 1's, with it).
     if !combo_wait {
+        let level = rt.magic.attacks.iter().find(|a| !a.freed && a.owner == SORA).and_then(|a| rt.levels.get(a.spell).copied()).unwrap_or(1);
         for (key, shapes) in &guards {
-            let turned = strikes.barrier_meet(actor, *key, shapes);
-            for _ in 0..turned {
+            for at in strikes.barrier_meet(actor, *key, shapes) {
                 blocked(0);
+                if let Some(h) = super::kh2fx::spell_start(level, CONTACT_ELEMENT) {
+                    super::kh2fx::spell_place(h, Mat4::from_translation(Vec3::from(at)));
+                }
+                super::kh2sound::spell_element(level, CONTACT_SOUND_ELEMENT);
+                note(format!("Reflect: contact effect at {at:.0?}"));
             }
         }
     }
@@ -1145,11 +1207,22 @@ fn hold(rt: &mut Runtime, blocks: u32, combo: bool) -> bool {
 /// KH1 has Sora this frame: a Reflect in flight ends with its effects (KH2 runs it).
 pub fn kh1_frame() {
     BARRIER.store(false, Ordering::Relaxed);
+    // (KH1's own move: his flag is KH1's again.)
+    let sora = unsafe { rd::<u64>(base() + PARTY_RVA) as usize };
+    unsafe { intangible(sora, false) };
     let Ok(mut g) = RT.try_lock() else { return };
     let Some(rt) = g.as_mut() else { return };
     if rt.magic.casts.is_empty() && rt.fx.is_empty() && rt.fresh.is_none() {
         return;
     }
+    // A short KH1 move (a spell, an item): the Reflect waits for KH2 and goes on, its counter
+    // still to come (the user: "reflect will always be able to spawn its hitbox regardless of
+    // soras animation state"); only a long one (a cutscene, a zone change) ends it.
+    let since = *rt.paused.get_or_insert_with(Instant::now);
+    if since.elapsed().as_secs_f32() < PAUSE_MAX_S {
+        return;
+    }
+    rt.paused = None;
     for h in rt.fx.values().filter_map(|v| v.0) {
         super::kh2fx::spell_kill(h);
     }
