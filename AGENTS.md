@@ -2578,3 +2578,13 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - "make sure also that valor form has its proper sound FX": Valor's effect elements' sounds (its
   archive's PAX, package `kh2fx::VALOR`, played as they start), its Keyblades' swing sounds and
   voices (its clips' frame triggers 8 / 14) load and play in the form.
+
+### 2026-10-19: Stage 216 (Valor's Square, the left Keyblade's load)
+- "using sora's square move in valor doesnt launch him still, he also should be able to use it
+  while walking": Valor's guard row (11) is an attack (motion 181, a rising slash with both
+  Keyblades, jump 90); the log showed it run as a guard. A guard row whose clip has hitboxes and
+  no guard window is now an attack: Square on the ground, standing or moving, starts it as a
+  forced row (its launch from the row's jump). Test `guard_row_attack_launches_from_square`.
+- "the second keyblade isnt there": the log, "item 0x5b's model not used: header 0x80 0xa800
+  0x1f700 (size 0x1f690)": the `.wpn`'s `+0xC` runs past the bytes loaded (end padding), and
+  `leftblade::set_up` refused it. Only `+4` / `+8` are checked now, as KH1's own handler reads.

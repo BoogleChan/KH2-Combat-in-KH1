@@ -1453,6 +1453,23 @@ impl Character {
             return self.try_glide(env);
         }
         if !self.airborne {
+            // A moveset whose guard row (11) is an attack, not a guard (Valor Form's: a rising
+            // double slash that launches him, jump 90; KH2's Valor has no guard): Square, standing
+            // or moving, is that attack (the KH1 port's user: "using sora's square move in valor
+            // doesnt launch him", "he also should be able to use it while walking").
+            let attack_row = self.moveset.combo_rows.iter().find(|r| r.id == GUARD_ROW).filter(|r| {
+                self.clip(r.motion).is_some_and(|c| {
+                    !c.windows.iter().any(|w| matches!(w.kind, WindowKind::Guard { .. })) && c.windows.iter().any(|w| matches!(w.kind, WindowKind::Hitbox { .. }))
+                })
+            });
+            if attack_row.is_some() {
+                self.forced_row = Some(GUARD_ROW);
+                if self.try_attack(input, env) {
+                    return true;
+                }
+                self.forced_row = None;
+                return false;
+            }
             if !moving {
                 // Row 11's motion (the moveset's own), else the press's, else the repel's.
                 let press = self.moveset.combo_rows.iter().find(|r| r.id == GUARD_ROW).map(|r| r.motion).filter(|m| self.clip(*m).is_some());

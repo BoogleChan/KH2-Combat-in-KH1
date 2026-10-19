@@ -280,7 +280,10 @@ unsafe fn set_up(size: i32, buf: usize) -> Result<(usize, usize), String> {
     }
     let size = size as usize;
     let (o4, o8, oc) = (rd::<u32>(buf + 4) as usize, rd::<u32>(buf + 8) as usize, rd::<u32>(buf + 0xC) as usize);
-    if !(o4 <= o8 && o8 < oc && oc <= size && o8 % 4 == 0 && o8 + 0x30 <= size) {
+    // (`+0xC` may run past the bytes loaded: the user's Divine Rose said 0x1F700 of 0x1F690, its
+    // end padding. KH1's own `.wpn` handler `0x140285120` reads only `+4` and `+8`.)
+    let _ = oc;
+    if !(o4 <= o8 && o4 < size && o8 % 4 == 0 && o8 + 0x30 <= size) {
         return Err(format!("header {o4:#x} {o8:#x} {oc:#x} (size {size:#x})"));
     }
     let container = buf + o8;

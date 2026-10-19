@@ -1385,3 +1385,24 @@ fn air_reflect_holds_as_final_forms() {
     w.run(20, IDLE);
     assert!(w.pos[1] < y - 1.0, "didn't fall after the hold");
 }
+
+/// A moveset whose guard row is an attack (Valor Form's rising slash, jump 90): Square starts it,
+/// standing or walking, and it launches him (the KH1 port's user).
+#[test]
+fn guard_row_attack_launches_from_square() {
+    for stick in [[0.0, 0.0], [0.0, 0.4]] {
+        let mut ch = sora();
+        let mut clip = Clip::plain(181, 48);
+        clip.windows.push(Window { start: 5, end: Some(15), kind: WindowKind::Hitbox { attack: 228, group: 2, combo: None, weapon: 1 } });
+        ch.moveset.clips.insert(181, clip);
+        ch.moveset.combo_rows.retain(|r| r.id != 11);
+        ch.moveset.combo_rows.push(ComboRow { kind: 0, jump: 90.0, ..row(11, 181, false, false) });
+        let mut w = World::new(ch);
+        w.run(5, Pad { stick, ..IDLE });
+        let o = w.step(Pad { action: true, stick, ..IDLE });
+        assert_eq!(o.state, StateName::Attack, "stick {stick:?}");
+        assert_eq!(o.motion, 181);
+        w.run(20, IDLE);
+        assert!(w.pos[1] > 30.0, "didn't launch: y {}", w.pos[1]);
+    }
+}
