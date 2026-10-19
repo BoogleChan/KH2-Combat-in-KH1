@@ -2719,3 +2719,16 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   (`air_cast_fall`'s share of gravity, default full); a cast reaching the ground still goes into
   KH2's landing. Tests `air_cast_hovers_then_falls`, `air_cast_sinks_at_its_share_of_gravity`
   (after the hold), `falling_air_cast_lands_into_the_landing`.
+
+### 2026-10-19: Stage 229 (Reflect's physics back to s177's, one pop; KH1 footsteps; Valor's landing; Wisdom's KH1 spells cut; Aerial Dodge's sound)
+- Air casts fall through their no-gravity frames from rest again (s177's; the user: "roll back
+  the physics of reflect to version s177"), into KH2's landing.
+- Reflect pops once per cast (helper, `refl-once`): the script's counter attack 574 stands
+  frames 30..57 and re-arms every 10/8/6 frames, so it hit each foe 3..5 times before the burst;
+  now only the burst (667/668/669, tier from all hits counted) strikes, once per foe at the
+  cast's end; 574's effect still plays. Test `reflect_pops_once_for_two_hits`.
+- Footsteps: KH1's own only (the step sound unhooked; KH2's footsteps from s205 off).
+- Valor: KH2's landing plays again (s220's idle stand-in taken out).
+- Wisdom: a KH1-only spell (Gravity, Stop, Aero) is cut by an Attack from its cast motion's input
+  frame (Thunder's, `AllowReactionCommand`), whether or not KH1 counted its shot yet.
+- Aerial Dodge (motion 202) in `kh2_sounds`'s default list: its sound 999019 at frame 1.

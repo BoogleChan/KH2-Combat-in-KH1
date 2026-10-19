@@ -607,7 +607,7 @@ fn falling_air_cast_lands_into_the_landing() {
     assert_eq!(w.ch.cast(CastMotions { ground: 71, finisher: Some(72), air: 73 }), Some(73));
     let y = w.pos[1];
     w.run(18, IDLE);
-    assert!((w.pos[1] - y).abs() < 1e-3, "not held in the cast's no-gravity frames: {} -> {}", y, w.pos[1]);
+    assert!(w.pos[1] < y, "held in the cast's no-gravity frames: {} -> {}", y, w.pos[1]);
     let outs = w.run(150, IDLE);
     let landed = outs.iter().position(|o| o.state == StateName::Land).expect("never landed");
     assert!(outs[..landed].iter().all(|o| o.motion == 73), "left the cast before landing");
@@ -645,8 +645,8 @@ fn no_cast_during_the_landing() {
 fn air_cast_sinks_at_its_share_of_gravity() {
     let setup = |share: f32| {
         let mut ch = sora();
-        let mut cast = Clip::plain(73, 60);
-        cast.windows.push(Window { start: 0, end: Some(8), kind: WindowKind::NoGravity });
+        let mut cast = Clip::plain(73, 40);
+        cast.windows.push(Window { start: 0, end: Some(38), kind: WindowKind::NoGravity });
         ch.moveset.clips.insert(73, cast);
         ch.air_magic_falls = true;
         ch.air_magic_gravity = share;
@@ -661,25 +661,28 @@ fn air_cast_sinks_at_its_share_of_gravity() {
     assert!((full.pos[1] - h0).abs() < 1e-3 && h0 > 50.0);
     assert!(full.ch.cast(CastMotions { ground: 71, finisher: Some(72), air: 73 }).is_some());
     assert!(slow.ch.cast(CastMotions { ground: 71, finisher: Some(72), air: 73 }).is_some());
-    // The hold, then the fall at its share.
-    full.run(9, IDLE);
-    slow.run(9, IDLE);
-    assert!((h0 - full.pos[1]).abs() < 1.0 && (h0 - slow.pos[1]).abs() < 1.0, "not held");
-    let (a, b) = (full.pos[1], slow.pos[1]);
-    full.run(12, IDLE);
-    slow.run(12, IDLE);
-    let (fell_full, fell_slow) = (a - full.pos[1], b - slow.pos[1]);
+    let a = full.run(8, IDLE);
+    let b = slow.run(8, IDLE);
+    assert!(a.iter().all(|o| o.motion == 73) && b.iter().all(|o| o.motion == 73));
+    let (fell_full, fell_slow) = (h0 - full.pos[1], h0 - slow.pos[1]);
     assert!(fell_slow > 0.0, "didn't sink");
     assert!(fell_slow < fell_full * 0.5, "sank {fell_slow} against {fell_full}");
+    // Through the end of the cast into the fall: no sudden jump in fall speed.
+    let outs = slow.run(30, IDLE);
+    let steps: Vec<f32> = outs.iter().map(|o| -o.displacement[1]).collect();
+    for p in steps.windows(2) {
+        assert!(p[1] - p[0] < 6.0, "fall speed jumped: {steps:?}");
+    }
 }
 
-/// An air cast (the user, s227: "brief hover, then fall", as s204 had it): his fall stops as the
-/// cast starts, he hangs through its no-gravity frames, then falls from rest at full gravity.
+/// An air cast at full gravity (KH1's air spells, the user: Reflect "resets soras downward
+/// velocity for one frame ... then after have it fall to the ground with soras normal gravity"):
+/// falling fast, the cast stops his fall, then he falls from rest as a plain fall.
 #[test]
-fn air_cast_hovers_then_falls() {
+fn air_cast_stops_the_fall_one_frame_then_falls() {
     let mut ch = sora();
     let mut cast = Clip::plain(73, 60);
-    cast.windows.push(Window { start: 0, end: Some(20), kind: WindowKind::NoGravity });
+    cast.windows.push(Window { start: 0, end: Some(50), kind: WindowKind::NoGravity });
     ch.moveset.clips.insert(73, cast);
     ch.air_magic_falls = true;
     ch.air_magic_gravity = 1.0;
@@ -689,11 +692,15 @@ fn air_cast_hovers_then_falls() {
     let before = w.run(1, IDLE)[0].displacement[1];
     assert!(before < -1.0, "not falling yet: {before}");
     assert!(w.ch.cast(CastMotions { ground: 71, finisher: Some(72), air: 73 }).is_some());
-    let outs = w.run(30, IDLE);
+    let outs = w.run(6, IDLE);
     assert!(outs.iter().all(|o| o.motion == 73));
     let d: Vec<f32> = outs.iter().map(|o| -o.displacement[1]).collect();
-    assert!(d[..19].iter().all(|v| v.abs() < 1e-3), "not held: {d:?}");
-    assert!(d[29] > d[22] && d[29] > 0.5, "no fall after the hold: {d:?}");
+    // (The fall's arc from rest: its first step is a fraction of a unit.)
+    assert!(d[0] >= 0.0 && d[0] < 1.0 && d[0] < before.abs() * 0.2, "not stopped: {d:?}");
+    for p in d[1..].windows(2) {
+        assert!(p[1] >= p[0], "full gravity speeds him up: {d:?}");
+    }
+    assert!(d[5] > d[1], "full gravity speeds him up: {d:?}");
 }
 
 /// Gliding in place is KH2's hover (motion 208): a glide started with the stick neutral hovers

@@ -643,6 +643,14 @@ struct Runtime {
 }
 
 /// The counter's burst attacks (tiers 1..3) and the element whose sound is the burst's.
+///
+/// The burst is Reflect's one pop: per cast, it alone hits, once per foe (its rows re-arm never),
+/// as the barrier's effects end (script frame ~58), its tier by the hits the barrier counted. The
+/// script's counter attack before it (ATKP 574: power 50, a flinch, re-armed every 10 / 8 / 6
+/// frames over its 28) hit each foe in reach 3 to 5 times, and every second attack on the barrier
+/// was taken for another pop (the user: "reflect under one cast regardless of if the multiple
+/// enemies are hitting the same reflect should pop only once at the end of the reflect effects
+/// animation"): it runs in the script (its effect plays) but strikes nothing.
 const BURSTS: [u16; 3] = [667, 668, 669];
 /// The party's actors (Sora first).
 const PARTY_RVA: Rva = Rva(0x2D37C80);
@@ -739,10 +747,10 @@ pub unsafe fn before_step(actor: usize, ch: &mut Character) {
         note(format!("Reflect: KH2 couldn't start its cast motion ({m:?})"));
         return;
     };
-    // In the air: his fall stops, he hangs through the cast's no-gravity frames, then falls
-    // (s204's; the user, s227: "brief hover, then fall"), into KH2's landing.
+    // In the air: his fall stops as the cast starts, then he falls through it from rest (s177's;
+    // the user, s229: "roll back the physics of reflect to version s177"), into KH2's landing.
     if ch.airborne() {
-        note(format!("Reflect in the air: a brief hover, then a fall (motion {motion})"));
+        note(format!("Reflect in the air: stopped, then falling through the cast (motion {motion})"));
     }
     // KH1's own payment of a spell's cost: 1 MP at every level.
     let pay: unsafe extern "system" fn(usize, i32) = std::mem::transmute(base + MP_PAY_RVA);
@@ -1099,6 +1107,10 @@ unsafe fn step(actor: usize, out: &Output, airborne: bool, strikes: &mut combat:
             guards.push((a.id | SPELL_KEY, shapes));
             continue;
         }
+        // (Only the burst strikes: `BURSTS`.)
+        if !BURSTS.contains(&a.atk) {
+            continue;
+        }
         attacks.push(combat::SpellAttack { kh1_data: None, key: a.id | SPELL_KEY, group: if first.combo_group != 0 { first.combo_group as i64 } else { a.group }, atk: a.atk, sub: a.sub, shapes });
     }
     // The burst (the counter's last attack, ATKP 667 / 668 / 669 by tier): its shatter sound,
@@ -1109,7 +1121,7 @@ unsafe fn step(actor: usize, out: &Output, airborne: bool, strikes: &mut combat:
         if rt.burst_heard.insert(a.key) {
             let level = rt.levels.get(a.spell).copied().unwrap_or(1);
             super::kh2sound::spell_element(level, BURST_ELEMENT);
-            note(format!("Reflect burst (ATKP {}): element {BURST_ELEMENT}'s sound", a.atk));
+            log(&format!("Reflect pop (ATKP {} burst, the cast's only one): {} hit(s) blocked", a.atk, rt.blocks));
         }
     }
     // The barrier as a guard: enemy shots it touches turned back (counted, they never reach
@@ -1136,7 +1148,7 @@ unsafe fn step(actor: usize, out: &Output, airborne: bool, strikes: &mut combat:
         let hits = strikes.spell_strike(actor, &attacks, &|atk, sub, count| row(battle, atk, sub, count).cloned());
         for (_, atk, foe, dealt) in hits {
             rt.counter_hits += 1;
-            note(format!("Reflect counter: ATKP {atk} hit {foe:#x} -> damage {dealt:?}"));
+            log(&format!("Reflect pop: ATKP {atk} hit {foe:#x} -> damage {dealt:?} ({} blocked)", rt.blocks));
         }
     }
     for a in rt.magic.freed().filter(|a| a.owns_id) {

@@ -23,8 +23,9 @@ use std::sync::{Arc, Mutex};
 /// Finishing Leap 167, Flash Step 169, Vicinity Break 170, Counterguard 171, Retaliating Slash
 /// 172, Aerial Sweep 191, Aerial Spiral 192, Horizontal Slash 193, Aerial Finish 194, Aerial
 /// Dive 196, Magnet Burst 197; Aerial Recovery 40 (the user: it had no sound) and the guard 173
-/// (its swish). (The plain combo's swings keep KH1's.)
-pub const DEFAULT_MOTIONS: [u16; 19] = [161, 162, 163, 164, 165, 166, 167, 169, 170, 171, 172, 191, 192, 193, 194, 196, 197, 40, 173];
+/// (its swish), Aerial Dodge 202 (its whoosh, sound 999019 at frame 1; the user: "aerial dodge is
+/// missing its sfx"). (The plain combo's swings keep KH1's.)
+pub const DEFAULT_MOTIONS: [u16; 20] = [161, 162, 163, 164, 165, 166, 167, 169, 170, 171, 172, 191, 192, 193, 194, 196, 197, 40, 173, 202];
 
 struct Sound {
     rate: u32,

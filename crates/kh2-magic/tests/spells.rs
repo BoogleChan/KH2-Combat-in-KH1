@@ -383,3 +383,75 @@ fn wisdom_spells_run_at_their_sub() {
         }
     }
 }
+
+/// One Reflect cast pops once (the KH1 port's user: "reflect under one cast regardless of if the
+/// multiple enemies are hitting the same reflect should pop only once at the end of the reflect
+/// effects animation"): its barrier hit twice, at two different times (as by two enemies), held
+/// or not, gives exactly one burst (ATKP 667..669), after the barrier is down, as the cast ends;
+/// the bursts' rows never re-arm (each foe hit once). The counter attack before it (574) re-arms
+/// (every 10 / 8 / 6 frames): the port lets only the burst strike.
+#[test]
+fn reflect_pops_once_for_two_hits() {
+    let d = dir();
+    let Ok(system) = std::fs::read(d.join("03system.bin")) else {
+        eprintln!("skipped: no extracted files in {}", d.display());
+        return;
+    };
+    let pref = kh2_formats::pref::Pref::from_03system(&system).unwrap();
+    if let Ok(b) = std::fs::read(d.join("00battle.bin")) {
+        let battle = kh2_formats::battle::Battle::parse(&b).unwrap();
+        for id in [667u16, 668, 669] {
+            for sub in [0u8, 2, 4] {
+                if let Some(r) = battle.attack_for_level(id, sub, 0) {
+                    assert_eq!(r.interval, 0, "burst {id} sub {sub} re-arms");
+                }
+            }
+        }
+        assert!(battle.attack_for_level(574, 0, 0).is_some_and(|r| r.interval > 0));
+    }
+    for level in 1..=3 {
+        let file = format!("REFLECT_{level}.mag");
+        let Ok(bytes) = std::fs::read(d.join(&file)) else { continue };
+        let sub = level * 2 - 2;
+        for held in [false, true] {
+            let mut magic = Magic::new();
+            let spell = magic.add_spell(SpellFile::parse(&file, &bytes).unwrap());
+            let mut w = Fake { frame: 0, release_at: 0, motion_end: 60, seed: 1 };
+            magic.cast(spell, SORA, 5, sub, pref.magi.get(sub).unwrap(), &mut w).unwrap();
+            assert!(magic.release(SORA, &mut w));
+            let mut bursts = std::collections::BTreeMap::new();
+            let mut barrier_down = None;
+            let mut last = 0;
+            for f in 1..400 {
+                w.frame = f;
+                magic.hold(SORA, held && (20..60).contains(&f));
+                for e in magic.update(&mut w) {
+                    if let Event::Error(s) = e {
+                        panic!("{s}");
+                    }
+                }
+                // Two attacks on the barrier, apart.
+                if f == 5 || f == 15 {
+                    if let Some(a) = magic.attacks.iter_mut().find(|a| a.atk == 573 && !a.freed) {
+                        a.reflect_count += 1;
+                    }
+                }
+                if barrier_down.is_none() && f > 2 && !magic.attacks.iter().any(|a| a.atk == 573 && !a.freed) {
+                    barrier_down = Some(f);
+                }
+                for a in magic.attacks.iter().filter(|a| !a.freed && (667..=669).contains(&a.atk) && a.pos.is_some()) {
+                    bursts.entry(a.key).or_insert(f);
+                }
+                last = f;
+                if magic.casts.is_empty() {
+                    break;
+                }
+            }
+            eprintln!("{file} held {held}: barrier down at {barrier_down:?}, bursts {bursts:?}, cast over at {last}");
+            assert_eq!(bursts.len(), 1, "{file} held {held}: one pop per cast");
+            let at = *bursts.values().next().unwrap();
+            assert!(barrier_down.is_some_and(|b| at > b), "the pop before the barrier went down");
+            assert!(last - at <= 8, "the pop isn't at the cast's end ({at} of {last})");
+        }
+    }
+}

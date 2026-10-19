@@ -367,12 +367,8 @@ unsafe fn arrive(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     let sora = ch.abilities.clone();
     let own = form_abilities(&sora, &f.character, kind);
     swap(ch, anim, &f.character, &f.rig, own.clone());
-    // Valor's landing is Sora's own (no Keyblade: KH2's data has the same clip in both msets), so
-    // its stance shows instead (the user: "when valor form lands from a jump, he goes into his
-    // KH2 idle, instead of Valor idle").
-    if kind == Kind::Valor {
-        anim.stand_in = vec![(character_core::motion::LAND, character_core::motion::IDLE)];
-    }
+    // (s220 showed Valor's stance in place of its landing, whose clip is Sora's own; the user,
+    // s229: "valor form is currently missing kh2's landing animation": KH2's landing plays.)
     super::kh2fx::owner_gone();
     // (Still held in the air through it; then he falls.)
     if ch.clip_exists(ARRIVE_MOTION) {

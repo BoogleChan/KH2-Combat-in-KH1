@@ -183,3 +183,15 @@ s182: the chain's carry now really reaches the last Reflect (`Magic::cancel` fre
 cast's attacks at once; before, the carry was counted on the old barrier and the chain never
 burst), and the burst (ATKP 667 / 668 / 669) plays element 7's sound (173), inferred as the
 shatter: the script starts no element for it and element 11's 174 plays nothing on PC.
+
+## One pop per cast (Data + Ours)
+
+- Reflect's script per cast (all three levels, the sample files): the barrier (ATKP 573) stands to
+  frame ~29, where element 4 starts; the counter attack 574 then stands frames 30..57 (power 50, a
+  flinch, re-armed every 10 / 8 / 6 frames by level), and the burst (667 / 668 / 669, its tier
+  by the barrier's count; power 550, never re-armed) frames 58..63, as the cast ends. Held
+  (`Magic::hold`) the same, later.
+- The port lets only the burst strike (`reflect::BURSTS`): one pop per cast, once per foe, at the
+  end, however many attacks met the barrier (the user: the second attack on one Reflect made it
+  pop again; 574's re-arms hit each foe 3..5 times). 574 still runs in the script and its effect
+  plays. kh2-magic test `reflect_pops_once_for_two_hits`.

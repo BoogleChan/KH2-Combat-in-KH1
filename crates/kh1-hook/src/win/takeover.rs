@@ -975,7 +975,12 @@ unsafe fn takeover(actor: usize) -> bool {
         if form_end && !out_any {
             log("form's cast motion ended before a shot of the KH1 spell was counted: KH2 takes him anyway");
         }
-        let attack_cut = attack && out_any && !last && window;
+        // (A form's KH1 spell takes an Attack at its cast motion's input frame, as the form's
+        // Thunder does in a combo, whether or not KH1 has counted the spell's shot yet: the user,
+        // "allow kh1 exclusive magic to be able to have its animation be interrupted by an attack
+        // on the same frame as thunder".)
+        let form_attack = form_cast.is_some() && command && !done;
+        let attack_cut = attack && (out_any || form_attack) && !last && window;
         let magic_cut = magic_after && out_any && !last && window;
         let other_cut = out && (slot <= 1 || form_cast.is_some()) && window && (jump_pressed || square);
         let cancel = attack_cut || magic_cut || other_cut || form_end || drive_cut || item_end;
@@ -2276,7 +2281,11 @@ pub unsafe fn install() {
     sparkle_stub(base);
     hook::install(base + PHYS_RVA, &PHYS_PROLOGUE, physics as *const () as usize, &ORIG_PHYS, "actor physics step");
     let _ = hook::install(base + FOOTSTEP_RVA, &FOOTSTEP_PROLOGUE, footstep as *const () as usize, &ORIG_FOOTSTEP, "footstep sound");
-    let _ = hook::install(base + STEP_SOUND_RVA, &STEP_SOUND_PROLOGUE, step_sound as *const () as usize, &ORIG_STEP_SOUND, "step sound (KH2's footsteps)");
+    // KH2's footsteps are off: KH1's own play as they are, from KH1's motions (the user: "right
+    // now kh2s footstep sfx plays on top of kh1's footstep sounds, we want that removed from all
+    // animations and just want kh1s footsteps sfx playing"). With the step sound unhooked, KH1's
+    // aren't dropped and `kh2_footsteps` plays none.
+    let _ = (STEP_SOUND_RVA, STEP_SOUND_PROLOGUE, step_sound as unsafe extern "system" fn(usize, i32));
     if hook::install(base + CONTROL_RVA, &CONTROL_PROLOGUE, control as *const () as usize, &ORIG_CONTROL, "player control step").is_some() {
         CONTROL_HOOKED.store(true, Ordering::Relaxed);
     }

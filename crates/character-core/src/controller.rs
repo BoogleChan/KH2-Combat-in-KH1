@@ -1887,11 +1887,10 @@ impl Character {
                 // in the air to as well.)
                 // (Nor in a moving attack, Wisdom Form's air shots: he falls as he shoots, the user,
                 // "sora also has gravity".)
-                // (Air casts hold him in their no-gravity frames, then he falls: s204's, back in
-                // s227 (the user, of the falls tried since: "brief hover, then fall" was closest to
-                // KH1's air magic). `air_magic_falls` ends a cast reaching the ground in KH2's
-                // landing; `air_magic_gravity` is gravity's share after the hold.)
-                WindowKind::NoGravity if self.cast_hold.is_none() && !(matches!(act.kind, ActionKind::Attack { .. }) && clip.windows.iter().any(|w| matches!(w.kind, WindowKind::AllowMovement))) => fo.no_gravity = true,
+                // (Air casts fall through their no-gravity frames from rest, as s174..s177 had it,
+                // the user's pick in s229: "roll back the physics of reflect to version s177";
+                // `air_magic_falls` ends a cast reaching the ground in KH2's landing.)
+                WindowKind::NoGravity if self.cast_hold.is_none() && !(self.air_magic_falls && matches!(act.kind, ActionKind::Magic)) && !(matches!(act.kind, ActionKind::Attack { .. }) && clip.windows.iter().any(|w| matches!(w.kind, WindowKind::AllowMovement))) => fo.no_gravity = true,
                 WindowKind::WeaponTrail => fo.weapon_trail = true,
                 WindowKind::Guard { attack, group, weapon } => {
                     fo.guarding = true;
