@@ -2645,3 +2645,17 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   set first and KH1's idle queued last. And the touchdown put him on the floor while KH1's height
   above it (`+0x3D4`) still read its last frame's ~40, so KH2's first step started him in the
   air (its jump pose): set to 0 there. KH1's motion fields are logged for 12 steps after a cut.
+
+### 2026-10-19: Stage 222 (the left trail's place)
+- The user's video (s221): the left trail, in the Valor Keyblade's own look, was drawn well off
+  the blade. Its owner's matrices were made from our pose (KH1 model space × our world) at draw
+  time; now each KH2 step from Sora's own world matrices as KH1 last drew him (what KH1's right
+  trail reads), each moved by the right-grip-to-left-grip turn of the same frame. A live left
+  trail's position, the left grip and its last bone are logged for its first steps.
+- KH1's air spells back to s207's handling (the user: "revert the changes made to aerial magic to
+  before s207 ... its completely fucked atm"): KH2 takes him when KH1 has landed him (state 0 on
+  the floor), with KH2's landing; out are s208's touchdown a frame early (he was moved onto the
+  floor), s209's form casts ended in the air, s219's / s221's KH1 idle request, cut flag and
+  height reset on the landing. KH2's air Reflect (Final Form's hold) stays.
+- Valor refuses KH1's specials (Sonic Blade, Strike Raid, ...): every command of Sora's KH1 runs
+  as a move other than Attack, magic, items and its two air-allowed types, logged.

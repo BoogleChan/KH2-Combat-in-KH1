@@ -903,13 +903,10 @@ unsafe fn takeover(actor: usize) -> bool {
         // state with less than this frame's drop left to the floor, he is put down and KH2 lands
         // him. The user: on KH1's landing frame its roll or jump could still come out, KH2 took
         // him a frame late.)
-        let touchdown = air_cast().is_some() && matches!(state, 1 | 2) && frames >= 3 && vel.is_some_and(|(_, up)| up < 0.0 && above + up * 1.5 <= STEP_DOWN);
-        if touchdown {
-            let mv: MoveFn = std::mem::transmute(base + MOVE_RVA);
-            mv(actor, &[0.0, above.max(0.0) + 1.0, 0.0, 0.0], 0);
-            log(&format!("KH1's air cast: touching down ({above:.0} above the floor, falling {:.1}/frame): KH2's landing now", vel.map_or(0.0, |v| -v.1)));
-        }
-        let cast_landed = air_cast().is_some() && (state == 0 && above <= STEP_DOWN || touchdown);
+        // (s222: back to s207's, the user: "revert the changes made to aerial magic to before
+        // s207"; s208's touchdown a frame early, s219's and s221's KH1 motion and height resets
+        // on it, and s209's form casts ended in the air are out.)
+        let cast_landed = air_cast().is_some() && state == 0 && above <= STEP_DOWN;
         // An Attack during a spell: KH2's once the spell is out (its end frames; the user: KH2's
         // magic can be cut by an attack to go on with the combo), not before (it would cut the
         // spell). In the air too.
@@ -961,8 +958,7 @@ unsafe fn takeover(actor: usize) -> bool {
         // KH2's.)
         let form_clock = form_cast.is_some_and(|(len, _)| frames + 1 >= len) && command && !done;
         // (In the air too: KH2's fall from there.)
-        let form_end_air = form_clock && air_cast().is_some() && above > STEP_DOWN;
-        let form_end = form_clock && air_cast().is_none() || form_end_air;
+        let form_end = form_clock && air_cast().is_none();
         if form_end && !out_any {
             log("form's cast motion ended before a shot of the KH1 spell was counted: KH2 takes him anyway");
         }
@@ -987,7 +983,7 @@ unsafe fn takeover(actor: usize) -> bool {
         // (A spell chosen during the cast, which is now over: it runs at once from the queue.)
         let magic_waits = magic_after && done;
         if frames >= 3 && cast_landed || frames >= 2 && air_free || frames >= 10 && (falling || jump || cancel || magic_waits || matches!(state, 0 | 1) && (kh1_moving() || free || square || attack)) {
-            let falling = falling || air_free || form_end_air;
+            let falling = falling || air_free;
             JUMP_NOW.store(jump, Ordering::Relaxed);
             // The spell's combo goes on only with an Attack or a spell that cut it or was chosen
             // during it (else he is back in idle: the combo is over, the user).
@@ -1000,7 +996,7 @@ unsafe fn takeover(actor: usize) -> bool {
             // A spell chosen during the cast runs from the queue once KH2 has him (`resume_command`).
             MAGIC_AFTER.store(false, Ordering::Relaxed);
             // (Cut short by KH2: what's left of KH1's motion isn't KH1's own action.)
-            CUT_LEFT.store(cancel || cast_landed, Ordering::Relaxed);
+            CUT_LEFT.store(cancel, Ordering::Relaxed);
             // KH1's own motion of the move KH2 cut (an air spell's cast: its `+0x164` stayed the
             // cast's, 0x84 for Blizzard, then KH1 went on to its own landing 0x07 and its logic;
             // the user: "we can't have soras animation state and logic from that state act when we
@@ -1039,7 +1035,7 @@ unsafe fn takeover(actor: usize) -> bool {
                 let set: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(base + SET_STATE_RVA);
                 set(actor, 0);
             }
-            if cancel || cast_landed {
+            if cancel {
                 // KH1's motion request (`0x14029D7F0` queues it: `+0x178` pending, `+0x17C` the
                 // motion), the last one asked this frame: its idle.
                 let setm: unsafe extern "system" fn(usize, u32, f32) -> usize = std::mem::transmute(base + SET_MOTION_RVA);
@@ -1054,17 +1050,7 @@ unsafe fn takeover(actor: usize) -> bool {
                 }
                 AFTER_CUT_LOG.store(12, Ordering::Relaxed);
             }
-            if cast_landed {
-                // He was just put on the floor: KH1's height above it (`+0x3D4`) is its last
-                // frame's (~40) until its next step, which KH2's first step read as in the air (the
-                // user: KH2's jump pose on touching down).
-                wr(actor + 0x3D4, 0.0f32);
-            }
-            // (Not for an air cast's touchdown: he was just put on the floor, and KH1's height
-            // above it, `+0x3D4`, is its last frame's until its next step: KH2 started him in the
-            // air, the user: "kh2 animation is being set as soras initial high jump animation and
-            // not his kh2 landing animation".)
-            if rd::<f32>(actor + 0x3D4) > STEP_DOWN && !cast_landed {
+            if rd::<f32>(actor + 0x3D4) > STEP_DOWN {
                 AIR_START.store(true, Ordering::Relaxed);
             }
             ROLL_NOW.store(square, Ordering::Relaxed);

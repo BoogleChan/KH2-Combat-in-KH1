@@ -256,6 +256,19 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
         cmd_log(format!("command {kind:#x} ({full:08x}) waits: KH1's spell is still being cast"));
         return;
     }
+    // Valor Form: none of KH1's specials (Sonic Blade, Strike Raid, ...: the user, "dont let
+    // sora use triangle moves (sonic blade, strike raid etc) in valor form"). Every command of
+    // Sora's own that KH1 runs as a move (`0x1402A1470`) other than Attack, magic (refused in
+    // Valor by the menu, `spell_not_yet`), an item, and KH1's two air-allowed types.
+    if actor == sora && super::form::in_valor() && !matches!(kind, 0 | 1 | 2 | ITEM_COMMAND_TYPE | 99 | 0x47) && !NOT_SORAS.contains(&kind) {
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 30 {
+            log(&format!("command {kind:#x} ({full:08x}) refused: not in Valor Form"));
+        }
+        let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
+        sound(4);
+        return;
+    }
     let ours = actor == sora && super::settings::get().commands && takeover::ON.load(Ordering::Relaxed);
     let air = takeover::kh2_airborne();
     if ours && !matches!(kind, 0 | 1 | 2 | 99 | 0x47) && (air || rd::<i32>(actor + 0x70) == 2) {

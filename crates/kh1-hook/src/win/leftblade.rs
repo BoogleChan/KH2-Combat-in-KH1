@@ -179,6 +179,7 @@ static TRAIL_WINDOWS: std::sync::OnceLock<Windows> = std::sync::OnceLock::new();
 struct Trail {
     effect: usize,
     fading: bool,
+    logged: u32,
 }
 /// Our trails, and whether the left weapon's trail window was open last step.
 static TRAILS: Mutex<(Vec<Trail>, bool)> = Mutex::new((Vec::new(), false));
@@ -541,9 +542,6 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
     if let Ok(mut g) = LEFT.try_lock() {
         *g = Some((out, super::takeover::GAME_FRAME.load(Ordering::Relaxed)));
     }
-    if TRAIL_HOOKED.load(Ordering::Relaxed) {
-        unsafe { fill_owner(kh1, to_world, &out) };
-    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -655,29 +653,44 @@ fn load_trail_windows() {
     }
 }
 
-/// `pose`: our trail owner, a copy of Sora's actor and model instance whose world matrices are
-/// his with the left hand's weapon bones (game thread).
-unsafe fn fill_owner(kh1: &[Mat4], to_world: &Mat4, left: &[Mat4; WEAPON_BONES]) {
+/// Each KH2 step: our trail owner, a copy of Sora's actor and model instance whose world
+/// matrices are his as KH1 last drew him (the ones its own trail reads, his right one), each
+/// moved by the turn from his right grip to the left one as drawn (`LEFT`, the same frame): the
+/// left Keyblade's bones exactly, and whichever bone its trail reads beside them (the grip's
+/// parent, his hand) where it sits for the left. (s220 made them from our pose's matrices at
+/// draw time: the user saw the trail well off the blade.)
+unsafe fn fill_owner() -> bool {
     static N: AtomicU32 = AtomicU32::new(0);
     let base = BASE.load(Ordering::Relaxed);
     let sora = super::takeover::sora_actor();
     let inst = super::pose::SORA_INSTANCE.load(Ordering::Relaxed);
-    if kh1.len() < SORA_BONES || !readable(sora, ACTOR_SIZE) || !readable(inst, INSTANCE_SIZE) {
-        return;
+    if !readable(sora, ACTOR_SIZE) || !readable(inst, INSTANCE_SIZE) {
+        return false;
+    }
+    let world = super::pose::ptr(rd::<u32>(inst + INST_WORLD));
+    if !readable(world, SORA_BONES * 0x40) {
+        return false;
+    }
+    let frame = super::takeover::GAME_FRAME.load(Ordering::Relaxed);
+    let Some(left) = LEFT.try_lock().ok().and_then(|g| g.as_ref().filter(|(_, at)| frame.saturating_sub(*at) <= 2).map(|(m, _)| *m)) else { return false };
+    let mat = |i: usize| Mat4::from_cols_array(&rd::<[f32; 16]>(world + i * 0x40));
+    let to_left = left[0] * mat(GRIP).inverse();
+    if !to_left.is_finite() {
+        return false;
     }
     let mut fake = FAKE.load(Ordering::Relaxed);
     if fake == 0 {
         fake = super::sys::VirtualAlloc(std::ptr::null_mut(), FAKE_SIZE, 0x3000, 0x04) as usize;
         if fake == 0 {
             log_n(&N, 3, || "trail: no memory for its owner".into());
-            return;
+            return false;
         }
         let to_handle: unsafe extern "system" fn(usize) -> u32 = std::mem::transmute(base + TO_HANDLE_RVA);
         let (ih, mh) = (to_handle(fake + FAKE_INSTANCE), to_handle(fake + FAKE_MATS));
         if super::pose::ptr(ih) != fake + FAKE_INSTANCE || super::pose::ptr(mh) != fake + FAKE_MATS {
             log_n(&N, 3, || format!("trail: handles of its owner don't resolve ({ih:#x} {mh:#x}): no trail"));
             TRAIL_HOOKED.store(false, Ordering::Relaxed);
-            return;
+            return false;
         }
         FAKE_INSTANCE_H.store(ih, Ordering::Relaxed);
         FAKE_MATS_H.store(mh, Ordering::Relaxed);
@@ -688,15 +701,8 @@ unsafe fn fill_owner(kh1: &[Mat4], to_world: &Mat4, left: &[Mat4; WEAPON_BONES])
     std::ptr::copy_nonoverlapping(inst as *const u8, (fake + FAKE_INSTANCE) as *mut u8, INSTANCE_SIZE);
     std::ptr::write_unaligned((fake + ACTOR_INSTANCE) as *mut u32, FAKE_INSTANCE_H.load(Ordering::Relaxed));
     std::ptr::write_unaligned((fake + FAKE_INSTANCE + INST_WORLD) as *mut u32, FAKE_MATS_H.load(Ordering::Relaxed));
-    // Every bone moved by the turn from his right grip to the left one (the weapon bones are
-    // then the left hand's exactly: `note_pose` makes them so), so a trail read from a parent
-    // (the grip's is his right hand) is the left Keyblade's too.
-    let to_left = left[0] * (*to_world * kh1[GRIP]).inverse();
-    if !to_left.is_finite() {
-        return;
-    }
-    for (i, m) in kh1.iter().enumerate().take(SORA_BONES) {
-        let m = if (GRIP..GRIP + WEAPON_BONES).contains(&i) { left[i - GRIP] } else { to_left * *to_world * *m };
+    for i in 0..SORA_BONES {
+        let m = if (GRIP..GRIP + WEAPON_BONES).contains(&i) { left[i - GRIP] } else { to_left * mat(i) };
         std::ptr::write_unaligned((fake + FAKE_MATS + i * 0x40) as *mut [f32; 16], m.to_cols_array());
     }
     // Its trail flag (`+0x1CC` 0x800000, which KH1 keeps set while a trail is wanted) follows the
@@ -705,6 +711,28 @@ unsafe fn fill_owner(kh1: &[Mat4], to_world: &Mat4, left: &[Mat4; WEAPON_BONES])
     let flags = if LEFT_OPEN.load(Ordering::Relaxed) { flags | TRAIL_FLAG } else { flags & !TRAIL_FLAG };
     std::ptr::write_unaligned((fake + ACTOR_TRAIL_FLAGS) as *mut u32, flags);
     FAKE_FILLED.store(true, Ordering::Relaxed);
+    // (For the log: how far the left grip is from the right, and from his own position.)
+    static M: AtomicU32 = AtomicU32::new(0);
+    log_n(&M, 4, || {
+        let p = rd::<[f32; 3]>(sora + 0x10);
+        format!(
+            "trail owner filled: right grip at {:.0?}, left grip at {:.0?}, his position {:.0?}",
+            mat(GRIP).w_axis.truncate(),
+            left[0].w_axis.truncate(),
+            p
+        )
+    });
+    true
+}
+
+/// A live trail's numbers for the log: its follow block (`+0x30` of its follower task is KH1's;
+/// here the effect's own position, `*effect` → its point) against the left grip.
+unsafe fn trail_report(effect: usize) -> String {
+    let pos = super::pose::ptr(rd::<u32>(effect));
+    let at = if readable(pos, 12) { format!("{:.0?}", rd::<[f32; 3]>(pos)) } else { "?".into() };
+    let grip = LEFT.try_lock().ok().and_then(|g| g.as_ref().map(|(m, _)| m[0].w_axis.truncate())).map_or("?".into(), |v| format!("{v:.0?}"));
+    let tip = LEFT.try_lock().ok().and_then(|g| g.as_ref().map(|(m, _)| m[WEAPON_BONES - 1].w_axis.truncate())).map_or("?".into(), |v| format!("{v:.0?}"));
+    format!("effect at {at}, left grip {grip}, left last bone {tip}, state {:#x}", rd::<u32>(effect + FX_STATE))
 }
 
 /// Whether the left weapon's trail is on at this frame of this motion.
@@ -738,8 +766,16 @@ unsafe fn trail_step(valor: bool, motion: u16, frame: u32, either: bool) {
     let Ok(mut g) = TRAILS.try_lock() else { return };
     let (trails, was_open) = &mut *g;
     let open = valor && left_window(motion, frame, either);
+    if valor {
+        fill_owner();
+    }
     // Those that ended, or aren't ours any more, are forgotten; out of Valor, ended.
+    static R: AtomicU32 = AtomicU32::new(0);
     trails.retain_mut(|t| {
+        if t.logged < 6 && R.fetch_add(1, Ordering::Relaxed) < 60 {
+            t.logged += 1;
+            log(&format!("left Keyblade: trail {:#x} step {}: {}", t.effect, t.logged, trail_report(t.effect)));
+        }
         if !trail_alive(t.effect, fake) {
             log_n(&N, 12, || format!("trail {:#x} ended", t.effect));
             return false;
@@ -810,7 +846,7 @@ unsafe fn trail_step(valor: bool, motion: u16, frame: u32, either: bool) {
     }
     // (KH1 clears this bit on its own trail too, `0x1402BFD70`.)
     std::ptr::write_unaligned((effect + FX_STATE) as *mut u32, rd::<u32>(effect + FX_STATE) & !0x20);
-    trails.push(Trail { effect, fading: false });
+    trails.push(Trail { effect, fading: false, logged: 0 });
     log_n(&N, 12, || format!("trail {effect:#x} made at motion {motion} frame {frame} (id {id:#x}, {whose} look)"));
 }
 
