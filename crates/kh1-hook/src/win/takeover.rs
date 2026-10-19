@@ -134,6 +134,8 @@ static FLY_PRESS: AtomicBool = AtomicBool::new(false);
 static FLY_PRESS_GROUND: AtomicBool = AtomicBool::new(false);
 /// KH1's own move ended with him in the air: KH2 starts falling.
 static AIR_START: AtomicBool = AtomicBool::new(false);
+/// KH2 steps after a cut of a KH1 move still to log KH1's motion fields for.
+static AFTER_CUT_LOG: AtomicU32 = AtomicU32::new(0);
 /// KH1's glide (state 0x15, `0x1402B0BA0`): never while KH2 has him.
 const KH1_GLIDE_STATE: i32 = 0x15;
 /// Flying when KH2 took him: back into flight after the combo at any height (down to
@@ -1004,15 +1006,9 @@ unsafe fn takeover(actor: usize) -> bool {
             // the user: "we can't have soras animation state and logic from that state act when we
             // try to set the kh2 landing animation"): KH1 is set to its idle motion at once
             // (`0x14029D7F0 (actor, 0, 0)`, its own motion request; no action flag).
-            if cancel || cast_landed {
-                let setm: unsafe extern "system" fn(usize, u32, f32) -> usize = std::mem::transmute(base + SET_MOTION_RVA);
-                let before = rd::<u32>(actor + 0x164);
-                setm(actor, 0, 0.0);
-                static N: AtomicU32 = AtomicU32::new(0);
-                if N.fetch_add(1, Ordering::Relaxed) < 20 {
-                    log(&format!("KH1's motion {before:#x} of the cut move set to its idle"));
-                }
-            }
+            // (Set below, after KH1's state change: leaving its air state queues its own landing,
+            // 0x07, which took the place of the idle asked before it; the user, s220: "nothing has
+            // changed".)
             if cast_landed {
                 // KH1's cast action ends here (it would at the end of its own landing): its
                 // "action running" flag off, so its can-act test lets KH2's input through.
@@ -1042,6 +1038,27 @@ unsafe fn takeover(actor: usize) -> bool {
             if state != 0 {
                 let set: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(base + SET_STATE_RVA);
                 set(actor, 0);
+            }
+            if cancel || cast_landed {
+                // KH1's motion request (`0x14029D7F0` queues it: `+0x178` pending, `+0x17C` the
+                // motion), the last one asked this frame: its idle.
+                let setm: unsafe extern "system" fn(usize, u32, f32) -> usize = std::mem::transmute(base + SET_MOTION_RVA);
+                let before = (rd::<u32>(actor + 0x164), rd::<u32>(actor + 0x178), rd::<u32>(actor + 0x17C));
+                setm(actor, 0, 0.0);
+                static N: AtomicU32 = AtomicU32::new(0);
+                if N.fetch_add(1, Ordering::Relaxed) < 20 {
+                    log(&format!(
+                        "KH1's motion {:#x} of the cut move set to its idle (queued before: {} {:#x}; KH1 state {})",
+                        before.0, before.1, before.2, rd::<i32>(actor + 0x70)
+                    ));
+                }
+                AFTER_CUT_LOG.store(12, Ordering::Relaxed);
+            }
+            if cast_landed {
+                // He was just put on the floor: KH1's height above it (`+0x3D4`) is its last
+                // frame's (~40) until its next step, which KH2's first step read as in the air (the
+                // user: KH2's jump pose on touching down).
+                wr(actor + 0x3D4, 0.0f32);
             }
             // (Not for an air cast's touchdown: he was just put on the floor, and KH1's height
             // above it, `+0x3D4`, is its last frame's until its next step: KH2 started him in the
@@ -1331,6 +1348,23 @@ unsafe fn takeover(actor: usize) -> bool {
     let p = rd::<[f32; 3]>(actor + 0x10);
     let pos = [p[0], -p[1], p[2]];
     let above = rd::<f32>(actor + 0x3D4);
+    // KH1's own motion on KH2's first steps after a cut of a KH1 move (what KH1 still plays).
+    if AFTER_CUT_LOG.load(Ordering::Relaxed) > 0 {
+        let n = AFTER_CUT_LOG.fetch_sub(1, Ordering::Relaxed);
+        log(&format!(
+            "after the cut, step {}: KH1 motion {:#x} (+0x168 {:#x}, time {:.1}, queued {} {:#x}), KH1 state {}, {:.0} above the floor, KH2 {:?} grounded {}",
+            13 - n,
+            rd::<u32>(actor + 0x164),
+            rd::<u32>(actor + 0x168),
+            rd::<f32>(actor + 0x16C),
+            rd::<u32>(actor + 0x178),
+            rd::<u32>(actor + 0x17C),
+            rd::<i32>(actor + 0x70),
+            above,
+            d.character.state_name(),
+            d.grounded
+        ));
+    }
     let mut targets = d.strikes.look(actor);
     // KH1's lock-on (R1): while it holds a target (`0x142DB3F10` its state, the target's handle
     // at `0x142DB3F18`, which the command menu aims every command at), KH2 locks the same

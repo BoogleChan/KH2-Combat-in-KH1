@@ -2637,3 +2637,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - Sephiroth's pillar killed through Leaf Bracer / Second Chance: a lasting KH1 attack re-arms its
   hit on an interval and KH2's reaction kept Sora in it. No hit lands while he is knocked down,
   nor the same attacker's within 20 frames while he flinches (`hurt.rs`, `docs/kh1-rehit.md`).
+
+### 2026-10-19: Stage 221 (an air spell's touchdown, again)
+- The user: s219's landing fix changed nothing. KH1's set-motion (`0x14029D7F0`) only queues a
+  request (`+0x178` pending, `+0x17C` the motion); our state change to the ground one ran after
+  it, and leaving KH1's air state queues its own landing (0x07) in its place. Now the state is
+  set first and KH1's idle queued last. And the touchdown put him on the floor while KH1's height
+  above it (`+0x3D4`) still read its last frame's ~40, so KH2's first step started him in the
+  air (its jump pose): set to 0 there. KH1's motion fields are logged for 12 steps after a cut.
