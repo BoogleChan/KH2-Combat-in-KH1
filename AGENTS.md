@@ -2607,3 +2607,13 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   (`0x1402C0160`, hooked) on an owner of ours (a copy of Sora's actor and instance with the
   left-hand weapon bones), made as the left weapon's own trail windows open (read from
   `W_EX010_BTLF_L`), faded as they close. "left Keyblade: trail ..." in the log.
+
+### 2026-10-19: Stage 219 (KH1's motion after its air spell's touchdown)
+- The user's videos (a memory watch on Sora's `+0x164` motion request, `+0x168`, `+0x16C`
+  time): landing from a KH1 air spell, KH2 showed its jump pose, KH1's motion stayed the cast's
+  (0x84, air Blizzard) for 6 frames, then KH1's own landing (0x07) blended in. Two causes:
+  `AIR_START` read KH1's height above the floor (`+0x3D4`) right after we put him on it, still
+  its last frame's ~40, so KH2 started him in the air; and KH1's cast motion went on with its
+  own logic. Now the touchdown doesn't start KH2 in the air, and on every cut of a KH1 move
+  (`cancel`, the air cast's landing) KH1's motion is set to its idle (`0x14029D7F0 (actor, 0,
+  0)`), logged.

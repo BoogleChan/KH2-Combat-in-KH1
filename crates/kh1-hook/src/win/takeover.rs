@@ -35,6 +35,8 @@ use std::time::Instant;
 const PHYS_RVA: Rva = Rva(0x298230);
 const PHYS_PROLOGUE: [u8; 12] = [0x40, 0x55, 0x53, 0x41, 0x56, 0x48, 0x8B, 0xEC, 0x48, 0x83, 0xEC, 0x50];
 const MOVE_RVA: Rva = Rva(0x297710);
+/// KH1's motion request on an actor (`0x14029D7F0 (actor, request, blend)`).
+const SET_MOTION_RVA: Rva = Rva(0x29D7F0);
 const PARTY_RVA: Rva = Rva(0x2D37C80);
 const EVENT_RVA: Rva = Rva(0x298D3A0);
 const BATTLE_RVA: Rva = Rva(0x2867CD8);
@@ -997,6 +999,20 @@ unsafe fn takeover(actor: usize) -> bool {
             MAGIC_AFTER.store(false, Ordering::Relaxed);
             // (Cut short by KH2: what's left of KH1's motion isn't KH1's own action.)
             CUT_LEFT.store(cancel || cast_landed, Ordering::Relaxed);
+            // KH1's own motion of the move KH2 cut (an air spell's cast: its `+0x164` stayed the
+            // cast's, 0x84 for Blizzard, then KH1 went on to its own landing 0x07 and its logic;
+            // the user: "we can't have soras animation state and logic from that state act when we
+            // try to set the kh2 landing animation"): KH1 is set to its idle motion at once
+            // (`0x14029D7F0 (actor, 0, 0)`, its own motion request; no action flag).
+            if cancel || cast_landed {
+                let setm: unsafe extern "system" fn(usize, u32, f32) -> usize = std::mem::transmute(base + SET_MOTION_RVA);
+                let before = rd::<u32>(actor + 0x164);
+                setm(actor, 0, 0.0);
+                static N: AtomicU32 = AtomicU32::new(0);
+                if N.fetch_add(1, Ordering::Relaxed) < 20 {
+                    log(&format!("KH1's motion {before:#x} of the cut move set to its idle"));
+                }
+            }
             if cast_landed {
                 // KH1's cast action ends here (it would at the end of its own landing): its
                 // "action running" flag off, so its can-act test lets KH2's input through.
@@ -1027,7 +1043,11 @@ unsafe fn takeover(actor: usize) -> bool {
                 let set: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(base + SET_STATE_RVA);
                 set(actor, 0);
             }
-            if rd::<f32>(actor + 0x3D4) > STEP_DOWN {
+            // (Not for an air cast's touchdown: he was just put on the floor, and KH1's height
+            // above it, `+0x3D4`, is its last frame's until its next step: KH2 started him in the
+            // air, the user: "kh2 animation is being set as soras initial high jump animation and
+            // not his kh2 landing animation".)
+            if rd::<f32>(actor + 0x3D4) > STEP_DOWN && !cast_landed {
                 AIR_START.store(true, Ordering::Relaxed);
             }
             ROLL_NOW.store(square, Ordering::Relaxed);
