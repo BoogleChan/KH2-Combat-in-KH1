@@ -2712,3 +2712,10 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   pushed out of an actor's body it lifted him; now the mover may cut a rise short (a ceiling),
   never add to it (logged).
 - Explosion's last blast launches a third higher than KH2's default blow (up 32, sideways 60).
+
+### 2026-10-19: Stage 228 (air Reflect: a brief hover, then the fall)
+- The user, asked which of the falls tried was closest to KH1's air magic: "brief hover, then
+  fall" (s204's). Air casts hold him through their clips' no-gravity frames again, then fall
+  (`air_cast_fall`'s share of gravity, default full); a cast reaching the ground still goes into
+  KH2's landing. Tests `air_cast_hovers_then_falls`, `air_cast_sinks_at_its_share_of_gravity`
+  (after the hold), `falling_air_cast_lands_into_the_landing`.

@@ -739,11 +739,10 @@ pub unsafe fn before_step(actor: usize, ch: &mut Character) {
         note(format!("Reflect: KH2 couldn't start its cast motion ({m:?})"));
         return;
     };
-    // In the air it falls as KH1's air spells do (s206's sink at `air_cast_fall`'s share of
-    // gravity, into KH2's landing): s208's Final Form hold is taken out (the user: "revert the
-    // changes to reflects physics so that it falls like kh1 magic").
+    // In the air: his fall stops, he hangs through the cast's no-gravity frames, then falls
+    // (s204's; the user, s227: "brief hover, then fall"), into KH2's landing.
     if ch.airborne() {
-        note(format!("Reflect in the air: falls as KH1's air spells (motion {motion})"));
+        note(format!("Reflect in the air: a brief hover, then a fall (motion {motion})"));
     }
     // KH1's own payment of a spell's cost: 1 MP at every level.
     let pay: unsafe extern "system" fn(usize, i32) = std::mem::transmute(base + MP_PAY_RVA);
