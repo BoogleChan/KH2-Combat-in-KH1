@@ -2676,3 +2676,10 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 ### 2026-10-19: Stage 224 (forms' MP from hits taken out)
 - The user: KH1's own MP charge on a hit already reached Sora in forms ("at level 100 it was hard
   to notice"); s220's extra charge per melee hit in a form is taken out. The slower drain stays.
+
+### 2026-10-19: Stage 225 (air Reflect falls as KH1's spells again)
+- The user: "revert the changes to reflects physics so that it falls like kh1 magic ... make sure
+  it keeps the other changes to reflect just the physics changes". s208's Final Form hold
+  (`hold_air_cast`, 54 frames without gravity) is no longer asked for: the air cast sinks at
+  `air_cast_fall`'s share of gravity (s206) and lands into KH2's landing (s177). Everything else
+  of Reflect's (barrier, guard, counter, sounds, menu, combo) is as it was.
