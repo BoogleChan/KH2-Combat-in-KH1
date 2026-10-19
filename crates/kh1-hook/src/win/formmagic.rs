@@ -39,6 +39,14 @@ const KEY: u64 = 1 << 59;
 /// The farthest an unlocked shot looks for an enemy, and how far off his facing.
 const AUTO_RANGE: f32 = 1500.0;
 const AUTO_CONE: f32 = 0.5;
+/// The arrival's light on his body (Wisdom's elements 1..12, the form's colour, 11 / 12 looping)
+/// stays this many frames, whatever he does meanwhile (the user: "when sora first enters his drive
+/// form whatever animation he's in there should be an effect"; ours: KH2's end isn't traced).
+const ENVELOPE_FRAMES: u32 = 90;
+/// The form's own aura (Wisdom's element 100, looping: the sparkles at his feet and the trails
+/// round him), started by the arrival and kept until the revert (the user: "wisdom is missing
+/// its effects around sora"; s192 had ended it with the arrival).
+const AURA: u16 = 100;
 /// How long a chosen spell waits for KH2's move to allow a cast.
 const WAIT_S: f32 = 5.0;
 /// Cure's heal: the ATKP row's power / this, of KH1's max HP (ours).
@@ -122,8 +130,10 @@ struct Runtime {
     /// Script effect id → our drawn effect, and whether its end was passed on.
     fx: HashMap<u64, (Option<u32>, bool)>,
     queued: Vec<i16>,
-    /// The arrival's effects (their loops end with it).
+    /// The arrival's effects and frames since it (their loops end `ENVELOPE_FRAMES` later; the
+    /// form's aura, `AURA`, stays for the form).
     arrival: Vec<u64>,
+    arrival_age: u32,
     fresh: Option<Fresh>,
     casting: Option<u16>,
     fired: u32,
@@ -160,7 +170,7 @@ fn runtime(g: &mut Option<Runtime>) -> &mut Runtime {
                 }
             }
         });
-        Runtime { magic, wisd, files: HashMap::new(), package, fx: HashMap::new(), queued: Vec::new(), arrival: Vec::new(), fresh: None, casting: None, fired: 0, hits: 0 }
+        Runtime { magic, wisd, files: HashMap::new(), package, fx: HashMap::new(), queued: Vec::new(), arrival: Vec::new(), arrival_age: 0, fresh: None, casting: None, fired: 0, hits: 0 }
     })
 }
 
@@ -278,6 +288,18 @@ pub unsafe fn before_step(actor: usize, ch: &mut Character) {
     log(&format!("Wisdom {} (level {level}) cast: motion {motion}{}", SPELL_NAMES[spell as usize], if finisher { " (combo finisher)" } else { "" }));
 }
 
+/// The form's own cast motion for a KH1 spell it has no KH2 version of (Gravity, Stop, Aero):
+/// Thunder's (MAGC) at that level, ground or air (the user: "the same logic as thunder").
+pub fn kh1_spell_motion(level: u8, air: bool) -> u16 {
+    let m = magc(2, level.clamp(1, 3));
+    let pick = |v: i16| (v >= 0).then_some(v as u16);
+    if air {
+        m.and_then(|m| pick(m.air_motion)).unwrap_or(64)
+    } else {
+        m.and_then(|m| pick(m.ground_motion)).unwrap_or(62)
+    }
+}
+
 fn row(battle: &Battle, atk: u16, sub: u8, count: u8) -> Option<&Atkp> {
     battle.attack_for_level(atk, sub, count)
 }
@@ -360,7 +382,8 @@ pub unsafe fn shots_step(actor: usize, out: &Output, airborne: bool, strikes: &m
             match rt.magic.object_effect(file, SORA, n, &mut world) {
                 Ok(_) => {
                     if out.motion == super::form::ARRIVE_MOTION {
-                        rt.arrival.extend(rt.magic.effects.iter().filter(|e| e.id > before).map(|e| e.id));
+                        rt.arrival.extend(rt.magic.effects.iter().filter(|e| e.id > before && e.element.id != AURA).map(|e| e.id));
+                        rt.arrival_age = 0;
                     } else {
                         rt.fired += 1;
                         if rt.fired <= 30 {
@@ -374,11 +397,14 @@ pub unsafe fn shots_step(actor: usize, out: &Output, airborne: bool, strikes: &m
     } else {
         rt.queued.clear();
     }
-    if !rt.arrival.is_empty() && out.motion != super::form::ARRIVE_MOTION {
-        for e in rt.magic.effects.iter_mut().filter(|e| rt.arrival.contains(&e.id)) {
-            e.loop_end();
+    if !rt.arrival.is_empty() {
+        rt.arrival_age += 1;
+        if rt.arrival_age >= ENVELOPE_FRAMES {
+            for e in rt.magic.effects.iter_mut().filter(|e| rt.arrival.contains(&e.id)) {
+                e.loop_end();
+            }
+            rt.arrival.clear();
         }
-        rt.arrival.clear();
     }
     for e in rt.magic.update(&mut world).into_iter().chain(rt.magic.take_events()) {
         match e {

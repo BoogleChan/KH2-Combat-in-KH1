@@ -141,6 +141,8 @@ const AIR_STATE: i32 = 3;
 /// KH1's generic air state (what its physics step puts an airborne actor in): its object-top
 /// finder (`0x1402B3950`) looks below only in it.
 const FALL_STATE: i32 = 2;
+/// KH1's leap off a ladder or a pole (after its climb state 15; the user's s205 log).
+const LEAP_OFF_STATE: i32 = 16;
 /// KH1's object-top finder `0x1402B3950 (actor, move) -> object`: the standable object (box,
 /// barrel: collision shapes of type 2 / 3) whose top the move ends at or under, the move's
 /// height cut so it ends on the top. The map floor (`+0x320`) doesn't know objects.
@@ -394,6 +396,77 @@ pub fn command_started(shots: usize, spell: Option<u8>) {
     if let Ok(mut c) = COMMAND.lock() {
         *c = Some(Command { t: Instant::now(), low: shots, spell, logged: false });
     }
+    // In a Drive Form, a KH1 spell it has no KH2 version of runs on the form's cast motion's
+    // clock (the user: Gravity / Stop / Aero in Wisdom held KH1's whole animation; "the same logic
+    // as thunder, available input window, when the animation is supposed to end"), and slides
+    // as the form's casts do ("the same velocity in his casts as he does for the KH2 adjacent
+    // spells").
+    let fc = spell.filter(|_| super::form::in_form()).and_then(|sp| {
+        let air = AIR_CAST.try_lock().ok().is_some_and(|a| a.is_some());
+        let level = unsafe { super::reflect::kh1_spell_level(sp) };
+        let motion = super::formmagic::kh1_spell_motion(level, air);
+        let form = pose::kh2()?.wisdom.as_ref()?;
+        let clip = form.character.moveset.clips.get(&motion)?;
+        let react = clip.first(|k| matches!(k, character_core::WindowKind::AllowReactionCommand)).unwrap_or(clip.length);
+        let allow = clip.windows.iter().find(|w| matches!(w.kind, character_core::WindowKind::AllowMovement)).map(|w| (w.start, w.end.unwrap_or(clip.length)));
+        let p = &form.character.params;
+        log(&format!("Drive Form: KH1 spell {sp} on the form's cast motion {motion}'s clock: {} frames, input from {react}, moving {allow:?}", clip.length));
+        Some(FormCast { len: clip.length, react, allow, accel: p.acceleration, brake: p.brake, walk: p.walk_speed, run: p.run_speed, threshold: p.run_threshold, v: [0.0; 2], air })
+    });
+    if let Ok(mut f) = FORM_CAST.lock() {
+        *f = fc;
+    }
+}
+
+/// A KH1 spell cast in a Drive Form (`command_started`): the form's cast motion's length, its
+/// input window, its allow-movement range and the form's ground inertia, and the slide so far
+/// (per frame, KH2 x / z).
+#[derive(Clone, Copy, Debug)]
+struct FormCast {
+    len: u32,
+    react: u32,
+    allow: Option<(u32, u32)>,
+    accel: f32,
+    brake: f32,
+    walk: f32,
+    run: f32,
+    threshold: f32,
+    v: [f32; 2],
+    air: bool,
+}
+
+static FORM_CAST: Mutex<Option<FormCast>> = Mutex::new(None);
+
+/// One frame of a form's KH1 cast (`frames` into it): on the ground he moves as the form's cast
+/// motion lets him (the stick in its allow-movement range with the form's inertia, braking after),
+/// through KH1's mover. Returns the cast's (length, input window).
+unsafe fn form_cast_frame(actor: usize, frames: u32) -> Option<(u32, u32)> {
+    let mut g = FORM_CAST.try_lock().ok()?;
+    let fc = g.as_mut()?;
+    if !fc.air && rd::<i32>(actor + 0x70) == 0 {
+        let tilt = move_tilt();
+        let dir = glam::Vec2::new(rd::<f32>(actor + 0x20), rd::<f32>(actor + 0x28)).normalize_or_zero();
+        let moving = fc.allow.is_some_and(|(a, b)| (a..b).contains(&frames));
+        let speed = if tilt <= 0.0 { 0.0 } else if tilt >= fc.threshold { fc.run } else { fc.walk };
+        // (KH2's physics steps every other frame.)
+        if frames % 2 == 0 {
+            fc.v = if moving && fc.accel > 0.0 {
+                let t = dir * speed;
+                [t.x * (1.0 - fc.accel) + fc.v[0] * fc.accel, t.y * (1.0 - fc.accel) + fc.v[1] * fc.accel]
+            } else if moving {
+                (dir * speed).to_array()
+            } else {
+                let b = [fc.v[0] * fc.brake, fc.v[1] * fc.brake];
+                if b[0].hypot(b[1]) < 0.05 { [0.0; 2] } else { b }
+            };
+        }
+        if fc.v[0] != 0.0 || fc.v[1] != 0.0 {
+            let base = BASE.load(Ordering::Relaxed);
+            let mv: MoveFn = std::mem::transmute(base + MOVE_RVA);
+            mv(actor, &[fc.v[0], 0.0, fc.v[1], 0.0], 0);
+        }
+    }
+    Some((fc.len, fc.react))
 }
 
 /// The command handed to KH1: when, the fewest attack objects of Sora's seen since (a swing's
@@ -661,7 +734,10 @@ unsafe fn takeover(actor: usize) -> bool {
         // full animation"; KH2 takes him on landing, `cast_landed` below.)
         let done = can_act(actor) != 0 || cast_done && state == 2 && air_cast().is_none();
         let command = FROM_COMMAND.load(Ordering::Relaxed);
-        let fall_state = if command { matches!(state, 1 | 2) && done } else { state == 2 || state == 1 && done };
+        // (KH1's leap off a ladder or a pole, state 16, too: once it drops, KH2's fall, the user:
+        // "jumping off a ladder or a pole puts sora into his KH1 fall"; the log: state 15, 16,
+        // then 2 only some 35 above the floor.)
+        let fall_state = if command { matches!(state, 1 | 2) && done } else { matches!(state, 2 | LEAP_OFF_STATE) || state == 1 && done };
         let falling = fall_state && above > STEP_DOWN && vel.is_some_and(|(_, up)| up < 0.0);
         let jump = buttons() & jump_button() != 0 && kh1_move_done(base, actor);
         // A spell cast in the air (KH1's animation all through, the user's choice): when KH1
@@ -701,10 +777,14 @@ unsafe fn takeover(actor: usize) -> bool {
         let out = out_any && air_cast().is_none();
         let jump_pressed = buttons() & jump_button() != 0;
         let magic_after = MAGIC_AFTER.load(Ordering::Relaxed);
-        let attack_cut = attack && out_any && !last;
-        let magic_cut = magic_after && out_any && !last;
-        let other_cut = out && slot <= 1 && (jump_pressed || square);
-        let cancel = attack_cut || magic_cut || other_cut;
+        // In a Drive Form: the form's cast motion's clock (its input window, then its end).
+        let form_cast = if command && !done { form_cast_frame(actor, frames) } else { None };
+        let window = form_cast.map_or(true, |(_, react)| frames >= react);
+        let form_end = form_cast.is_some_and(|(len, _)| frames >= len) && out_any && air_cast().is_none();
+        let attack_cut = attack && out_any && !last && window;
+        let magic_cut = magic_after && out_any && !last && window;
+        let other_cut = out && (slot <= 1 || form_cast.is_some()) && window && (jump_pressed || square);
+        let cancel = attack_cut || magic_cut || other_cut || form_end;
         let attack = attack && (!command || done || attack_cut);
         let square = square && (!command || done || other_cut);
         let jump = jump || other_cut && jump_pressed;
@@ -716,7 +796,7 @@ unsafe fn takeover(actor: usize) -> bool {
             }
             log(&format!(
                 "spell's end frames cut by {} (combo slot {slot})",
-                if attack_cut { "an Attack: the combo's next swing" } else if magic_cut { "a spell: the combo's next step" } else if jump_pressed { "a jump" } else { "Square" }
+                if attack_cut { "an Attack: the combo's next swing" } else if magic_cut { "a spell: the combo's next step" } else if other_cut && jump_pressed { "a jump" } else if other_cut { "Square" } else { "the form's cast motion ending" }
             ));
         }
         // (A spell chosen during the cast, which is now over: it runs at once from the queue.)
@@ -921,6 +1001,7 @@ unsafe fn takeover(actor: usize) -> bool {
     // (Not out of a flight: there Square is flight's descend.)
     // Air casts (Reflect) fall as they play, as KH1's spells do (the user).
     d.character.air_magic_falls = true;
+    d.character.air_magic_gravity = super::settings::get().air_cast_fall;
     d.character.glide_button = if super::settings::get().glide_on_square && !FLEW.load(Ordering::Relaxed) { character_core::GlideButton::Action } else { character_core::GlideButton::Jump };
     if d.last_state.is_none() {
         // (Re)starting: face where KH1 had him facing.

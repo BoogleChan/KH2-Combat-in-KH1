@@ -39,12 +39,19 @@ const SUMMON_OUT_RVA: Rva = Rva(0x298D1A0);
 const RECORD_RVA: Rva = Rva(0x28D7D0);
 const SOUND_RVA: Rva = Rva(0x177F60);
 const DPAD_LEFT: u32 = 0x80;
+/// KH1's battle button state (`+4` held, `+8` pressed, `+0x10` / `+0x14` repeats) and the
+/// confirm button's logical bits (the button swap applied).
+const BUTTONS_RVA: Rva = Rva(0x298D4A0);
+const CONFIRM_MASK_RVA: Rva = Rva(0x546390);
 
 static BASE: AtomicUsize = AtomicUsize::new(0);
 /// The second page is up.
 static PAGE2: AtomicBool = AtomicBool::new(false);
 static ON: AtomicBool = AtomicBool::new(false);
 static NAMES: OnceLock<(usize, Vec<usize>, usize)> = OnceLock::new();
+/// A form or Revert was just chosen: confirm is KH1's again only once let go (the user: still
+/// holding it after a revert opened the Drive list again).
+static SWALLOW_CONFIRM: AtomicBool = AtomicBool::new(false);
 
 unsafe fn rd<T: Copy>(p: usize) -> T {
     std::ptr::read_unaligned(p as *const T)
@@ -90,6 +97,17 @@ pub unsafe fn pre_step() {
     let base = base();
     if !on() || base == 0 {
         return;
+    }
+    if SWALLOW_CONFIRM.load(Ordering::Relaxed) {
+        let confirm = rd::<u32>(base + CONFIRM_MASK_RVA);
+        let b = base + BUTTONS_RVA;
+        if confirm == 0 || rd::<u32>(b + 4) & confirm == 0 {
+            SWALLOW_CONFIRM.store(false, Ordering::Relaxed);
+        } else {
+            for off in [8usize, 0x10, 0x14] {
+                wr(b + off, rd::<u32>(b + off) & !confirm);
+            }
+        }
     }
     let pressed = base + PRESSED_RVA;
     if rd::<u32>(pressed) & DPAD_LEFT == 0 {
@@ -221,7 +239,10 @@ pub fn word(index: i32) -> Option<usize> {
 pub unsafe fn chosen(actor: usize, k: usize) {
     let name = FORMS.get(k).map_or("?", |f| f.2);
     match super::form::choose(actor) {
-        Ok(what) => log(&format!("Drive: {what} chosen")),
+        Ok(what) => {
+            SWALLOW_CONFIRM.store(true, Ordering::Relaxed);
+            log(&format!("Drive: {what} chosen"));
+        }
         Err(why) => {
             log(&format!("Drive: {name} refused ({why})"));
             let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base() + SOUND_RVA);

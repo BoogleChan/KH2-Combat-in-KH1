@@ -366,6 +366,18 @@ fn quick_run_ends_on_release_and_roll_chains_into_it() {
     assert!(w.pos[0] > tap + 50.0, "held {} vs tap {tap}", w.pos[0]);
 }
 
+/// KH2's Quick Run (an air slide) ends in the landing, not straight in idle (the user).
+#[test]
+fn quick_run_ends_in_the_landing() {
+    let mut ch = sora();
+    ch.abilities.dodge_roll = 0;
+    ch.moveset.clips.insert(motion::LAND, Clip::plain(motion::LAND, 20));
+    let mut w = World::new(ch);
+    let outs: Vec<_> = (0..60).map(|f| w.step(Pad { stick: [1.0, 0.0], action: f < 2, ..IDLE })).collect();
+    let qr = outs.iter().rposition(|o| o.state == StateName::QuickRun).expect("no Quick Run");
+    assert_eq!(outs[qr + 1].state, StateName::Land, "{:?}", outs.iter().map(|o| o.state).collect::<Vec<_>>());
+}
+
 #[test]
 fn holding_through_the_roll_turns_it_into_quick_run() {
     let mut w = World::new(sora());
@@ -487,13 +499,16 @@ fn sora_flinches_and_is_pushed_back_by_a_small_hit() {
     assert_eq!(outs[0].state, StateName::Hurt);
     assert_eq!(outs[0].motion, 10);
     assert!(w.pos[2] < -100.0 && w.pos[2] > -125.0, "{:?}", w.pos);
-    // Buttons work again from frame 8.
+    // From frame 8 a jump cuts the flinch; an Attack doesn't (the user: no attacking out of a
+    // damage reaction).
     let mut w2 = World::new({ let mut c = sora(); hurt_clips(&mut c); c });
     w2.step(IDLE);
     w2.ch.take_hit(&reaction::Hit { reaction: 3, knockback: (125, 0), dir: [0.0, -1.0], part: 0 });
     w2.run(8, IDLE);
     let o = w2.step(Pad { attack: true, ..IDLE });
-    assert_eq!(o.state, StateName::Attack);
+    assert_eq!(o.state, StateName::Hurt);
+    let o = w2.step(Pad { jump: true, ..IDLE });
+    assert_ne!(o.state, StateName::Hurt);
 }
 
 #[test]
@@ -575,9 +590,8 @@ fn horizontal_slash_is_part_of_the_air_combo() {
     assert!(slashes <= max - 1, "{slashes} Horizontal Slashes in a combo of {max}: {motions:?}");
 }
 
-/// An air cast (`air_magic_falls`, as Final Form's air Reflect) holds in its motion's
-/// no-gravity frames (the user, s204: Reflect in the air fell at once, "doesn't halt his gravity
-/// for a second ... like other magic moves do"), then falls, and ends on touching the ground in
+/// An air cast (`air_magic_falls`, as Final Form's air Reflect) falls as it plays (s206 reverts
+/// s204's hold, the user: "we do want it to fall like kh1"), and ends on touching the ground in
 /// KH2's landing, not standing in the rest of the cast (the user).
 #[test]
 fn falling_air_cast_lands_into_the_landing() {
@@ -593,11 +607,48 @@ fn falling_air_cast_lands_into_the_landing() {
     assert_eq!(w.ch.cast(CastMotions { ground: 71, finisher: Some(72), air: 73 }), Some(73));
     let y = w.pos[1];
     w.run(18, IDLE);
-    assert!((w.pos[1] - y).abs() < 1e-3, "fell during the cast's no-gravity frames: {} -> {}", y, w.pos[1]);
+    assert!(w.pos[1] < y, "held in the cast's no-gravity frames: {} -> {}", y, w.pos[1]);
     let outs = w.run(150, IDLE);
     let landed = outs.iter().position(|o| o.state == StateName::Land).expect("never landed");
     assert!(outs[..landed].iter().all(|o| o.motion == 73), "left the cast before landing");
     assert!(w.pos[1] <= 0.0);
+}
+
+/// An air cast with a share of gravity (KH1's slow sink, the user: "falls too fast"): the cast
+/// stops the fall, he sinks slower than a plain fall from the same height, and the fall after the
+/// cast goes on from the speed reached (no jump in speed).
+#[test]
+fn air_cast_sinks_at_its_share_of_gravity() {
+    let setup = |share: f32| {
+        let mut ch = sora();
+        let mut cast = Clip::plain(73, 40);
+        cast.windows.push(Window { start: 0, end: Some(38), kind: WindowKind::NoGravity });
+        ch.moveset.clips.insert(73, cast);
+        ch.air_magic_falls = true;
+        ch.air_magic_gravity = share;
+        let mut w = World::new(ch);
+        w.run(3, Pad { jump: true, ..IDLE });
+        w.run(30, IDLE);
+        w
+    };
+    let mut full = setup(1.0);
+    let mut slow = setup(0.3);
+    let h0 = slow.pos[1];
+    assert!((full.pos[1] - h0).abs() < 1e-3 && h0 > 50.0);
+    assert!(full.ch.cast(CastMotions { ground: 71, finisher: Some(72), air: 73 }).is_some());
+    assert!(slow.ch.cast(CastMotions { ground: 71, finisher: Some(72), air: 73 }).is_some());
+    let a = full.run(8, IDLE);
+    let b = slow.run(8, IDLE);
+    assert!(a.iter().all(|o| o.motion == 73) && b.iter().all(|o| o.motion == 73));
+    let (fell_full, fell_slow) = (h0 - full.pos[1], h0 - slow.pos[1]);
+    assert!(fell_slow > 0.0, "didn't sink");
+    assert!(fell_slow < fell_full * 0.5, "sank {fell_slow} against {fell_full}");
+    // Through the end of the cast into the fall: no sudden jump in fall speed.
+    let outs = slow.run(30, IDLE);
+    let steps: Vec<f32> = outs.iter().map(|o| -o.displacement[1]).collect();
+    for p in steps.windows(2) {
+        assert!(p[1] - p[0] < 6.0, "fall speed jumped: {steps:?}");
+    }
 }
 
 /// Gliding in place is KH2's hover (motion 208): a glide started with the stick neutral hovers

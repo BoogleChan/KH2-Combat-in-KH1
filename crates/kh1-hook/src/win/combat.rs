@@ -598,6 +598,8 @@ pub struct Strikes {
     held: HashMap<usize, u32>,
     /// (swing, shot) pairs already met (once a swing).
     met_shots: HashSet<(u64, usize)>,
+    /// (Reflect barrier, enemy attack) pairs already met (`barrier_meet`), by barrier key.
+    barrier_met: HashSet<(u64, usize)>,
     shots: Vec<Shot>,
 }
 
@@ -608,9 +610,13 @@ struct Shot {
     /// Its swept path (previous and current centre) and radius, KH2 y-up.
     shapes: Vec<Shape>,
     owner: usize,
+    /// Free-standing (a shot); else an enemy's own attack on its body (a melee swing), which
+    /// only a Reflect barrier meets (`barrier_meet`).
+    free: bool,
 }
 
-/// The enemies' shots near Sora that a swing may meet.
+/// The enemies' shots near Sora that a swing may meet (and their live melee attacks, for a
+/// Reflect barrier).
 unsafe fn shots(sora: usize) -> Vec<Shot> {
     let base = BASE.load(Ordering::Relaxed);
     let team = |a: usize| (rd::<u32>(a + 0x374) >> 5) & 3;
@@ -640,9 +646,7 @@ unsafe fn shots(sora: usize) -> Vec<Shot> {
         // ball among them): an enemy's melee swing that meets KH2's broad swings clashed and
         // clinked far more often than KH2 would (the user, twice). KH2's swing hits the body
         // instead.
-        if rd::<u32>(g + 0x30) & 0x400 == 0 {
-            continue;
-        }
+        let free = rd::<u32>(g + 0x30) & 0x400 != 0;
         let owner = pose::ptr(rd::<u32>(g + 0x34));
         if owner == sora || (owner > 0x10000 && team(owner) == ours) {
             continue;
@@ -692,7 +696,7 @@ unsafe fn shots(sora: usize) -> Vec<Shot> {
                 ));
             }
         }
-        out.push(Shot { obj: g, shapes, owner });
+        out.push(Shot { obj: g, shapes, owner, free });
     }
     out
 }
@@ -818,6 +822,9 @@ const GUARD_PRIORITY: i32 = 100;
 const CLANG_RVA: Rva = Rva(0x2AC4C0);
 /// KH1's attack-vs-attack meeting (`0x1402B2890 (entry, entry)`).
 const CLASH_RVA: Rva = Rva(0x2B2890);
+/// One side of KH1's clash (`0x1402B2A30 (attack p, attack q)`): p turned back (free-standing)
+/// or given a clash record on its owner (KH1's recoil, kinds 6 / 7), `docs/kh1-reflect.md`.
+const CLASH_HALF_RVA: Rva = Rva(0x2B2A30);
 /// KH1's attack pairing table (8 bytes, a bit per type that may meet).
 const PAIRS_RVA: Rva = Rva(0x5299B8);
 /// KH1's attack-vs-background ray (`0x1402B1870 (attack, from, to)`): spark, sound, and a
@@ -1228,7 +1235,7 @@ impl Strikes {
             }
             // An enemy's shot met: knocked back as KH1's swing would (the user: Wakka's ball).
             if let Some(rows) = self.rows {
-                for shot in &self.shots {
+                for shot in self.shots.iter().filter(|s| s.free) {
                     if self.met_shots.contains(&(h.swing, shot.obj)) {
                         continue;
                     }
@@ -1408,6 +1415,80 @@ impl Strikes {
         for r in self.records.values_mut() {
             r.forget(key);
         }
+    }
+
+    /// A Reflect barrier (`shapes`, KH2 y-up) against the enemies' attacks this frame (KH2's
+    /// reflect guard, the user: "reflect does not have a block hitbox so it can't send
+    /// projectiles or parry moves"): a shot it touches is turned back as a swing turns it (KH1's
+    /// clash, the shot's half: team swapped, Sora its owner); an enemy's melee attack it touches
+    /// gets KH1's clash record on its owner (the recoil its script plays), with KH1's spark.
+    /// Once per barrier (`key`) and attack. Returns the shots turned back (they never reach
+    /// Sora, so `reflect` counts them for its counter; melee hits still reach `hurt`).
+    pub unsafe fn barrier_meet(&mut self, sora: usize, key: u64, shapes: &[Shape]) -> u32 {
+        if !self.rows_tried {
+            self.rows_tried = true;
+            self.rows = sora_rows(sora);
+        }
+        let Some(rows) = self.rows else { return 0 };
+        if shapes.is_empty() {
+            return 0;
+        }
+        let base = BASE.load(Ordering::Relaxed);
+        let free_bit: unsafe extern "system" fn() -> u32 = std::mem::transmute(base + FREE_BIT_RVA);
+        let new_attack: unsafe extern "system" fn(usize, u32, usize) -> usize = std::mem::transmute(base + NEW_ATTACK_RVA);
+        let free: unsafe extern "system" fn(usize) = std::mem::transmute(base + FREE_ATTACK_RVA);
+        let half: unsafe extern "system" fn(usize, usize) -> u32 = std::mem::transmute(base + CLASH_HALF_RVA);
+        // (A new barrier forgets the last one's meetings.)
+        self.barrier_met.retain(|(k, _)| *k == key);
+        let mut turned = 0;
+        for shot in &self.shots {
+            if self.barrier_met.contains(&(key, shot.obj)) {
+                continue;
+            }
+            let Some((ai, ti)) = first_overlap(shapes, &shot.shapes) else { continue };
+            self.barrier_met.insert((key, shot.obj));
+            // KH1 leaves an attack that already clashed this pass alone (`+4`).
+            if rd::<u32>(shot.obj + 4) & 0x30 != 0 {
+                continue;
+            }
+            let obj = new_attack(sora, free_bit(), base + ATTACK_DATA_RVA + rows[0].data as usize);
+            if obj < 0x10000 {
+                continue;
+            }
+            // Where they meet: the shot's side of the barrier (KH1 world, y down).
+            let (b, t) = (shapes[ai].center, shot.shapes[ti].center);
+            let d = [t[0] - b[0], t[1] - b[1], t[2] - b[2]];
+            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-3);
+            let r = shapes[ai].radius.min(l);
+            let at = [b[0] + d[0] / l * r, -(b[1] + d[1] / l * r), b[2] + d[2] / l * r];
+            let c = [at[0], at[1], at[2], 1.0f32];
+            wr(obj + 0x10, c);
+            wr(obj + 0x40, c);
+            wr(obj + 0x70, c);
+            wr(obj + 0xC, shapes[ai].radius);
+            // The barrier is a guard: it stands whatever meets it.
+            wr(obj + 0x68, GUARD_PRIORITY);
+            let res = half(shot.obj, obj);
+            free(obj);
+            let back = shot.free && rd::<u32>(shot.obj) & 0x0100_0000 != 0;
+            if res > 0 || back {
+                clang(at);
+            }
+            if back {
+                turned += 1;
+            }
+            static MET: AtomicU32 = AtomicU32::new(0);
+            if MET.fetch_add(1, Ordering::Relaxed) < 200 {
+                log(&format!(
+                    "Reflect barrier met enemy {} {:#x} of {:#x}: result {res:#x}, {}",
+                    if shot.free { "shot" } else { "attack" },
+                    shot.obj,
+                    shot.owner,
+                    if back { "turned back" } else if shot.free { "not turned back" } else if res > 0 { "clash record on its owner (recoil)" } else { "no clash" }
+                ));
+            }
+        }
+        turned
     }
 }
 

@@ -1028,6 +1028,7 @@ pub unsafe fn after_step(actor: usize, out: &Output, airborne: bool, strikes: &m
     // The spell's attacks: the barrier (kind 3) stands; the rest hit KH1's enemies.
     let mut attacks = Vec::new();
     let mut barrier = false;
+    let mut guards = Vec::new();
     for a in rt.magic.attacks.iter().filter(|a| !a.freed && a.owner == SORA) {
         let shapes = a.shapes();
         let Some(first) = row(battle, a.atk, a.sub, 0) else { continue };
@@ -1036,6 +1037,7 @@ pub unsafe fn after_step(actor: usize, out: &Output, airborne: bool, strikes: &m
         }
         if first.kind == 3 {
             barrier = true;
+            guards.push((a.id | SPELL_KEY, shapes));
             continue;
         }
         attacks.push(combat::SpellAttack { kh1_data: None, key: a.id | SPELL_KEY, group: if first.combo_group != 0 { first.combo_group as i64 } else { a.group }, atk: a.atk, sub: a.sub, shapes });
@@ -1049,6 +1051,17 @@ pub unsafe fn after_step(actor: usize, out: &Output, airborne: bool, strikes: &m
             let level = rt.levels.get(a.spell).copied().unwrap_or(1);
             super::kh2sound::spell_element(level, BURST_ELEMENT);
             note(format!("Reflect burst (ATKP {}): element {BURST_ELEMENT}'s sound", a.atk));
+        }
+    }
+    // The barrier as a guard: enemy shots it touches turned back (counted, they never reach
+    // Sora), melee attacks repelled (KH1's recoil on the attacker; their hit is `hurt`'s). Not
+    // while it waits for the combo (hidden, stopping nothing).
+    if !combo_wait {
+        for (key, shapes) in &guards {
+            let turned = strikes.barrier_meet(actor, *key, shapes);
+            for _ in 0..turned {
+                blocked(0);
+            }
         }
     }
     if !attacks.is_empty() {

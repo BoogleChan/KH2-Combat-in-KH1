@@ -2403,3 +2403,38 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   landing).
 - Wisdom Form: none but the landing's ("we generally want footsteps disabled for sora in this
   form (with the exception of landing) as he is gliding"; its walk and run have no trigger 2).
+
+### 2026-10-19: Stage 206 (air Reflect's sink, Reflect's guard, Drive revert, Quick Run landing, Wisdom's aura and KH1 spells)
+- "revert our changes to base reflect and wisdom reflect, we do want it to fall like kh1" (then,
+  asked: it "falls too fast"): s204's hold in the cast's no-gravity frames is undone; the cast
+  stops his fall and he sinks at a share of gravity while it plays (`Character::
+  air_magic_gravity`, ini `air_cast_fall`, default 0.3, estimated), the fall after it going on
+  from the speed reached. Tests `air_cast_sinks_at_its_share_of_gravity`,
+  `falling_air_cast_lands_into_the_landing` (now falls).
+- "Reflect does not have a block hitbox": the barrier (ATKP 573's shapes) meets the enemies' attack
+  objects each frame (`Strikes::barrier_meet`): a free-standing shot it touches gets KH1's clash,
+  its half (`0x1402B2A30 (shot, barrier)`, Steam `0x2B4BC0`, the barrier a priority-100 guard
+  object): turned back, counted for the counter; an enemy's melee attack gets KH1's clash record
+  on its owner (kind 6 / 7, its script's recoil), with KH1's spark. Not tested in game.
+- Drive: a form or Revert chosen, KH1's confirm bits are taken out of its battle button state
+  until confirm is let go (the user: holding it after a revert opened the Drive list again). The
+  revert starts Sora's package elements 15..27 (the Drive motion's 1..13 mirrored; 15 has sound
+  115 as 1 has the change's 114; Data, KH2's call not traced), under `form::REVERT_FX`.
+- Wisdom's arrival: its light on his body (elements 1..12, the form's colour) stays 90 frames
+  whatever he does; its element 100 (the looping aura: sparkles at his feet, trails round him)
+  stays for the whole form (s192 had ended both with the 6-frame arrival motion).
+- Quick Run ends in KH2's Land (an air slide; the user: no landing after it); landing in a Quick
+  Run, an Aerial Dodge or a jump's take-off goes to Land too. Test `quick_run_ends_in_the_landing`.
+- KH1-only spells in a form (Gravity, Stop, Aero; drawn with the form's motions since s202): on the
+  form's Thunder cast motion's clock (MAGC at the spell's level): Attack / a spell / jump / Square
+  cut it only from that motion's reaction window, and it ends at that motion's length once the
+  spell is out; on the ground he moves as the form's casts do (the stick in the motion's
+  allow-movement range with the form's inertia, braking after), through KH1's mover
+  (`takeover::FormCast`).
+- KH1's leap off a ladder or a pole (state 16) is handed to KH2's fall once it drops (the user: KH1's
+  fall; the log: states 15, 16, then 2 only ~35 above the floor).
+- "sora is able to cancel his taking damage animations into attack": a damage reaction takes no
+  Attack before it ends (a jump or the action button still cut it from its reaction window).
+  Test `sora_flinches_and_is_pushed_back_by_a_small_hit` updated.
+- Open: Wisdom's elemental hits still showed the physical spark in s205 (s202's spell data: its
+  `+0x28` hit effect is looked up in Sora's effect group, `docs/kh1-attack-elements.md` §4).

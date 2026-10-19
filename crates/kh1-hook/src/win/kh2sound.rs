@@ -104,8 +104,9 @@ pub fn start() {
             events.extend(super::reflect::cast_voices(kh2).into_iter().map(character_core::EventKind::Voice));
             spell = super::reflect::element_sounds();
         }
-        // Wisdom Form's (its shots', `form`).
+        // Wisdom Form's (its shots', `form`), and the revert's (Sora's elements, `form::revert_fx`).
         spell.extend(super::form::element_sounds(kh2));
+        events.extend(super::form::REVERT_ELEMENTS.map(character_core::EventKind::Effect));
         match load(&events, &spell) {
             Ok(map) => {
                 log(&format!(

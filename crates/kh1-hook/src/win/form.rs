@@ -35,6 +35,13 @@ pub const ARRIVE_MOTION: u16 = 53;
 /// take 45 frames ... from start to end"): with the form's arrival (motion 53, 3 frames at 30
 /// fps: 6), 45 in all.
 const DRIVE_FRAMES: u32 = 39;
+/// The revert's light and sound: Sora's package elements 15..27 (no motion of his starts them;
+/// they mirror the Drive motion's 1..13, element 15 with sound 115 as element 1 has the change's
+/// 114; Data, KH2's own call for them not traced), started on him as he comes back (the user:
+/// "missing its sfx sound and effect when reverting back from a drive form").
+pub const REVERT_ELEMENTS: [i16; 13] = [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27];
+/// The motion id the revert's effects and sound are started under (no motion of Sora's has it).
+pub const REVERT_FX: u16 = u16::MAX - 2;
 /// MP to change (KH1's payment takes hundredths of a bar from 100 up).
 pub const COST_MP: i32 = 3;
 const COST: i32 = COST_MP * 100;
@@ -207,6 +214,7 @@ fn swap(ch: &mut Character, anim: &mut RigAnim, data: &Character, rig: &Arc<kh2_
     c.abilities = abilities;
     c.glide_button = glide;
     c.air_magic_falls = ch.air_magic_falls;
+    c.air_magic_gravity = ch.air_magic_gravity;
     c.set_facing(facing);
     c.set_lock(lock);
     *ch = c;
@@ -289,6 +297,10 @@ unsafe fn revert(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     swap(ch, anim, &kh2.character, &kh2.rig, f.sora);
     super::formmagic::end_all();
     super::kh2fx::owner_gone();
+    for el in REVERT_ELEMENTS {
+        super::kh2fx::event(REVERT_FX, EventKind::Effect(el));
+        super::kh2sound::event(REVERT_FX, EventKind::Effect(el));
+    }
     log(&format!("Revert ({why}){}", if ch.airborne() { ", falling" } else { "" }));
 }
 
@@ -353,7 +365,7 @@ unsafe fn yellow(sora: usize) -> u16 {
 /// Sora's Drive motion: its effects and sounds play whatever the ini's lists (`kh2fx`,
 /// `kh2sound`).
 pub fn own_motion(motion: u16) -> bool {
-    motion == DRIVE_MOTION
+    matches!(motion, DRIVE_MOTION | REVERT_FX)
 }
 
 /// Whether this frame's event goes to the form (its shots) instead of Sora's effects.
