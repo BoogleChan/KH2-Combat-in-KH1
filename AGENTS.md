@@ -2490,3 +2490,26 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   effects (`0x142EFBE90`, as KH1's own spell handlers `0x14039FD60` and others set it), not the
   Keyblade's (the row's attack takes the weapon's, `0x1402B10E0`), so the hit effect
   (`0x1402B2190`) is the spells' (the user: "still the physical keyblade effect"). Unconfirmed.
+
+### 2026-10-19: Stage 209 (the user's s208 report)
+- Walking: under KH1's own dead zone (a slow walk, KH1 still shows idle) its move vector is
+  empty, and the fallback was his stale `+0x20`. Now the raw stick turned through KH1's camera
+  as its think does (`0x14028A650`: rotate by minus `0x14299C504`, mirror x, rotate by
+  `0x14299CB94`; not in camera modes 2 / 0xB), its 8 sign conventions scored against KH1's own
+  vector on frames that have one (`takeover::stick_through_camera`). KH1 refreshes its vector only
+  while Sora can act, so during its casts it was stale too (Wisdom's KH1-spell slide kept the old
+  direction): it counts only then.
+- Wisdom's KH1 spells: the form's cast clock ends the air ones too (KH2's fall from there).
+- KH1's menu takes nothing while Sora can't act (`0x1402912F0`, its `0x1402A0D30` test), which is
+  why Attack only came out at Fire's end and the Drive list was greyed: in KH1's cut window
+  (`kh1_cut_window`) `combat::run_entry` takes Attack (`ATTACK_AFTER`) and a Drive form
+  (`drive::chosen`, the menu chain back to its top) itself; `form::usable` counts the window.
+- Items: command type 3 (the log's "command 0x3 (02000803)"), not the list they came from (the
+  item end frame never fired).
+- KH2's first frames after KH1's move don't carry KH1's push speed (`+0x120`, KH1's own walk /
+  run speed then, 708/s in the log): the teleport forward at the next attack. Those frames are
+  logged.
+- Undone: s208's spell hit effect object. `0x142EFBE90` is the current object of KH1's script
+  command dispatcher (`0x1403975E0` stores it before each handler), not a lasting magic effect
+  set; KH1's element hit sparks belong to its spell objects, which exist only during its own
+  casts. Still open.

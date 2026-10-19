@@ -42,18 +42,72 @@ const BATTLE_RVA: Rva = Rva(0x2867CD8);
 /// think (`0x1402A4090` from `0x14028A650`).
 const MOVE_VEC_RVA: Rva = Rva(0x2D5F630);
 
+/// KH1's camera angles its think turns the stick by (`0x14028A650`, its usual camera modes):
+/// the stick rotated by minus the first (wrapped), x mirrored, then rotated by the second.
+const CAM_A_RVA: Rva = Rva(0x299C504);
+const CAM_B_RVA: Rva = Rva(0x299CB94);
+/// KH1's camera mode (2 and 0xB turn the stick otherwise).
+const CAM_MODE_RVA: Rva = Rva(0x299C508);
+
+/// Which of the 8 sign conventions (stick x, stick y, rotation) matches KH1's own move vector,
+/// learned on frames that have one: a running score per convention (lower is better).
+static STICK_FIT: Mutex<[f32; 8]> = Mutex::new([0.0; 8]);
+
+fn stick_through_camera(c: usize, lx: f32, ly: f32, a: f32, b: f32) -> glam::Vec2 {
+    let u = if c & 1 != 0 { -1.0 } else { 1.0 };
+    let t = if c & 2 != 0 { -1.0 } else { 1.0 };
+    let s = if c & 4 != 0 { -1.0 } else { 1.0 };
+    let rot = |v: glam::Vec2, ang: f32| {
+        let (sn, cs) = (ang * s).sin_cos();
+        glam::Vec2::new(v.x * cs + v.y * sn, -v.x * sn + v.y * cs)
+    };
+    let v = rot(glam::Vec2::new(u * lx, t * ly), -a);
+    let v = glam::Vec2::new(-v.x, v.y);
+    rot(v, b).normalize_or_zero()
+}
+
 /// The stick's direction in the world: KH1's move vector (`MOVE_VEC_RVA`), not his `+0x20`,
-/// which KH1's own walk only turns toward the stick slowly (the user: walking, and in Wisdom's
-/// casts of KH1's spells, he kept the direction he started in). `+0x20` only if that is empty.
+/// which KH1's own walk only turns toward the stick slowly. Under KH1's own dead zone (a slow
+/// walk, which KH1 still shows as idle) its vector is empty: then the raw stick turned through
+/// KH1's camera the same way (`stick_through_camera`, its signs checked against KH1's vector
+/// whenever there is one; the user: walking, he kept the direction he started in). `+0x20`
+/// only if neither.
 unsafe fn stick_dir(actor: usize, tilt: f32) -> glam::Vec2 {
     let base = BASE.load(Ordering::Relaxed);
     let mv = rd::<[f32; 4]>(base + MOVE_VEC_RVA);
     let old = glam::Vec2::new(rd::<f32>(actor + 0x20), rd::<f32>(actor + 0x28)).normalize_or_zero();
-    let dir = if mv[0].is_finite() && mv[2].is_finite() && mv[0].hypot(mv[2]) > 1e-3 { glam::Vec2::new(mv[0], mv[2]).normalize_or_zero() } else { old };
-    if tilt > 0.0 && old != glam::Vec2::ZERO && dir.dot(old) < 0.94 {
+    // (KH1's think refreshes it only while he can act, `0x1402A4090`: during one of its casts it
+    // keeps the direction from before, the user: in Wisdom's casts of KH1 spells he slid the way
+    // he had been going.)
+    let can_act: unsafe extern "system" fn(usize) -> i32 = std::mem::transmute(base + CAN_ACT_RVA);
+    let have_mv = mv[0].is_finite() && mv[2].is_finite() && mv[0].hypot(mv[2]) > 1e-3 && can_act(actor) != 0;
+    let st = RAW_STICKS.load(Ordering::Relaxed).to_le_bytes();
+    let (lx, ly) = ((st[2] as f32 - 128.0) / 127.0, (st[3] as f32 - 128.0) / 127.0);
+    let (ca, cb, mode) = (rd::<f32>(base + CAM_A_RVA), rd::<f32>(base + CAM_B_RVA), rd::<u32>(base + CAM_MODE_RVA));
+    let usual = !matches!(mode, 2 | 0xB) && ca.is_finite() && cb.is_finite();
+    let raw_on = lx.hypot(ly) > 0.2;
+    let mvdir = glam::Vec2::new(mv[0], mv[2]).normalize_or_zero();
+    let mut best = 0;
+    if let Ok(mut fit) = STICK_FIT.lock() {
+        if have_mv && usual && lx.hypot(ly) > 0.5 {
+            for c in 0..8 {
+                let e = 1.0 - stick_through_camera(c, lx, ly, ca, cb).dot(mvdir);
+                fit[c] = fit[c] * 0.95 + e;
+            }
+        }
+        best = (0..8).min_by(|&i, &j| fit[i].total_cmp(&fit[j])).unwrap_or(0);
+    }
+    let dir = if have_mv {
+        mvdir
+    } else if usual && raw_on {
+        stick_through_camera(best, lx, ly, ca, cb)
+    } else {
+        old
+    };
+    if tilt > 0.0 && !have_mv {
         static N: AtomicU32 = AtomicU32::new(0);
         if N.fetch_add(1, Ordering::Relaxed) < 12 {
-            log(&format!("stick direction {dir:?} (KH1's move vector) vs his +0x20 {old:?}, tilt {tilt:.2}"));
+            log(&format!("stick direction {dir:?} from the raw stick ({lx:.2}, {ly:.2}) through KH1's camera (convention {best}, mode {mode}); his +0x20 {old:?}, tilt {tilt:.2}"));
         }
     }
     dir
@@ -147,6 +201,8 @@ static HANDOFF_SEEN_MS: AtomicU64 = AtomicU64::new(0);
 static FRAME_KIND: AtomicU8 = AtomicU8::new(0);
 static HANDOFF_FRAME: AtomicBool = AtomicBool::new(false);
 static FRESH: AtomicBool = AtomicBool::new(false);
+/// KH2's first frames after KH1's own move: KH1's push speed isn't carried.
+static NO_CARRY: AtomicU32 = AtomicU32::new(0);
 static HANDOFF_FRAMES: AtomicU32 = AtomicU32::new(0);
 /// Frames of KH2's fall left in which KH1's grabs aren't tried: after KH1 lets go of him in the
 /// air (off a ledge, a ladder, a pole), as KH1 skips them for 15 frames after jumping off
@@ -890,7 +946,10 @@ unsafe fn takeover(actor: usize) -> bool {
         // frames more waiting for Aero's or Gravity's "shot".)
         // (`frames` counts from 0 on the cast's first frame: frame 50 of a 50-frame motion is
         // KH2's.)
-        let form_end = form_cast.is_some_and(|(len, _)| frames + 1 >= len) && command && !done && air_cast().is_none();
+        let form_clock = form_cast.is_some_and(|(len, _)| frames + 1 >= len) && command && !done;
+        // (In the air too: KH2's fall from there.)
+        let form_end_air = form_clock && air_cast().is_some() && above > STEP_DOWN;
+        let form_end = form_clock && air_cast().is_none() || form_end_air;
         if form_end && !out_any {
             log("form's cast motion ended before a shot of the KH1 spell was counted: KH2 takes him anyway");
         }
@@ -915,7 +974,7 @@ unsafe fn takeover(actor: usize) -> bool {
         // (A spell chosen during the cast, which is now over: it runs at once from the queue.)
         let magic_waits = magic_after && done;
         if frames >= 3 && cast_landed || frames >= 2 && air_free || frames >= 10 && (falling || jump || cancel || magic_waits || matches!(state, 0 | 1) && (kh1_moving() || free || square || attack)) {
-            let falling = falling || air_free;
+            let falling = falling || air_free || form_end_air;
             JUMP_NOW.store(jump, Ordering::Relaxed);
             // The spell's combo goes on only with an Attack or a spell that cut it or was chosen
             // during it (else he is back in idle: the combo is over, the user).
@@ -1071,6 +1130,11 @@ unsafe fn takeover(actor: usize) -> bool {
         Driver { character, anim, held: (true, true), grounded: true, last_state: None, logged: 0, strikes: combat::Strikes::default(), fought: None, last_out: None, growth: menu::Growth::new(), swing: None, swing_frame: 0, on_top: None, drive: Default::default() }
     });
     if FRESH.swap(false, Ordering::Relaxed) {
+        // (KH1's own move left its speed in his push (`+0x120`): not carried into KH2's first
+        // frames, the user: "it teleports sora forward at the start of the attack" after a KH1
+        // spell.)
+        NO_CARRY.store(3, Ordering::Relaxed);
+        wr(actor + 0x120, [0.0f32; 3]);
         // Back from a command of KH1's (a spell, an item): that was fighting, so KH2's battle
         // stance with the Keyblade, as after an attack (the user: after a standing spell he went
         // back to the plain idle).
@@ -1317,7 +1381,15 @@ unsafe fn takeover(actor: usize) -> bool {
     // platform's motion (`+0x200`, while `+0x160 & 4`) and the frame's push (`+0x120`,
     // cleared once used), and the touched-objects mask (`+0x90`) cleared before the move.
     let settings = super::settings::get();
-    let carry = if settings.carry { carried(actor, &mut d.logged) } else { [0.0; 3] };
+    let fresh_frame = NO_CARRY.load(Ordering::Relaxed) > 0;
+    if fresh_frame {
+        NO_CARRY.fetch_sub(1, Ordering::Relaxed);
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 30 {
+            log(&format!("KH2's first frames after KH1's move: {:?} (motion {}, frame {}), move {:.1?}, KH1's push {:.1?} not carried", out.state, out.motion, out.clip_frame, out.displacement, rd::<[f32; 3]>(actor + 0x120)));
+        }
+    }
+    let carry = if settings.carry && !fresh_frame { carried(actor, &mut d.logged) } else { [0.0; 3] };
     if settings.carry {
         wr(actor + 0x90, 0u64);
     }

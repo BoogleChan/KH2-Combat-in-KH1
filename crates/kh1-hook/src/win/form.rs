@@ -122,7 +122,7 @@ pub unsafe fn usable(sora: usize) -> bool {
     if in_form() {
         return true;
     }
-    pose::kh2().is_some_and(|k| k.wisdom.is_some()) && super::takeover::kh2_has() && sora > 0x10000 && mp(sora) > COST_MP
+    pose::kh2().is_some_and(|k| k.wisdom.is_some()) && (super::takeover::kh2_has() || super::takeover::kh1_cut_window()) && sora > 0x10000 && mp(sora) > COST_MP
 }
 
 /// Chosen from the Drive list (`drive::chosen`). Returns why not, if refused.
