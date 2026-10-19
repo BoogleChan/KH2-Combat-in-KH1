@@ -58,10 +58,6 @@ const LEVEL: u32 = 1;
 /// units.
 /// (3: the user, "lets also have drive forms drain a little slower"; it was 2.)
 const DRAIN_FRAMES: u32 = 3;
-/// KH1's MP charge `(actor, units)` (`0x1402A2950`): adds to the yellow part (stats `+0xBE`, up
-/// to the maximum × 30), as a hit of Sora's does in KH1's hit code (`0x1402BD180`: the attack
-/// data's `+0x2C`, 3 or 6 units for his swings).
-const MP_CHARGE_RVA: super::addr::Rva = super::addr::Rva(0x2A2950);
 /// Upper Slash's ability (KH2's id): Sora's Square launch, given to Valor (`pose::port_moves`).
 const UPPER_SLASH: u16 = 95;
 /// KH2's magic sub offset in Wisdom Form.
@@ -471,28 +467,6 @@ pub unsafe fn after_step(d: &mut Drive, actor: usize, battle: bool) {
     if !super::reflect::has_mp(actor, 1) && !d.revert {
         d.revert = true;
         log(&format!("{}: out of MP", f.kind.name()));
-    }
-}
-
-/// A melee hit of Sora's landed (`combat`) with KH1's attack data at `data` (its offset in the
-/// table). In a form, MP for it (the user: "every melee hit contributes to gaining MP, much like
-/// how sora's base attacks work. Currently in Valor and Wisdom, attacks that land dont contribute
-/// to MP gain"): KH1 charges the hit's few units into the yellow part, which the form's drain
-/// takes at once, so a hit is as much of the top bar as KH1's charge is of one point (a bar
-/// breaks into its number × 30 units): its units × the bars he has.
-pub unsafe fn melee_hit(sora: usize, data: usize) {
-    if !IN_FORM.load(Ordering::Relaxed) || data < 0x10000 {
-        return;
-    }
-    let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
-    let units = rd::<u32>(data + 0x2C).clamp(1, 10) as i32;
-    let gain = units * mp(sora).max(1);
-    let before = (mp(sora), yellow(sora));
-    let charge: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(base + MP_CHARGE_RVA);
-    charge(sora, gain);
-    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    if N.fetch_add(1, Ordering::Relaxed) < 30 {
-        log(&format!("form: a melee hit charged MP: {units} units x {} bars = {gain} (MP {} yellow {} -> MP {} yellow {})", before.0.max(1), before.0, before.1, mp(sora), yellow(sora)));
     }
 }
 

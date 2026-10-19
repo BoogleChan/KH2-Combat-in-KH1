@@ -2672,3 +2672,7 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   stats shown were his with that Keyblade alone (the user: Strength "capped at 70"): his own
   weapon's Strength and MP are added then (`equipmenu::valor_preview`, `valorstats::add`).
 - Wall clinks on again by default (`wall_clink`, the user); both inis set on.
+
+### 2026-10-19: Stage 224 (forms' MP from hits taken out)
+- The user: KH1's own MP charge on a hit already reached Sora in forms ("at level 100 it was hard
+  to notice"); s220's extra charge per melee hit in a form is taken out. The slower drain stays.
