@@ -153,6 +153,11 @@ pub fn attack_seen() -> Option<u32> {
 /// a queue of its own let magic come out however long after, apart from the combo string).
 static PENDING_COMMAND: std::sync::Mutex<Option<([u8; 16], std::time::Instant, u32)>> = std::sync::Mutex::new(None);
 
+/// A spell is waiting in the queue for KH2's move to take it (`takeover`).
+pub fn spell_waiting() -> bool {
+    PENDING_COMMAND.try_lock().map_or(false, |p| p.is_some_and(|(r, _, _)| r[0] == 2))
+}
+
 /// Before KH1's control step: a waiting command goes back into KH1's command record once KH2's
 /// move allows it (KH1's control step then runs it as if just chosen).
 pub unsafe fn resume_command() {
@@ -1280,7 +1285,7 @@ impl Strikes {
                 HOLD.store(blow && !throws && !b.fixed, Ordering::Relaxed);
                 MAGIC.store(row.stat_source == 1, Ordering::Relaxed);
                 // (The move this hit belongs to: its action, `swing`'s high bits.)
-                let dealt = land(sora, &b.parts[ti], &swept[ai], kh1, row.power);
+                let dealt = land(sora, &b.parts[ti], &swept[ai], kh1, row.power, false);
                 MAGIC.store(false, Ordering::Relaxed);
                 HOLD.store(false, Ordering::Relaxed);
                 // (Again once the contact is done, in case its direction came after the record.)
@@ -1329,6 +1334,9 @@ impl Strikes {
 /// A spell's attack this frame (`reflect`): its hit-record key and group, ATKP id and sub, and
 /// its shapes (KH2 y-up, swept as the game sweeps spell attacks).
 pub struct SpellAttack {
+    /// KH1 attack data to land it with (an offset into `ATTACK_DATA_RVA`'s table: a KH1 spell's
+    /// own entry, for its element), instead of Sora's swing rows (`kh1_spell_data`).
+    pub kh1_data: Option<i32>,
     pub key: u64,
     pub group: i64,
     pub atk: u16,
@@ -1379,9 +1387,14 @@ impl Strikes {
                 }
                 let k1 = if r.knockback_1 == i16::MAX { 0 } else { r.knockback_1 };
                 let knock = character_core::reaction::category(r.enemy_reaction) == 4 || k1 >= 100;
-                let kh1 = rows[knock as usize];
-                MAGIC.store(r.stat_source == 1, Ordering::Relaxed);
-                let dealt = land(sora, &b.parts[ti], &a.shapes[ai], kh1, r.power);
+                // A spell's own KH1 data (its element, its max-MP source, its reactions), else
+                // the swing's (physical).
+                let (kh1, spell_data) = match a.kh1_data {
+                    Some(off) => (Row { data: off, fx: [0; 3], ..rows[knock as usize] }, true),
+                    None => (rows[knock as usize], false),
+                };
+                MAGIC.store(!spell_data && r.stat_source == 1, Ordering::Relaxed);
+                let dealt = land(sora, &b.parts[ti], &a.shapes[ai], kh1, r.power, spell_data);
                 MAGIC.store(false, Ordering::Relaxed);
                 note(format!("spell ATKP {} (power {}, reaction {}) hit actor {:#x} part {ti}: landed with KH1 row motion {} -> {dealt:?}", a.atk, r.power, r.enemy_reaction, b.actor, kh1.motion));
                 out.push((a.key, a.atk, b.actor, dealt));
@@ -1409,11 +1422,30 @@ static CARRY: std::sync::LazyLock<std::sync::Mutex<HashMap<usize, i64>>> = std::
 
 /// Lands one hit with KH1's contact code, through a KH1 attack object made from Sora's row.
 /// Returns the damage written to the hit record, if one was made.
-unsafe fn land(sora: usize, part: &Part, at: &Shape, row: Row, power: u16) -> Option<u32> {
-    land_hit(sora, part, at, row, power)
+unsafe fn land(sora: usize, part: &Part, at: &Shape, row: Row, power: u16, spell: bool) -> Option<u32> {
+    land_hit(sora, part, at, row, power, spell)
 }
 
-unsafe fn land_hit(sora: usize, part: &Part, at: &Shape, row: Row, power: u16) -> Option<u32> {
+/// KH1's own attack data for a spell (Fire 0, Blizzard 1, Thunder 2, Cure 3, Gravity 4, Stop 5,
+/// Aero 6) at a level (1..3): the offset in the attack data table (`docs/kh1-attack-elements.md`:
+/// the per-level entries from 0x5F28, 0x70 apart, in spell order). Its element (Fire 2, Blizzard
+/// 3, Thunder 4) is what makes the hit fire, ice or thunder against the target's resistances
+/// (the user: Wisdom's Fire, Blizzard and Thunder did physical damage). Logged once.
+pub fn kh1_spell_data(spell: u8, level: u8) -> Option<i32> {
+    if spell > 6 || !(1..=3).contains(&level) {
+        return None;
+    }
+    let off = 0x5F28 + (spell as i32 * 3 + level as i32 - 1) * 0x70;
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    if !LOGGED.swap(true, Ordering::Relaxed) {
+        let base = BASE.load(Ordering::Relaxed);
+        let words = |o: i32| (0..12).map(|k| format!("{:x}", unsafe { rd::<u32>(base + ATTACK_DATA_RVA + o as usize + k * 4) })).collect::<Vec<_>>().join(" ");
+        log(&format!("KH1 spell attack data (level 1): Fire [{}] | Blizzard [{}] | Thunder [{}]", words(0x5F28), words(0x6078), words(0x61C8)));
+    }
+    Some(off)
+}
+
+unsafe fn land_hit(sora: usize, part: &Part, at: &Shape, row: Row, power: u16, spell: bool) -> Option<u32> {
     let base = BASE.load(Ordering::Relaxed);
     let free_bit: unsafe extern "system" fn() -> u32 = std::mem::transmute(base + FREE_BIT_RVA);
     let new_attack: unsafe extern "system" fn(usize, u32, usize) -> usize = std::mem::transmute(base + NEW_ATTACK_RVA);
@@ -1424,9 +1456,12 @@ unsafe fn land_hit(sora: usize, part: &Part, at: &Shape, row: Row, power: u16) -
     if obj < 0x10000 {
         return None;
     }
-    // As the Attack command's row does (`0x1402A17F0`): its effect and sound bytes.
-    wr(obj, rd::<u32>(obj) | 0x400000);
-    wr(obj + 0xA8, row.fx);
+    // As the Attack command's row does (`0x1402A17F0`): its effect and sound bytes (not for a
+    // spell's data: no swing sound).
+    if !spell {
+        wr(obj, rd::<u32>(obj) | 0x400000);
+        wr(obj + 0xA8, row.fx);
+    }
     // KH2's hit records decide what may hit again, not KH1's hit-once bit.
     let saved = rd::<u32>(obj + 0x54);
     wr(obj + 0x54, 0u32);

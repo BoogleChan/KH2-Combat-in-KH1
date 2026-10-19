@@ -575,6 +575,11 @@ pub unsafe fn install() {
 /// (With the KH2 move it was chosen in: it waits only while that plays, `takeover::same_move`.)
 static WAITING: Mutex<Option<(Instant, u32)>> = Mutex::new(None);
 
+/// A Reflect is waiting for its window (`takeover`: an Attack then doesn't take it first).
+pub fn waiting() -> bool {
+    WAITING.try_lock().map_or(false, |w| w.is_some())
+}
+
 unsafe fn refuse(base: usize, why: &str) {
     let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
     sound(4);
@@ -1033,7 +1038,7 @@ pub unsafe fn after_step(actor: usize, out: &Output, airborne: bool, strikes: &m
             barrier = true;
             continue;
         }
-        attacks.push(combat::SpellAttack { key: a.id | SPELL_KEY, group: if first.combo_group != 0 { first.combo_group as i64 } else { a.group }, atk: a.atk, sub: a.sub, shapes });
+        attacks.push(combat::SpellAttack { kh1_data: None, key: a.id | SPELL_KEY, group: if first.combo_group != 0 { first.combo_group as i64 } else { a.group }, atk: a.atk, sub: a.sub, shapes });
     }
     // The burst (the counter's last attack, ATKP 667 / 668 / 669 by tier): its shatter sound,
     // element 7's (173 at every level; the script starts no element for the burst, and element

@@ -125,6 +125,13 @@ fn sora() -> Character {
 
 const IDLE: Pad = Pad { stick: [0.0, 0.0], jump: false, attack: false, action: false, lock: false };
 
+impl Pad {
+    /// Attack held only on even frames (a mash), when `attack` is set.
+    fn with_attack(self, f: usize) -> Pad {
+        Pad { attack: self.attack && f % 2 == 0, ..self }
+    }
+}
+
 #[test]
 fn runs_at_run_speed_and_turns_at_capped_rate() {
     let mut w = World::new(sora());
@@ -1155,4 +1162,85 @@ fn combo_keeps_its_direction() {
     };
     assert!(turn_swing(true) > 0.5, "turned toward the reticle");
     assert!(turn_swing(false).abs() < 1e-3, "no reticle, no turn");
+}
+
+/// A finisher motion with no finisher range (Wisdom Form's finisher shot, its finishing casts):
+/// with Finishing Plus the next finisher, a swing or a spell, follows from its last frames (the
+/// user: Wisdom's finishing magic couldn't take the second finisher slot).
+#[test]
+fn second_finisher_after_a_finisher_without_a_window() {
+    let run = |spell: bool| {
+        let mut ch = sora();
+        ch.abilities.finishing_plus = 1;
+        ch.moveset.clips.insert(71, Clip::plain(71, 30));
+        let mut w = World::new(ch);
+        let mut seq = Vec::new();
+        let mut cast = false;
+        for f in 0..160 {
+            let finishers = seq.iter().filter(|m| **m == 110).count();
+            let o = w.step(Pad { attack: !spell || finishers == 0, ..IDLE }.with_attack(f));
+            if !o.hitboxes.is_empty() {
+                w.ch.register_hit();
+            }
+            if (o.state == StateName::Attack || o.state == StateName::Magic) && o.clip_frame == 0 {
+                seq.push(o.motion);
+            }
+            if spell && finishers == 1 && !cast && w.ch.can_cast() && w.ch.in_finisher() {
+                cast = w.ch.cast(CastMotions { ground: 71, finisher: Some(71), air: 73 }).is_some();
+            }
+        }
+        (seq, cast)
+    };
+    let (seq, _) = run(false);
+    assert!(seq.windows(2).any(|p| p == [110, 110]), "two finisher swings in a row: {seq:?}");
+    let (seq, cast) = run(true);
+    assert!(cast && seq.windows(2).any(|p| p == [110, 71]), "a spell as the second finisher: {seq:?}");
+}
+
+/// Wisdom Form in the air and landing (the user: "sora should not loose his velcoity when doing
+/// an air move in wisdom form", "his landing animation should preserve his momentum"): a moving
+/// air attack keeps the speed he jumped with, and with ground inertia the landing slides on.
+#[test]
+fn wisdom_keeps_momentum_in_the_air_and_on_landing() {
+    let mut ch = sora();
+    ch.params.acceleration = 0.85;
+    ch.params.brake = 0.97;
+    let mut clip = attack_clip(120, 30, (5, 10), 4, 15);
+    clip.windows.push(Window { start: 0, end: None, kind: WindowKind::AllowMovement });
+    ch.moveset.clips.insert(120, clip);
+    let mut w = World::new(ch);
+    // Run, jump forward.
+    w.run(40, Pad { stick: [0.0, 1.0], ..IDLE });
+    w.step(Pad { jump: true, stick: [0.0, 1.0], ..IDLE });
+    w.run(8, Pad { jump: true, stick: [0.0, 1.0], ..IDLE });
+    // Air attack with the stick let go: still travelling forward.
+    let z0 = w.pos[2];
+    let o = w.step(Pad { attack: true, ..IDLE });
+    assert_eq!(o.state, StateName::Attack);
+    w.run(4, IDLE);
+    assert!(w.pos[2] - z0 > 15.0, "kept going {}", w.pos[2] - z0);
+    // Down and landing: he slides on through the landing.
+    let mut landed_at = None;
+    for _ in 0..120 {
+        let o = w.step(IDLE);
+        if o.state == StateName::Land && landed_at.is_none() {
+            landed_at = Some(w.pos[2]);
+        }
+    }
+    if let Some(z) = landed_at {
+        assert!(w.pos[2] - z > 5.0, "slid {}", w.pos[2] - z);
+    }
+}
+
+/// Guard turns him toward the target with a reticle on it (the lock).
+#[test]
+fn guard_faces_the_locked_target() {
+    let mut ch = sora();
+    ch.moveset.clips.insert(motion::GUARD, Clip::plain(motion::GUARD, 30));
+    let mut w = World::new(ch);
+    w.targets.push(TargetInfo { id: 5, pos: [-150.0, 0.0, 0.0], radius: 30.0, height: 100.0 });
+    w.ch.set_lock(Some(5));
+    let o = w.step(Pad { action: true, ..IDLE });
+    assert_eq!(o.state, StateName::Guard);
+    assert!((o.facing + std::f32::consts::FRAC_PI_2).abs() < 1e-3, "{}", o.facing);
 }

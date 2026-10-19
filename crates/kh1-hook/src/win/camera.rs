@@ -47,6 +47,8 @@ const CONFIG_PTR_RVA: Rva = Rva(0x2E1FE70);
 const TURN_SIGN_RVA: Rva = Rva(0x507AAC);
 const FLAGS_RVA: Rva = Rva(0x2867CD8);
 const FLAGS2_RVA: Rva = Rva(0x2867CDC);
+/// Nonzero while an event runs.
+const EVENT_RVA: Rva = Rva(0x298D3A0);
 /// Mode 1's end: KH1's movement-state cameras (vines, ledges...).
 const STATE_CAMERAS_RVA: Rva = Rva(0x1E3320);
 /// Mode switch `(mode, blend)`.
@@ -104,10 +106,101 @@ pub unsafe fn install() {
     log(&format!("KH2 camera: KH1's follow and lock-on cameras swapped for KH2's ({})", if KH2.load(Ordering::Relaxed) { "on" } else { "KH1's chosen" }));
 }
 
+/// KH1 handed its camera back to Sora after holding or releasing it: its mode switch
+/// `0x1401E3200` entered the follow (or lock-on) camera from mode 0. That is how every one of
+/// KH1's camera resets ends (`docs/kh1-camera.md` 9.1): event script ops 394 / 395 (hold, then
+/// "back behind Sora" `0x1401E2B50`, around examining, doors and scripted moments), an event or
+/// an action's camera given back (`0x1401E2500`, after a Limit's or a summon's cinematic camera),
+/// a room load (`0x1401E2F00`). KH1's follow camera then re-places itself at KH1's own default
+/// (its distance and pitch, the yaw it kept or the yaw the cinematic camera ended on); the user:
+/// with KH2's camera chosen, KH2's default position instead. The next KH2 camera started
+/// (`run`) is placed at KH2's default: behind Sora at KH2's distance and height.
+static RESET_PENDING: AtomicBool = AtomicBool::new(false);
+/// Since such a reset, KH2's camera keeps the follow camera through the rest of the scene that
+/// asked for it (`kh1_scene` lingering: the event's last frames, Sora still held after an
+/// examine), until KH1 takes its camera elsewhere again, moves Sora itself, or the scene ends.
+static RESET_OWNS: AtomicBool = AtomicBool::new(false);
+/// When KH1 last ran its follow / lock-on camera mode (ours or its own), and Sora's feet then.
+static LAST_CALL_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_FEET: Mutex<[f32; 3]> = Mutex::new([0.0; 3]);
+/// KH1's internal eye / target as KH2's camera last wrote them (bit patterns): untouched since,
+/// nothing else moved the camera (a hitch, not KH1's camera), and KH2's carries on.
+static LAST_PAIR: Mutex<[u32; 6]> = Mutex::new([0; 6]);
+
+unsafe fn internal_pair(base: usize) -> [u32; 6] {
+    let (e, t) = (rd::<[u32; 3]>(base + EYE_RVA), rd::<[u32; 3]>(base + TARGET_RVA));
+    [e[0], e[1], e[2], t[0], t[1], t[2]]
+}
+
+/// Each call of KH1's follow / lock-on mode, before deciding whose camera runs: notes KH1's
+/// camera resets (see `RESET_PENDING`).
+unsafe fn note_entry(lock: bool) {
+    let base = BASE.load(Ordering::Relaxed);
+    let now = now_ms();
+    // KH1 had its camera elsewhere in between (an event camera, an area camera, a menu):
+    // whatever owned the follow camera since the last reset is over.
+    if now.saturating_sub(LAST_CALL_MS.swap(now, Ordering::Relaxed)) > 150 {
+        RESET_OWNS.store(false, Ordering::Relaxed);
+    }
+    // Sora walked by KH1 in a scene (an event moving him): KH1's camera again.
+    let sora = rd::<u64>(base + SORA_RVA) as usize;
+    if sora > 0x10000 {
+        let feet = rd::<[f32; 3]>(sora + 0x10);
+        if let Ok(mut last) = LAST_FEET.lock() {
+            let moved = ((feet[0] - last[0]).powi(2) + (feet[2] - last[2]).powi(2)).sqrt();
+            if moved > 3.0 && RESET_OWNS.load(Ordering::Relaxed) && super::takeover::kh1_scene() {
+                RESET_OWNS.store(false, Ordering::Relaxed);
+                static N: AtomicU32 = AtomicU32::new(0);
+                if N.fetch_add(1, Ordering::Relaxed) < 20 {
+                    log("KH2 camera: KH1 moves Sora in the scene after its camera reset: KH1's camera");
+                }
+            }
+            *last = feet;
+        }
+    }
+    // Mode-entry flags: bit 1 = the mode's first frame, bit 0 = entered from mode 0 (KH1's hold
+    // or release), bit 2 = a snapshot restored (the view from before a save / load, not a reset).
+    let flags = rd::<u32>(base + ENTRY_FLAGS_RVA);
+    if flags & 2 == 0 || !KH2.load(Ordering::Relaxed) {
+        return;
+    }
+    if flags & 7 != 3 {
+        // Back from another of KH1's cameras (area camera, first person, climbing...): no reset.
+        RESET_PENDING.store(false, Ordering::Relaxed);
+        return;
+    }
+    RESET_PENDING.store(true, Ordering::Relaxed);
+    let scene = super::takeover::kh1_scene();
+    let owns = scene && !super::takeover::kh1_moves_sora();
+    RESET_OWNS.store(owns, Ordering::Relaxed);
+    static N: AtomicU32 = AtomicU32::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) < 60 {
+        let state = if sora > 0x10000 { rd::<i32>(sora + 0x70) } else { -1 };
+        log(&format!(
+            "KH2 camera: KH1 reset its camera ({}, back from its hold / release; event {}, Sora state {state}): KH2's default position{}",
+            if lock { "lock-on" } else { "follow" },
+            rd::<u32>(base + EVENT_RVA) != 0,
+            if owns {
+                ", KH2's camera through the rest of the scene"
+            } else if scene {
+                " once KH1 lets go of Sora"
+            } else {
+                ""
+            }
+        ));
+    }
+}
+
 /// KH2's camera this frame: chosen, and no cutscene (the user: KH1's camera for cutscenes and
-/// scenes with text, so the camera doesn't end up inside things).
+/// scenes with text, so the camera doesn't end up inside things), except after KH1 has given
+/// its camera back to Sora with a reset (`RESET_OWNS`).
 fn ours() -> bool {
-    let on = KH2.load(Ordering::Relaxed) && !super::takeover::kh1_scene();
+    let kh2 = KH2.load(Ordering::Relaxed);
+    let scene = kh2 && super::takeover::kh1_scene();
+    if !scene || super::takeover::kh1_moves_sora() {
+        RESET_OWNS.store(false, Ordering::Relaxed);
+    }
+    let on = kh2 && (!scene || RESET_OWNS.load(Ordering::Relaxed));
     static WAS: AtomicBool = AtomicBool::new(true);
     static N: AtomicU32 = AtomicU32::new(0);
     if WAS.swap(on, Ordering::Relaxed) != on && KH2.load(Ordering::Relaxed) && N.fetch_add(1, Ordering::Relaxed) < 60 {
@@ -141,6 +234,7 @@ fn kh2_fov() -> f32 {
 }
 
 unsafe extern "system" fn follow_mode() {
+    note_entry(false);
     if !ours() || run(false).is_none() {
         let f: unsafe extern "system" fn() = std::mem::transmute(ORIG_FOLLOW.load(Ordering::Acquire));
         f();
@@ -148,6 +242,7 @@ unsafe extern "system" fn follow_mode() {
 }
 
 unsafe extern "system" fn lock_mode() {
+    note_entry(true);
     if !ours() || run(true).is_none() {
         let f: unsafe extern "system" fn() = std::mem::transmute(ORIG_LOCK.load(Ordering::Acquire));
         f();
@@ -342,29 +437,39 @@ unsafe fn run(lock: bool) -> Option<()> {
 
     let Ok(mut g) = CAM.lock() else { return None };
     // A new camera when KH1 comes back to its follow camera from something not ours (an event,
-    // an area camera, a menu, a cutscene), facing the way KH1's camera was looking from.
+    // an area camera, a menu, a cutscene) or resets its camera: at KH2's default position,
+    // unless taking over from another of KH1's cameras this frame.
     let gap = now_ms().saturating_sub(LAST_MS.load(Ordering::Relaxed));
     // (A pause in between doesn't count: the pause menu's Sora was posed meanwhile; the user:
     // spamming pause while locked on started the camera over unlocked each time, shaking it.)
-    let was_ours = gap < 300 || (super::pose::menu_sora_within(gap + 200) && gap < 60_000);
+    // (Nor a moment nothing else moved the camera in: KH1's internal pair still as written, a
+    // hitch, not KH1's camera; that started the camera over behind Sora with the reset below.)
+    let untouched = gap < 5000 && LAST_PAIR.lock().is_ok_and(|p| *p == internal_pair(base));
+    let was_ours = gap < 300 || (super::pose::menu_sora_within(gap + 200) && gap < 60_000) || untouched;
     // (Or after a while of KH1's own: a cutscene had it.)
-    let _ = fresh_mode;
+    // (Or KH1 reset its camera: KH2's default position, see `RESET_PENDING`.)
+    let reset = RESET_PENDING.swap(false, Ordering::Relaxed);
+    // KH1 handing over from one of its other cameras this very frame (an area camera, first
+    // person, climbing / ledge, a conversation; or the view restored after a load): KH1 eases
+    // from it into ours, so ours faces the way it looked. Not after a reset (bit 0: from mode 0).
+    let handover = fresh_mode && (flags & 1 == 0 || flags & 4 != 0);
     // (Or Sora is far from where it was looking: a new room, a warp.)
     // (The eye, not the look point: locked on, that is 30% of the way to the target, and a far
     // target put it 600 away, so the camera was made anew over and over, the user's boss fight.)
     let far = g.as_ref().is_some_and(|c| (c.eye - subject.feet).length() > 1200.0 / s);
-    if g.is_none() || !was_ours || far {
+    if g.is_none() || !was_ours || far || reset {
         let f = kh2_camera::Params::FIELD;
+        // KH2's default position: behind Sora at KH2's default distance and height (the user:
+        // entering a room it started on the ground looking up, KH1's pair left over; and after
+        // a Limit or examining something it took KH1's reset placement's direction).
         let mut c = kh2_camera::Camera::new(f, &subject);
         let (eye, at) = (rd::<[f32; 3]>(base + EYE_RVA), rd::<[f32; 3]>(base + TARGET_RVA));
         let d = Vec2::new(eye[0] - at[0], eye[2] - at[2]);
-        // At KH2's default distance (the user: entering a room it started on the ground looking
-        // up: KH1's pair was left over and close together, and KH2's closest distance puts the
-        // eye 150 below the look point). Facing the way KH1's camera looked when that camera
-        // was looking at Sora from a usual distance, else behind him.
+        // Taking over from another of KH1's cameras this frame: facing the way it looked, when
+        // it was looking at Sora from a usual distance.
         let near = Vec2::new(at[0] - feet[0], at[2] - feet[2]).length() < 200.0;
         let usual = d.length() / s >= f.dist_min && d.length() / s <= f.dist_max * 1.5;
-        if near && usual && d.is_finite() {
+        if handover && !reset && near && usual && d.is_finite() {
             c.snap_yaw(d.x.atan2(d.y));
         }
         // Locked on: behind Sora facing the target at once, where the lock-on camera settles
@@ -378,7 +483,17 @@ unsafe fn run(lock: bool) -> Option<()> {
         }
         *g = Some(c);
         if LOGGED.fetch_add(1, Ordering::Relaxed) < 20 {
-            let why = if !was_ours { "after KH1's" } else if far { "Sora far away" } else { "first" };
+            let why = if reset {
+                "KH1 reset its camera: KH2's default"
+            } else if !was_ours && handover {
+                "after KH1's, facing its way"
+            } else if !was_ours {
+                "after KH1's: KH2's default"
+            } else if far {
+                "Sora far away"
+            } else {
+                "first"
+            };
             log(&format!("KH2 camera: started ({}, {why}), yaw {:.2}", if lock { "lock-on" } else { "follow" }, g.as_ref().map_or(0.0, |c| c.yaw)));
         }
     }
@@ -394,6 +509,9 @@ unsafe fn run(lock: bool) -> Option<()> {
     let (e, t) = (to_kh1(eye, s), to_kh1(at, s));
     wr(base + EYE_RVA, [e[0], e[1], e[2], 1.0f32]);
     wr(base + TARGET_RVA, [t[0], t[1], t[2], 1.0f32]);
+    if let Ok(mut p) = LAST_PAIR.lock() {
+        *p = internal_pair(base);
+    }
     // KH1's own view of it (its follow camera carries on from here when chosen again).
     let d = Vec3::new(e[0] - t[0], e[1] - t[1], e[2] - t[2]);
     let dist = d.length();

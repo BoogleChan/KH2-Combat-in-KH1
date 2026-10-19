@@ -350,6 +350,21 @@ const LAND_HOLD: u32 = 14;
 /// his combo reset if he returns to idle"; it was 60 frames, for spells picked from KH1's menu).
 const COMBO_GRACE: u32 = 2;
 
+/// A finisher's window for the next finisher (Finishing Plus): its motion's finisher range, or,
+/// for a motion with none (Wisdom Form's finisher shot, its finishing casts), its last frames
+/// (the next finisher, swing or spell, follows it straight on; the user: Wisdom's finishing
+/// magic couldn't take Finishing Plus's second finisher).
+fn finisher_window(clip: &Clip, f: u32) -> bool {
+    if clip.windows.iter().any(|w| matches!(w.kind, WindowKind::Finisher)) {
+        clip.has(f, |k| matches!(k, WindowKind::Finisher))
+    } else {
+        f + FINISHER_END >= clip.length
+    }
+}
+
+/// The last frames of a finisher motion without a finisher range that take the next finisher.
+const FINISHER_END: u32 = 6;
+
 /// Physics tick length in frames: KH2 recomputes velocities at 30 Hz.
 const DT: f32 = 2.0;
 const DEAD_ZONE: f32 = 0.1;
@@ -620,7 +635,7 @@ impl Character {
     fn cast_window(&self, a: &Action, f: u32) -> bool {
         let has = |p: &dyn Fn(&WindowKind) -> bool| self.clip(a.motion).map_or(false, |c| c.has(f, |k| p(k)));
         // (As a swing's next finisher: only after one that counts, `try_attack`.)
-        let next_finisher = || self.finishers < self.max_finishers() && self.swing_counts() && has(&|k| matches!(k, WindowKind::Finisher));
+        let next_finisher = || self.finishers < self.max_finishers() && self.swing_counts() && self.clip(a.motion).is_some_and(|c| finisher_window(c, f));
         match &a.kind {
             ActionKind::Attack { row } if row.is_finisher() => next_finisher(),
             ActionKind::Attack { .. } => has(&|k| matches!(k, WindowKind::ComboMagic | WindowKind::Combo)),
@@ -719,12 +734,17 @@ impl Character {
         } else {
             m.ground
         };
-        self.clip(motion)?;
+        let clip = self.clip(motion)?;
+        // A cast that moves (Wisdom Form's, an allow-movement range) keeps his speed and his
+        // fall (the user: no velocity lost in Wisdom's air moves).
+        let moving = clip.windows.iter().any(|w| matches!(w.kind, WindowKind::AllowMovement));
         self.take_spell_slot(slot);
-        self.vel_h = [0.0; 2];
-        if self.airborne {
-            self.vel_y = 0.0;
-            self.arc = None;
+        if !moving {
+            self.vel_h = [0.0; 2];
+            if self.airborne {
+                self.vel_y = 0.0;
+                self.arc = None;
+            }
         }
         self.start_action(ActionKind::Magic, motion);
         Some(motion)
@@ -1283,7 +1303,13 @@ impl Character {
                 None => (row.jump, row.speed_max),
             };
             self.start_arc(height);
-            self.vel_h = scale(dir, speed);
+            // A moving air attack (an allow-movement range: Wisdom Form's air shot) keeps the
+            // speed he has (the user: "sora should not loose his velocity when doing an air move
+            // in wisdom form"); the rest go at the row's speed.
+            let moving = self.clip(row.motion).is_some_and(|c| c.windows.iter().any(|w| matches!(w.kind, WindowKind::AllowMovement)));
+            if !(moving && self.airborne) {
+                self.vel_h = scale(dir, speed);
+            }
             self.vel_y = 0.0;
         } else {
             self.vel_h = [0.0; 2];
@@ -1318,6 +1344,14 @@ impl Character {
                 if a.guard {
                     if let Some(m) = m {
                         self.vel_h = [0.0; 2];
+                        // Facing the target with a reticle on it (the lock), as KH2's guard does
+                        // (the user: guard didn't turn him toward it).
+                        if let Some(t) = self.lock.and_then(|id| env.targets.iter().find(|t| t.id == id)) {
+                            let d = [t.pos[0] - env.pos[0], t.pos[2] - env.pos[2]];
+                            if len2(d) > 1e-3 {
+                                self.facing = yaw_of(d);
+                            }
+                        }
                         self.start_action(ActionKind::Guard, m);
                         return true;
                     }
@@ -1888,7 +1922,7 @@ impl Character {
                 if input.attack.pressed {
                     self.buffered_attack = true;
                 }
-                let next = finisher_more && clip.has(f, |k| matches!(k, WindowKind::Finisher));
+                let next = finisher_more && finisher_window(&clip, f);
                 if self.buffered_attack && next {
                     self.mode = Mode::Action(act.clone());
                     if self.try_attack(input, env) {
@@ -2008,8 +2042,8 @@ impl Character {
                     self.buffered_attack = true;
                 }
                 let combo_open = clip.has(f, |k| matches!(k, WindowKind::Combo));
-                let finisher_open =
-                    clip.has(f, |k| matches!(k, WindowKind::Finisher)) && self.finishers < self.max_finishers();
+                let is_finisher = matches!(&act.kind, ActionKind::Attack { row } if row.is_finisher());
+                let finisher_open = (clip.has(f, |k| matches!(k, WindowKind::Finisher)) || is_finisher && finisher_window(&clip, f)) && self.finishers < self.max_finishers();
                 if self.buffered_attack && (combo_open || finisher_open) {
                     self.mode = Mode::Action(act.clone());
                     if self.try_attack(input, env) {
@@ -2124,7 +2158,9 @@ impl Character {
                 }
                 // Idle-action movement: velocity is the stick, no momentum
                 // carried from the air.
-                ActionKind::Land => self.vel_h = if act.frame < LAND_HOLD { [0.0; 2] } else { ground(self.vel_h) },
+                // (With ground inertia, Wisdom Form's, the landing keeps his momentum and slides
+                // it off, the user; else KH2's hold.)
+                ActionKind::Land => self.vel_h = if act.frame < LAND_HOLD && p.acceleration <= 0.0 { [0.0; 2] } else { ground(self.vel_h) },
                 ActionKind::Hang { .. } | ActionKind::Climb => {
                     self.vel_h = [0.0; 2];
                     self.vel_y = 0.0;
@@ -2136,9 +2172,13 @@ impl Character {
                     }
                 }
                 ActionKind::Magic => {
-                    self.vel_h = if self.airborne {
+                    let steer = self.clip_has(act.motion, act.frame, |k| matches!(k, WindowKind::AllowMovement));
+                    self.vel_h = if self.airborne && steer {
+                        // (Steered as in a jump, Wisdom Form's air casts.)
+                        air_control(self, true)
+                    } else if self.airborne {
                         scale(self.vel_h, p.air_drag)
-                    } else if self.clip_has(act.motion, act.frame, |k| matches!(k, WindowKind::AllowMovement)) {
+                    } else if steer {
                         // (Wisdom Form's casts move: their motions' allow-movement range.)
                         ground(self.vel_h)
                     } else if p.acceleration > 0.0 {

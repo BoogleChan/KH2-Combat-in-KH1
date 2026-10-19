@@ -375,6 +375,23 @@ mod tests {
         assert!((Params::FIELD.fov_v().to_degrees() - 69.87).abs() < 0.05);
     }
 
+    /// The default position a host resets to (KH1's camera resets, `kh1-hook`): behind Sora
+    /// whichever way he faces, at the default distance, the look point above his feet.
+    #[test]
+    fn a_new_camera_is_behind_sora_at_the_default_distance() {
+        let feet = Vec3::new(300.0, 40.0, -900.0);
+        let facing = 2.2_f32;
+        let c = Camera::new(Params::FIELD, &sora(feet, facing));
+        assert_eq!(c.dist, Params::FIELD.dist_default);
+        assert!((c.at - (feet + Vec3::Y * AT_UP)).length() < 1e-3);
+        // Sora looks along (sin, cos) of his facing; the eye is the other way.
+        let back = Vec2::new(c.eye.x - feet.x, c.eye.z - feet.z);
+        let ahead = Vec2::new(facing.sin(), facing.cos());
+        assert!((back.length() - 420.0).abs() < 0.01);
+        assert!((back.normalize().dot(ahead) + 1.0).abs() < 1e-4, "{back}");
+        assert!((c.eye.y - feet.y - 251.2).abs() < 0.01);
+    }
+
     #[test]
     fn running_sideways_swings_behind_about_one_degree_per_frame() {
         let mut c = Camera::new(Params::FIELD, &sora(Vec3::ZERO, 0.0));

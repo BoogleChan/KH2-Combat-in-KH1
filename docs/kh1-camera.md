@@ -409,9 +409,65 @@ keep these written while we drive, KH1 continues smoothly when its own update is
   they blend from our view.
 - KH1's own **reset behind Sora**:
   - R3 → `0x1401E4140()`: a smooth 60-step swing to facing + π.
-  - Script snap → `0x1401E1E60()`: instant. Target = Sora × `(0, -100, -50)`, eye = target +
+  - Snap → `0x1401E1E60()`: instant. Target = Sora × `(0, -100, -50)`, eye = target +
     `Ry(facing + π) × (0, -20, 400)` (`0x140507BC0` / `0x140507BD0`), mode 1 with blend 30.
+    No caller, pointer or table entry for it was found in the executable: probably unused.
   - Event return → `0x1401E2500()`: mode 1 from mode 0, a cut followed by the entry re-place.
+
+### 9.1 KH1's camera resets (examining, Limits, doors, events) [high for the code paths, med for which game moment uses which]
+
+KH1 never moves its follow camera to a "reset" position from battle or field code directly.
+Outside the camera module, the camera mode changes only in these places (every caller of
+the mode switch `0x1401E3200` and of the release / hold functions was listed):
+
+| What | Function | How it leaves | How it comes back |
+|---|---|---|---|
+| Event script **hold** (opcode 394, `0x1401BD8A0`) | `0x1401E2C80` | mode 0; remembers the yaw relative to Sora's facing in `0x1425389B4`, flag `0x1425389B0` | opcode 395 (`0x1401BD880`, skipped while `0x142867CD8 & 2`) → **`0x1401E2B50`**: yaw = remembered + facing, `0x1401E26C0` places the eye at KH1's default pitch / distance behind that yaw (turning in 30° steps if a wall is close), writes the public pair, then mode 1 with blend 0 |
+| Event / action camera off (`0x14028BC30`, event actor command 0 in `0x14028C550`) | `0x1401E2560` | mode 0, `0x142538AC4` = 1, subject cleared; flag `0x142867CD8 & 2` | camera on (`0x14028BC20`, actor command 1) → **`0x1401E2500`**: subject = Sora, area camera if one applies (`0x1401E5890`, mode 9), else mode 1 with blend 30 |
+| Conversation camera (event command `0x1401B77F0`) | `0x1401E2170` | mode 7, `0x142538A24` = 1 | opcode 180 (`0x1401B60A0`) → `0x1401E1F60`: mode 1 with blend 30 (unless an area or movement-state camera applies) |
+| Room load (`0x140286730`) | `0x1401E2F00` | `0x1401E3E20` clears the module (mode 0, all timers) | area camera test, else mode 1 with blend 0 |
+| Lock-on | `0x1401E2040` / `0x1401E1FB0` | mode 3 | mode 1 with blend 45 |
+| Snapshot (save / load, `0x14017A6D0` / `0x14017AE30`) | `0x1401E2D80` saves | | `0x1401E29D0` restores the saved pair and mode, flag bit 2 |
+
+The trace of event opcodes in the users' logs shows 394 at the start and 395 at the end of the
+moments when Sora cannot act (seen around door and zone changes; examining and other scripted
+moments are probably the same): the hold / release pair is the common case. A Limit's or a
+summon's cinematic camera (event cameras that write the public pair: `0x140287BC0`,
+`0x1403A0860`, the orbit command `0x1401BD8C0`) can only run while the follow camera is held or
+released (mode 1 would overwrite the public pair each frame), so it ends the same way [med: the
+logs show the KH2 camera restarting after Limits and examining, not which path they took].
+
+In each of these, the switch into mode 1 starts **from mode 0** (except the conversation and
+lock-on returns), which sets entry flag bits 0 and 1 (`0x1425389E8 & 3 == 3`; bit 2 too for a
+snapshot). KH1's mode 1 then runs its entry (6.1 step 1): pitch and distance back to the map's
+defaults, yaw from the public pair (the cinematic camera's last view, or the remembered yaw
+after opcode 395), the eye re-placed behind that yaw. That is KH1's "reset" view.
+
+### 9.2 How the mod handles a reset with KH2's camera chosen
+
+`crates/kh1-hook/src/win/camera.rs` (`note_entry`), every call of the follow / lock-on mode,
+before it decides whose camera runs:
+
+- Entry flags `& 7 == 3` (from mode 0, not a snapshot): a **KH1 camera reset**. Logged
+  ("KH2 camera: KH1 reset its camera ..."). KH2's camera starts again at **its own default**:
+  behind Sora (facing + π), KH2's default distance (420 × `camera_scale`) and its height for
+  that distance. Locked on, it faces the target from behind Sora as before.
+- If a scene still holds at that moment (`takeover::kh1_scene`: the event's last frames, Sora
+  still held after an examine), KH2's camera takes the follow camera anyway for the rest of
+  that scene, instead of KH1's re-placed one. It hands it back to KH1 when KH1 moves Sora
+  (an area script, the Jungle Slider, or Sora walking more than 3 units a frame in the scene),
+  when KH1's follow / lock-on mode stops running for over 150 ms (KH1 has its camera somewhere
+  else again), or when the scene ends.
+- Without a reset, after KH1's camera had the view: also KH2's default, except when the frame
+  is a hand-over from another of KH1's cameras (entry flag bit 1 without bit 0: area camera,
+  first person, climbing / ledge / swimming, conversation; or a snapshot restore). Then KH1
+  blends from that camera into ours, and ours faces the way it looked (as before).
+- KH1's internal pair still exactly as KH2's camera wrote it (a hitch of up to 5 s, nothing
+  else moved the camera): KH2's camera carries on, no restart.
+- With `camera = kh1` none of this runs: KH1's camera, resets included.
+
+Cutscenes keep KH1's camera: they run in mode 0 or with the camera off, where neither mode
+function is called. Only their end (the hand-back) is a reset.
 
 ---
 

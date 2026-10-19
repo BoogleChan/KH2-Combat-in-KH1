@@ -236,6 +236,11 @@ pub unsafe fn spell_chosen(actor: usize, spell: u8) -> bool {
     true
 }
 
+/// A spell is waiting for its window (`takeover`).
+pub fn waiting() -> bool {
+    WAITING.try_lock().map_or(false, |w| w.is_some())
+}
+
 /// Before KH2's step: a chosen spell's cast, as soon as KH2's move allows one.
 pub unsafe fn before_step(actor: usize, ch: &mut Character) {
     let Ok(mut w) = WAITING.try_lock() else { return };
@@ -436,18 +441,22 @@ pub unsafe fn shots_step(actor: usize, out: &Output, airborne: bool, strikes: &m
     }
     rt.fx.retain(|id, (h, _)| seen.contains(id) || h.is_some_and(super::kh2fx::spell_running));
     // The attacks against KH1's enemies; one that hits is told so.
+    // (Fire, Blizzard and Thunder land with KH1's own data for the spell at its level: its
+    // element; the shots stay the swings'.)
+    let package = &rt.package;
     let attacks: Vec<combat::SpellAttack> = rt
         .magic
         .attacks
         .iter()
         .filter(|a| !a.freed && a.owner == SORA)
         .filter_map(|a| {
+            let kh1_data = package.get(&a.spell).and_then(|&p| package_spell(p)).filter(|(spell, _)| *spell <= 2).and_then(|(spell, level)| combat::kh1_spell_data(spell, level));
             let first = row(battle, a.atk, a.sub, 0)?;
             if !combat_core::AttackKind::from_id(first.kind).deals_damage() {
                 return None;
             }
             let shapes = a.shapes();
-            (!shapes.is_empty()).then(|| combat::SpellAttack { key: a.id | KEY, group: if first.combo_group != 0 { first.combo_group as i64 } else { a.group }, atk: a.atk, sub: a.sub, shapes })
+            (!shapes.is_empty()).then(|| combat::SpellAttack { kh1_data, key: a.id | KEY, group: if first.combo_group != 0 { first.combo_group as i64 } else { a.group }, atk: a.atk, sub: a.sub, shapes })
         })
         .collect();
     if !attacks.is_empty() {

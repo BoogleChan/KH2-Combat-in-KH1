@@ -716,6 +716,22 @@ fn decompose(v: &[Mat4]) -> Vec<(Vec3, Quat, Vec3)> {
 
 /// KH2's motion for what KH1's slot shows Sora doing; `None` leaves KH1's own animation.
 fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4>> {
+    // In Wisdom Form, KH1's spells with no KH2 counterpart (Gravity, Stop, Aero: KH1 casts them)
+    // show the form's own cast (the user: "any kh1 magic that doesn't have a kh2 equivalent
+    // (gravity, stop) should use the normal thunder/cure wisdom form animation but still cast
+    // their respected magic"): Gravity Thunder's, Stop and Aero Cure's; the air ones in the air.
+    if super::form::in_form() {
+        if let Some(spell @ 4..=6) = super::takeover::kh1_spell_now() {
+            let air = super::takeover::air_cast().is_some();
+            let motion = match (spell, air) {
+                (4, false) => 62,
+                (4, true) => 64,
+                (_, false) => 65,
+                (_, true) => 67,
+            };
+            return follow_play(s, slot, to_world, Some(Play::Motion { motion, field: false, looping: false, group: 0 }));
+        }
+    }
     follow_play(s, slot, to_world, None)
 }
 
@@ -820,17 +836,22 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
         f.rate = rate;
     }
     f.play = Some(play);
+    // (In a Drive Form, the form's motions: KH1's own moves and spells then look like the form's.)
+    let rig: &kh2_data::sora::Rig = match (super::form::in_form(), &kh2.wisdom) {
+        (true, Some(w)) if w.rig.motions.contains_key(&motion) => &w.rig,
+        _ => &kh2.rig,
+    };
     let clip = field
-        .then(|| kh2.rig.field_motions.get(&motion))
+        .then(|| rig.field_motions.get(&motion))
         .flatten()
-        .or_else(|| kh2.rig.motions.get(&motion))
-        .or_else(|| kh2.rig.motions.get(&m2::IDLE))?;
+        .or_else(|| rig.motions.get(&motion))
+        .or_else(|| rig.motions.get(&m2::IDLE))?;
     let frames = f.since.map_or(0.0, |t| now.duration_since(t).as_secs_f32() * f.rate);
     let t = kh2_anim::key_time(clip, frames, looping);
-    let mut pose = kh2_anim::evaluate(&kh2.rig.skeleton, clip, t, kh2_anim::Options::default()).bones;
+    let mut pose = kh2_anim::evaluate(&rig.skeleton, clip, t, kh2_anim::Options::default()).bones;
     // The Keyblade's bones after Sora's (the lunge and the blend apply to both; split off below).
     let body_len = pose.len();
-    let weapon = kh2_weapon(&kh2.rig, motion, frames, looping, &pose);
+    let weapon = kh2_weapon(rig, motion, frames, looping, &pose);
     pose.extend(weapon);
     // A swing's lunge: KH1 moves him, so take KH2's root travel out of the pose.
     if matches!(play, Play::Swing { .. }) {

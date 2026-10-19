@@ -2318,3 +2318,35 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   keeps now carries the Keyblade's bones too. The physics swing runs only for chains KH2 didn't
   pose (the dream weapons and wooden sword). Ini: `physics = off` (all off), `kh2_hair = off`
   (the old swing). KH1's own animations never reach this.
+
+### 2026-10-18: Stage 202 (the user's list: camera, Wisdom, guard)
+- Wisdom: "finishing magic ... unable to be in the 2nd finisher slot when having a finishing
+  plus": Wisdom's finisher (154) and finishing casts have no finisher range, so nothing could
+  follow them. A finisher motion with none now takes the next finisher (swing or spell) in its
+  last 6 frames (`finisher_window`). Test `second_finisher_after_a_finisher_without_a_window`.
+- "when inputting a 2nd finisher, if you input magic then hit the attack command the attack will
+  overide the magic": while a chosen spell waits for its window (KH1's queue, Reflect's,
+  Wisdom's), an Attack press doesn't take the window from it (`takeover`).
+- "sora should not loose his velocity when doing an air move in wisdom form", "his air attack
+  ... freely able to move", "landing animation should preserve his momentum": a moving air
+  attack (an allow-movement range) keeps his speed at its start; moving casts keep speed and
+  fall and are steered in the air as a jump; with ground inertia the landing slides on instead
+  of KH2's 14-frame hold. Test `wisdom_keeps_momentum_in_the_air_and_on_landing`.
+- "animations that have new magic do not have their proper elemental hitbox and currently do
+  physical damage": Wisdom's Fire / Blizzard / Thunder now land with KH1's own attack data for
+  the spell at its level (element, max-MP source, reactions; a helper session's research,
+  `docs/kh1-attack-elements.md`); the shots stay physical (KH1 has no known light element).
+- "any kh1 magic that doesn't have a kh2 equivalent (gravity, stop) should use the normal
+  thunder/cure wisdom form animation but still cast their respected magic": KH1 casts them; in
+  the form its slots are drawn with the form's motions, the cast as Thunder's (Gravity) or
+  Cure's (Stop, Aero), the air ones in the air (`pose::follow`).
+- "Guard currently does not change soras direction to face an entity with a yellow or blue
+  reticle": the guard starts facing the locked target. Test `guard_faces_the_locked_target`.
+- KH2 camera: "any time that a move or action calls for the camera to be reset (limits,
+  inspecting an object) the game reverts the camera back to kh1s camera ... it should call the
+  default position of the kh2 camera instead": every KH1 camera reset ends with its follow
+  camera starting over from hold (mode 0; event holds and "camera behind Sora", the end of a
+  Limit's or summon's cinematic, room loads). A helper session made the KH2 camera catch that
+  and start again at its own default behind Sora (facing the target when locked), keeping the
+  view through the rest of a scene unless KH1 walks Sora itself (`docs/kh1-camera.md` 9.1, 9.2).
+  Room entries now start behind Sora.

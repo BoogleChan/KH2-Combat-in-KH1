@@ -936,6 +936,11 @@ unsafe fn takeover(actor: usize) -> bool {
     let action = action_raw && !l1_menu;
     // KH1's Attack command (Cross with Attack chosen in the menu) is KH2's attack button.
     let attack = combat::take_press() | FLY_PRESS.swap(false, Ordering::Relaxed) | FLY_PRESS_GROUND.swap(false, Ordering::Relaxed);
+    // A spell chosen and waiting for the move's window goes first: an Attack pressed meanwhile
+    // doesn't take that window from it (the user: in a second finisher, magic then Attack, and
+    // the Attack overrode the magic).
+    let spell_first = combat::spell_waiting() || super::reflect::waiting() || super::formmagic::waiting();
+    let attack = attack && !spell_first;
     // KH1 holding him still (its control step skipped or him unable to act: cutscene moments,
     // tutorial windows; the user: he moved anyway): KH2 gets no input (he still falls, lands
     // and finishes what he was doing).
@@ -1532,6 +1537,19 @@ pub fn kh1_scene() -> bool {
     event || own_mode || (active() && (SCRIPTED.load(Ordering::Relaxed) || held))
 }
 
+/// KH1 moves Sora itself in a scene: one of its own movement modes (the Jungle Slider) or an
+/// area script walking him. KH1's camera stays through these even after a camera reset that
+/// KH2's camera takes (`camera.rs`).
+pub fn kh1_moves_sora() -> bool {
+    let base = BASE.load(Ordering::Relaxed);
+    if base == 0 {
+        return false;
+    }
+    let sora = unsafe { rd::<u64>(base + PARTY_RVA) } as usize;
+    let own_mode = sora > 0x10000 && kh1_camera_mode(unsafe { rd::<i32>(sora + 0x70) });
+    own_mode || (active() && SCRIPTED.load(Ordering::Relaxed))
+}
+
 /// Whether KH1 may see Square: not while it has Sora back on the ground after one of its own
 /// air moves (KH2 is about to take him; a roll pressed then is KH2's).
 pub fn kh1_keeps_square() -> bool {
@@ -1670,6 +1688,14 @@ pub fn set_air_cast(spell: Option<u8>) {
 }
 
 /// The spell KH1 casts in the air now (while it has him for it) and seconds since it started.
+/// The spell KH1 is casting now (its command's, while KH1 has him for it: Fire 0 .. Aero 6).
+pub fn kh1_spell_now() -> Option<u8> {
+    if !(HANDOFF.load(Ordering::Relaxed) && FROM_COMMAND.load(Ordering::Relaxed)) {
+        return None;
+    }
+    COMMAND.try_lock().ok()?.as_ref()?.spell
+}
+
 pub fn air_cast() -> Option<(u8, f32)> {
     if !HANDOFF.load(Ordering::Relaxed) {
         return None;
