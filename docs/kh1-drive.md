@@ -184,3 +184,12 @@ Page 2 differs from page 1 only in row 3, so reuse KH1's Summon path end to end:
   below 0 the top blue bar breaks into it (bar n gives n × 30), capped at max bars × 30. KH1's
   test `0x1402A2A80` counts the same way. The form pays 1 every 2 frames of battle (every 4
   out of it) and reverts once even 1 can't be paid.
+
+## Spells only in KH2's windows (s203)
+
+`0x1402912F0 (menu, entry)` is hooked (`combat::run_entry`). For a type 2 record (the entry's,
+or for a type 4 target list the parent list's cursor entry `[[0x142D54450] - 8] + 0x34`, as
+KH1 itself looks it up) with an argument below the Drive forms', while KH2 has Sora and his
+move can't take a spell this frame, it returns 0 before KH1 does anything: the menu chain is
+not popped, no command record is written, no sound. Entries that open a submenu (Cure's party
+target list) still open it.

@@ -2350,3 +2350,13 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   and start again at its own default behind Sora (facing the target when locked), keeping the
   view through the rest of a scene unless KH1 walks Sora itself (`docs/kh1-camera.md` 9.1, 9.2).
   Room entries now start behind Sora.
+
+### 2026-10-18: Stage 203 (the Magic menu takes a spell only in KH2's windows)
+- The user, on Attack taking a chosen spell's window: "in kh2 the game won't let you select a
+  magic until the game lets you, keeping you in the menu until you back out with the back
+  button". KH1's menu entry run (`0x1402912F0`, hooked in `combat::run_entry`) now returns
+  without writing the command record when the entry is a spell (from the Magic list, a party
+  target list or a shortcut) and KH2's move can't be cut by magic this frame (`can_cast`):
+  no sound, the menu stays where it is, and the next press tries again. So a spell is never
+  chosen to wait for a window, and an Attack pressed meanwhile is simply the combo's next
+  swing. Drive forms and KH1's own casts keep their paths.

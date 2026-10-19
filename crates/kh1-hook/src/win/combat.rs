@@ -1643,4 +1643,71 @@ pub unsafe fn install() {
     hook::install(base + LAUNCH_RVA, &LAUNCH_PROLOGUE, launched as *const () as usize, &ORIG_LAUNCH, "enemy launch reaction");
     hook::install(base + EXEC_RVA, &EXEC_PROLOGUE, exec as *const () as usize, &ORIG_EXEC, "execute attack row");
     hook::install(base + COMMAND_STEP_RVA, &COMMAND_STEP_PROLOGUE, command as *const () as usize, &ORIG_COMMAND, "command step");
+    hook::install(base + RUN_ENTRY_RVA, &RUN_ENTRY_PROLOGUE, run_entry as *const () as usize, &ORIG_RUN_ENTRY, "menu entry run (spells only in KH2's windows)");
+}
+
+/// KH1's menu runs a chosen entry (`0x1402912F0 (menu, entry)`, `docs/kh1-drive.md`): from the
+/// Magic list, a party target list (type 4: its spell is the parent list's cursor entry) or a
+/// shortcut. Returning 0 without writing the command record leaves the menu where it is.
+const RUN_ENTRY_RVA: Rva = Rva(0x2912F0);
+/// `mov [rsp+0x10], rbx; mov [rsp+0x18], rbp; push rsi; push rdi; push r12`.
+const RUN_ENTRY_PROLOGUE: [u8; 14] = [0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C, 0x24, 0x18, 0x56, 0x57, 0x41, 0x54];
+const RECORD_RVA: Rva = Rva(0x28D7D0);
+/// The menu chain's top (`[top - 8]` is the list under it).
+const CHAIN_RVA: Rva = Rva(0x2D54450);
+static ORIG_RUN_ENTRY: AtomicUsize = AtomicUsize::new(0);
+
+/// KH2's menu takes a spell only when the move playing can be cut by one; before that the
+/// press does nothing and the Magic menu stays open (the user: "in kh2 the game won't let you
+/// select a magic until the game lets you, keeping you in the menu until you back out"). So
+/// a spell is never chosen to wait, and an Attack pressed meanwhile is the combo's.
+unsafe extern "system" fn run_entry(menu: usize, entry: i32) -> u64 {
+    let f: unsafe extern "system" fn(usize, i32) -> u64 = std::mem::transmute(ORIG_RUN_ENTRY.load(Ordering::Acquire));
+    if spell_not_yet(menu, entry) {
+        return 0;
+    }
+    f(menu, entry)
+}
+
+unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
+    if menu < 0x10000 || !(0..16).contains(&entry) || !super::settings::get().commands || !takeover::ON.load(Ordering::Relaxed) || !takeover::kh2_has() || takeover::kh1_casting() {
+        return false;
+    }
+    // Disabled entries: KH1's own "can't".
+    if rd::<u32>(menu + 8) >> entry & 1 != 0 {
+        return false;
+    }
+    let base = BASE.load(Ordering::Relaxed);
+    let record_of: unsafe extern "system" fn(u32) -> usize = std::mem::transmute(base + RECORD_RVA);
+    let id = if rd::<u32>(menu) == 4 {
+        let top = rd::<u64>(base + CHAIN_RVA) as usize;
+        if top < 0x10008 {
+            return false;
+        }
+        let parent = rd::<u64>(top - 8) as usize;
+        if parent < 0x10000 {
+            return false;
+        }
+        rd::<u8>(parent + 0x14 + (rd::<i32>(parent + 0x34) & 0xF) as usize)
+    } else {
+        rd::<u8>(menu + 0x14 + entry as usize)
+    };
+    let record = record_of(id as u32);
+    if record < 0x10000 {
+        return false;
+    }
+    let (kind, arg, sub) = (rd::<u8>(record + 6), rd::<u8>(record + 7), rd::<i8>(record + 8));
+    // Only spells (Reflect's too); a Drive form is `drive`'s; a target list opening is no cast.
+    if kind != 2 || arg >= super::drive::FORM_ARG || (rd::<u32>(menu) != 4 && sub > 0) {
+        return false;
+    }
+    let free = takeover::with_kh2(|c, _| c.can_cast());
+    if free != Some(false) {
+        return false;
+    }
+    static N: AtomicU32 = AtomicU32::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) % 30 == 0 {
+        cmd_log(format!("spell {arg} not taken yet: KH2's move (motion {}) can't be cut by magic now; the menu stays open", takeover::KH2_MOTION.load(Ordering::Relaxed)));
+    }
+    true
 }
