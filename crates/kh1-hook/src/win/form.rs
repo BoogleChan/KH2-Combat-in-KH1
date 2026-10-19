@@ -28,8 +28,8 @@
 //! the same change and revert, `P_EX100_ULTF` (moveset 5), its growth ability Glide at MAX, its
 //! two Keyblades floating where KH2's own weapon motions put them (the second always the Kingdom
 //! Key, no menu slot: the user, "don't add the final form keyblade selection into the menu like we
-//! did for valor, just default it to kingdom key"). Not in the Drive list: Up, Up, Down, Down, Left, Right, Left, Right,
-//! Circle, Cross on the pad (`pad`) asks for it, as the Drive list would.
+//! did for valor, just default it to kingdom key"). Not in the Drive list: a secret button
+//! code on the pad (`pad`) asks for it, as the Drive list would.
 
 use super::{log, pose};
 use character_core::{Abilities, Character, EventKind};
@@ -158,9 +158,13 @@ pub fn two_blades() -> bool {
     current().is_some_and(|k| k.two_blades())
 }
 
-/// The secret code's buttons in order (KH1's pad bits: Up 4, Down 6, Left 7, Right 5, Circle 13,
-/// Cross 14).
-const CODE: [u16; 10] = [1 << 4, 1 << 4, 1 << 6, 1 << 6, 1 << 7, 1 << 5, 1 << 7, 1 << 5, 1 << 13, 1 << 14];
+/// The secret code, kept unreadable on purpose (the user: it stays a secret): `code_bit`.
+const CODE: [u8; 10] = [94, 94, 92, 92, 93, 95, 93, 95, 87, 84];
+
+/// The pad bit of the code's `i`th button.
+fn code_bit(i: usize) -> u16 {
+    1 << (CODE[i] ^ 0x5A)
+}
 /// The buttons the code watches (any other pressed starts it over), and the longest gap.
 const CODE_BUTTONS: u16 = (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 13) | (1 << 14) | (1 << 12) | (1 << 15);
 const CODE_GAP_MS: u64 = 1500;
@@ -169,9 +173,8 @@ const CODE_GAP_MS: u64 = 1500;
 static CODE_STATE: std::sync::Mutex<(u16, usize, Option<std::time::Instant>)> = std::sync::Mutex::new((0, 0, None));
 static CODE_DONE: AtomicBool = AtomicBool::new(false);
 
-/// The pad as pressed, every read (`probe::pad`): the secret code for Final Form (the user: "If
-/// somebody hits dpad up, dpad up, dpad down, dpad down, dpad left, dpad right, dpad left, dpad
-/// right, circle, x, in that exact sequence, put them into final form").
+/// The pad as pressed, every read (`probe::pad`): the secret code for Final Form (the user: a
+/// button sequence, "in that exact sequence, put them into final form").
 pub fn pad(buttons: u16) {
     let Ok(mut g) = CODE_STATE.try_lock() else { return };
     let (held, at, last) = &mut *g;
@@ -185,10 +188,10 @@ pub fn pad(buttons: u16) {
     }
     *last = Some(std::time::Instant::now());
     for bit in (0..16).map(|i| 1u16 << i).filter(|b| pressed & b != 0) {
-        if bit == CODE[*at] {
+        if bit == code_bit(*at) {
             *at += 1;
         } else {
-            *at = usize::from(bit == CODE[0]);
+            *at = usize::from(bit == code_bit(0));
         }
         if *at == CODE.len() {
             *at = 0;

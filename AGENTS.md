@@ -2747,9 +2747,9 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 
 ### 2026-10-19: Stage 231 (Final Form, a secret)
 - The user: "lets work on implementing final form ... instead of it being listed in the drive
-  menu, lets make it a secret": Up, Up, Down, Down, Left, Right, Left, Right, Circle, Cross on the
-  pad (KH1's pad bits 4, 4, 6, 6, 7, 5, 7, 5, 13, 14; at most 1.5 s between presses; another
-  watched button starts it over) asks for Final Form as the Drive list would (`form::pad`, read in
+  menu, lets make it a secret": a button code on the pad (kept out of these notes and stored
+  unreadably in `form::CODE`, the user; at most 1.5 s between presses; another watched button
+  starts it over) asks for Final Form as the Drive list would (`form::pad`, read in
   `probe::pad`; taken in `form::before_step` when KH2 can change him: free, jumping, falling,
   landing or at a move's end, not in a form). The Drive list is unchanged.
 - Final Form: `P_EX100_ULTF` (moveset 5, form id 5; TRIF is Master Form), the same change, cost,
@@ -2761,3 +2761,7 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   their idle roots some 70 units from the hands, Valor's 5): KH1's weapon bones keep the turn from
   base Sora's held Keyblade root to KH1's grip, put on Final's root now
   (`leftblade::final_float`); the left one follows by the same turn (its reach check 400 there).
+
+### 2026-10-19: Stage 232 (Final Form's code kept secret)
+- The user: the code is removed from every readable part (notes, comments, logs); the table in
+  `form.rs` is stored encoded. No change in play.
