@@ -2659,3 +2659,16 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   height reset on the landing. KH2's air Reflect (Final Form's hold) stays.
 - Valor refuses KH1's specials (Sonic Blade, Strike Raid, ...): every command of Sora's KH1 runs
   as a move other than Attack, magic, items and its two air-allowed types, logged.
+
+### 2026-10-19: Stage 223 (the left trail's turn)
+- s222's log: the left trail's effect sat on the left grip (a frame behind), yet the video showed
+  its ribbon well off the blade in a steady direction. KH1 makes an effect's angles from its
+  matrix's rows, normalized (`0x1402A6D60`: atan2 / asin), so a mirrored or sheared grip matrix
+  reads as a wrong turn. The owner is now a rigid copy of the right hand's Keyblade (every bone
+  × one turn) whose turn is the left grip's made proper (orthonormal, the right grip's scale;
+  mirrored, the axis least along the blade turned round), filled at draw time right after the
+  left Keyblade is drawn. Both grips' determinants are logged.
+- Choosing Valor's Keyblade, KH1's preview puts the hovered one in Sora's weapon byte, so the
+  stats shown were his with that Keyblade alone (the user: Strength "capped at 70"): his own
+  weapon's Strength and MP are added then (`equipmenu::valor_preview`, `valorstats::add`).
+- Wall clinks on again by default (`wall_clink`, the user); both inis set on.

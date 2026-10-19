@@ -75,6 +75,25 @@ pub unsafe fn add(member: i32, out: usize) {
     if member != 0 || out < 0x10000 {
         return;
     }
+    // Choosing Valor's Keyblade: KH1's preview has the hovered one as his weapon, so its stats
+    // came out as that Keyblade's alone in his hand; he keeps his own, so it is added (the stats
+    // shown are Valor's: both). (The user: "when hovering over keyblades in the valor form slots,
+    // it'll cap strength at 70".)
+    if let Some((own, hovered)) = super::equipmenu::valor_preview() {
+        let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
+        let s = super::equip::weapon_strength(base, own).unwrap_or(0) as i32;
+        let m = super::equip::weapon_mp(base, own).unwrap_or(0) as i32;
+        let before = rd::<i32>(out + STRENGTH);
+        wr(out + STRENGTH, (before + s).clamp(0, STRENGTH_CAP));
+        let max = (rd::<i32>(out + MAX_MP) + m).max(0);
+        wr(out + MAX_MP, max);
+        clamp_mp(out, max);
+        static P: AtomicU32 = AtomicU32::new(0);
+        if P.fetch_add(1, Ordering::Relaxed) < 30 {
+            log(&format!("Valor pick: stats shown with {hovered:#x} in the left hand and his own {own:#x}: Strength {before} + {s} = {}, max MP {max}", rd::<i32>(out + STRENGTH)));
+        }
+        return;
+    }
     let Some((_, s, m)) = bonus() else { return };
     wr(out + STRENGTH, (rd::<i32>(out + STRENGTH) + s).clamp(0, STRENGTH_CAP));
     let max = (rd::<i32>(out + MAX_MP) + m).max(0);

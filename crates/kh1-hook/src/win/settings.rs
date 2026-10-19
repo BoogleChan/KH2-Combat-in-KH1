@@ -50,7 +50,7 @@ bonus_ap = on\r\n\
 ; on = KH2's own pick, the nearest enemy in reach\r\n\
 auto_aim = off\r\n\
 ; wall_clink: on = a swing that meets a wall clinks off it and bounces Sora back; off = it passes\r\n\
-wall_clink = off\r\n\
+wall_clink = on\r\n\
 ; camera: kh2 = KH2's field camera (follows behind, right stick turns and zooms, R3 resets);\r\n\
 ; kh1 = KH1's own. The Config menu's camera row switches it in game too.\r\n\
 camera = kh2\r\n\
@@ -186,7 +186,7 @@ pub fn get() -> &'static Settings {
             kh2_voice: on(&text, "kh2_voice", "on", false),
             bonus_ap: on(&text, "bonus_ap", "on", true),
             auto_aim: on(&text, "auto_aim", "on", false),
-            wall_clink: on(&text, "wall_clink", "on", false),
+            wall_clink: on(&text, "wall_clink", "on", true),
             kh2_camera: on(&text, "camera", "kh2", true),
             config_row: on(&text, "config_row", "on", true),
             four_shortcuts: on(&text, "shortcuts", "4", true),

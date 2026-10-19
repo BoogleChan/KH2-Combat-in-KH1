@@ -597,6 +597,11 @@ unsafe fn second(f: Queue, instance: usize, view: usize, params: usize, actor: u
     f(instance, view, p.0.as_ptr() as usize, actor);
     IN_SECOND.store(false, Ordering::Relaxed);
     std::ptr::copy_nonoverlapping(saved.as_ptr(), at as *mut u8, saved.len());
+    // The trail's owner from this very frame's matrices (KH1's own trail reads his as drawn; a
+    // step later ours ran a frame behind).
+    if TRAIL_HOOKED.load(Ordering::Relaxed) {
+        fill_owner();
+    }
     static N: AtomicU32 = AtomicU32::new(0);
     log_n(&N, 3, || format!("drawn in the left hand (mesh {mesh:#x}, grip at {:.0?})", left[0].w_axis.truncate()));
 }
@@ -653,6 +658,35 @@ fn load_trail_windows() {
     }
 }
 
+/// The left grip as a proper turn with the right grip's scale, where `left` is: KH1 makes an
+/// effect's angles from its matrix's rows, normalized (`0x1402A6D60`), which reads a mirrored or
+/// sheared matrix as a wrong turn (the user: the left trail floated off the blade). Mirrored, the
+/// axis across the blade the least (the blade: the right grip toward its last bone, `tip`) is
+/// the one turned round, so the blade keeps its way.
+fn proper_like(left: Mat4, right: Mat4, tip: Mat4) -> Mat4 {
+    let m = glam::Mat3::from_mat4(left);
+    let cols = [m.x_axis, m.y_axis, m.z_axis];
+    let d = right.inverse().transform_point3(tip.w_axis.truncate());
+    let d = [d.x.abs(), d.y.abs(), d.z.abs()];
+    let a = (0..3).max_by(|&i, &j| d[i].total_cmp(&d[j])).unwrap_or(0);
+    // Of the other two, the one along the blade more is kept; the last is made from them.
+    let (b, c) = {
+        let o: Vec<usize> = (0..3).filter(|&i| i != a).collect();
+        if d[o[0]] >= d[o[1]] { (o[0], o[1]) } else { (o[1], o[0]) }
+    };
+    let ca = cols[a].normalize_or_zero();
+    let cb = (cols[b] - ca * ca.dot(cols[b])).normalize_or_zero();
+    let cyclic = matches!((a, b, c), (0, 1, 2) | (1, 2, 0) | (2, 0, 1));
+    let cc = if cyclic { ca.cross(cb) } else { cb.cross(ca) };
+    let r = glam::Mat3::from_mat4(right);
+    let scale = [r.x_axis.length(), r.y_axis.length(), r.z_axis.length()];
+    let mut out = [glam::Vec3::ZERO; 3];
+    out[a] = ca * scale[a];
+    out[b] = cb * scale[b];
+    out[c] = cc * scale[c];
+    Mat4::from_cols(out[0].extend(0.0), out[1].extend(0.0), out[2].extend(0.0), left.w_axis)
+}
+
 /// Each KH2 step: our trail owner, a copy of Sora's actor and model instance whose world
 /// matrices are his as KH1 last drew him (the ones its own trail reads, his right one), each
 /// moved by the turn from his right grip to the left one as drawn (`LEFT`, the same frame): the
@@ -674,7 +708,9 @@ unsafe fn fill_owner() -> bool {
     let frame = super::takeover::GAME_FRAME.load(Ordering::Relaxed);
     let Some(left) = LEFT.try_lock().ok().and_then(|g| g.as_ref().filter(|(_, at)| frame.saturating_sub(*at) <= 2).map(|(m, _)| *m)) else { return false };
     let mat = |i: usize| Mat4::from_cols_array(&rd::<[f32; 16]>(world + i * 0x40));
-    let to_left = left[0] * mat(GRIP).inverse();
+    let right = mat(GRIP);
+    let grip = proper_like(left[0], right, mat(GRIP + WEAPON_BONES - 1));
+    let to_left = grip * right.inverse();
     if !to_left.is_finite() {
         return false;
     }
@@ -701,8 +737,10 @@ unsafe fn fill_owner() -> bool {
     std::ptr::copy_nonoverlapping(inst as *const u8, (fake + FAKE_INSTANCE) as *mut u8, INSTANCE_SIZE);
     std::ptr::write_unaligned((fake + ACTOR_INSTANCE) as *mut u32, FAKE_INSTANCE_H.load(Ordering::Relaxed));
     std::ptr::write_unaligned((fake + FAKE_INSTANCE + INST_WORLD) as *mut u32, FAKE_MATS_H.load(Ordering::Relaxed));
+    // (The weapon bones too: a rigid copy of his right hand's Keyblade, so the trail is KH1's
+    // right one exactly, on the left grip.)
     for i in 0..SORA_BONES {
-        let m = if (GRIP..GRIP + WEAPON_BONES).contains(&i) { left[i - GRIP] } else { to_left * mat(i) };
+        let m = to_left * mat(i);
         std::ptr::write_unaligned((fake + FAKE_MATS + i * 0x40) as *mut [f32; 16], m.to_cols_array());
     }
     // Its trail flag (`+0x1CC` 0x800000, which KH1 keeps set while a trail is wanted) follows the
@@ -715,10 +753,14 @@ unsafe fn fill_owner() -> bool {
     static M: AtomicU32 = AtomicU32::new(0);
     log_n(&M, 4, || {
         let p = rd::<[f32; 3]>(sora + 0x10);
+        let d3 = |m: Mat4| glam::Mat3::from_mat4(m).determinant();
         format!(
-            "trail owner filled: right grip at {:.0?}, left grip at {:.0?}, his position {:.0?}",
-            mat(GRIP).w_axis.truncate(),
+            "trail owner filled: right grip at {:.0?} (det {:.2}), left grip at {:.0?} (det {:.2}, as used {:.2}), his position {:.0?}",
+            right.w_axis.truncate(),
+            d3(right),
             left[0].w_axis.truncate(),
+            d3(left[0]),
+            d3(grip),
             p
         )
     });
@@ -766,9 +808,7 @@ unsafe fn trail_step(valor: bool, motion: u16, frame: u32, either: bool) {
     let Ok(mut g) = TRAILS.try_lock() else { return };
     let (trails, was_open) = &mut *g;
     let open = valor && left_window(motion, frame, either);
-    if valor {
-        fill_owner();
-    }
+
     // Those that ended, or aren't ours any more, are forgotten; out of Valor, ended.
     static R: AtomicU32 = AtomicU32::new(0);
     trails.retain_mut(|t| {

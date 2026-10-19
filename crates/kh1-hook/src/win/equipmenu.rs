@@ -288,6 +288,19 @@ unsafe fn sora_in(save: usize, slot: i32) -> bool {
     (0..4).contains(&slot) && rd::<u8>(save + SAVE_PARTY + slot as usize) == 0
 }
 
+/// During a Valor pick whose preview has put another Keyblade in Sora's weapon byte: (his own
+/// weapon, the hovered one). For the stats shown then (`valorstats::add`).
+pub unsafe fn valor_preview() -> Option<(u8, u8)> {
+    let own = PICK_WEAPON.load(Ordering::Relaxed) as u8;
+    if own == 0 {
+        return None;
+    }
+    let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
+    let save = super::menu::save_block(base)?;
+    let now = rd::<u8>(save + WEAPON);
+    (now != own && now != 0).then_some((own, now))
+}
+
 /// Sora's own weapon while a Valor pick's preview may hold another in his weapon byte; the
 /// guard ends once the list is closed and his byte is his own again (KH1's restore).
 unsafe fn pick_guard(save: usize) -> Option<u8> {
