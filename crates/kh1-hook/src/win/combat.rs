@@ -121,6 +121,18 @@ unsafe extern "system" fn exec(actor: usize, row: i32, dir: usize) {
         note(format!("Attack command during KH1's own motion (KH1 row {row}): KH2's once it ends"));
         return;
     }
+    // Valor Form: no KH1 attack row run for a command other than Attack (its specials, which the
+    // command step runs as attack rows; `command` refuses them, this in case one comes another
+    // way).
+    if actor == sora && command != 1 && super::form::in_valor() {
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 30 {
+            log(&format!("KH1 attack row {row} for command {command:#x} refused: not in Valor Form"));
+        }
+        let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
+        sound(4);
+        return;
+    }
     let f: ExecFn = std::mem::transmute(ORIG_EXEC.load(Ordering::Acquire));
     f(actor, row, dir)
 }
@@ -259,8 +271,10 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     // Valor Form: none of KH1's specials (Sonic Blade, Strike Raid, ...: the user, "dont let
     // sora use triangle moves (sonic blade, strike raid etc) in valor form"). Every command of
     // Sora's own that KH1 runs as a move (`0x1402A1470`) other than Attack, magic (refused in
-    // Valor by the menu, `spell_not_yet`), an item, and KH1's two air-allowed types.
-    if actor == sora && super::form::in_valor() && !matches!(kind, 0 | 1 | 2 | ITEM_COMMAND_TYPE | 99 | 0x47) && !NOT_SORAS.contains(&kind) {
+    // Valor by the menu, `spell_not_yet`) and an item. (Type 99 too, which s222 let through: the
+    // command step runs it as attack row 0x3E, `0x1402A4760`; the user, s229: "valor form can
+    // still use strike raid, ragnarok".)
+    if actor == sora && super::form::in_valor() && !matches!(kind, 0 | 1 | 2 | ITEM_COMMAND_TYPE) && !NOT_SORAS.contains(&kind) {
         static N: AtomicU32 = AtomicU32::new(0);
         if N.fetch_add(1, Ordering::Relaxed) < 30 {
             log(&format!("command {kind:#x} ({full:08x}) refused: not in Valor Form"));

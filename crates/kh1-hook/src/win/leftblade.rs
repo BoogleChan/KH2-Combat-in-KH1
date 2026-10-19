@@ -156,9 +156,35 @@ struct State {
 
 static STATE: Mutex<State> = Mutex::new(State { loaded: None, pending: None, failed: Vec::new(), bufs: Vec::new() });
 /// KH2's left Keyblade this frame (KH2 model space), from `takeover`.
-static KH2_LEFT: Mutex<Option<(Vec<Mat4>, Instant)>> = Mutex::new(None);
+/// Its last few steps, each with the body's root bone of the same step (`note_pose` takes the one
+/// whose body it is drawing, the user: the second Keyblade jittered as Valor fell in place).
+static KH2_LEFT: Mutex<std::collections::VecDeque<(u64, Vec<Mat4>, Instant)>> = Mutex::new(std::collections::VecDeque::new());
+
+/// A body pose's signature (its bones' places, bit for bit).
+fn body_sig(body: &[Mat4]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for m in body {
+        for v in m.w_axis.to_array() {
+            v.to_bits().hash(&mut h);
+        }
+    }
+    h.finish()
+}
+/// Sora's model-to-world as last posed (the left Keyblade's bones are kept in model space and put
+/// in the world with the frame's own placement: a pose a frame old no longer lags behind him).
+static TO_WORLD: Mutex<Option<Mat4>> = Mutex::new(None);
 /// The left hand's weapon bones in KH1's world, and the game frame they were made on.
 static LEFT: Mutex<Option<([Mat4; WEAPON_BONES], u64)>> = Mutex::new(None);
+
+/// The left hand's weapon bones in KH1's world now (`LEFT`, model space, by this frame's
+/// placement), if posed within 2 game frames.
+fn left_world() -> Option<[Mat4; WEAPON_BONES]> {
+    let frame = super::takeover::GAME_FRAME.load(Ordering::Relaxed);
+    let m = LEFT.try_lock().ok().and_then(|g| g.as_ref().filter(|(_, at)| frame.saturating_sub(*at) <= 2).map(|(m, _)| *m))?;
+    let w = TO_WORLD.try_lock().ok().and_then(|g| *g)?;
+    Some(m.map(|b| w * b))
+}
 static ORIG_TRAIL_START: AtomicUsize = AtomicUsize::new(0);
 static TRAIL_HOOKED: AtomicBool = AtomicBool::new(false);
 /// The trail id KH1 was last asked for Sora (`u32::MAX`: none yet).
@@ -471,14 +497,17 @@ unsafe extern "system" fn wpn_release(record: usize) -> u64 {
 /// - the clip playing (`motion`, `frame`);
 /// - whether any of the clip's trail windows is open (`trail`, used if the left weapon's own
 ///   ranges couldn't be read).
-pub fn kh2_left(bones: Option<&[Mat4]>, motion: u16, frame: u32, trail: bool) {
+pub fn kh2_left(bones: Option<&[Mat4]>, body: &[Mat4], motion: u16, frame: u32, trail: bool) {
     if !INSTALLED.load(Ordering::Relaxed) {
         return;
     }
     let valor = super::form::in_valor() && SHOWN.load(Ordering::Relaxed) && MESH.load(Ordering::Relaxed) != 0;
     if valor {
-        if let Ok(mut g) = KH2_LEFT.try_lock() {
-            *g = bones.filter(|b| !b.is_empty()).map(|b| (b.to_vec(), Instant::now()));
+        if let (Ok(mut g), Some(b)) = (KH2_LEFT.try_lock(), bones.filter(|b| !b.is_empty())) {
+            g.push_back((body_sig(body), b.to_vec(), Instant::now()));
+            while g.len() > 6 {
+                g.pop_front();
+            }
         }
     }
     unsafe { trail_step(valor, motion, frame, trail) };
@@ -506,7 +535,15 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
         return;
     }
     static N: AtomicU32 = AtomicU32::new(0);
-    let Some(left) = KH2_LEFT.try_lock().ok().and_then(|g| g.as_ref().filter(|(_, t)| t.elapsed().as_secs_f32() < 0.15).map(|(b, _)| b[0])) else { return };
+    if let Ok(mut w) = TO_WORLD.try_lock() {
+        *w = Some(*to_world);
+    }
+    // KH2's left Keyblade of the step whose body this is (else the latest).
+    let Some(left) = KH2_LEFT.try_lock().ok().and_then(|g| {
+        let fresh = |t: &Instant| t.elapsed().as_secs_f32() < 0.15;
+        let sig = body_sig(kh2_body);
+        g.iter().rev().find(|(r, _, t)| *r == sig && fresh(t)).or_else(|| g.back().filter(|(_, _, t)| fresh(t))).map(|(_, b, _)| b[0])
+    }) else { return };
     let Some(rig) = super::pose::kh2().and_then(|k| k.valor.as_ref()).map(|f| f.rig.clone()) else { return };
     let (Some(sr), Some(sl)) = (rig.weapons.first().and_then(|w| w.bone), rig.weapons.get(1).and_then(|w| w.bone)) else {
         log_n(&N, 5, || "the Valor rig has no second weapon bone".into());
@@ -536,7 +573,7 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
     let inv_grip = kh1[GRIP].inverse();
     let mut out = [Mat4::IDENTITY; WEAPON_BONES];
     for (i, m) in out.iter_mut().enumerate() {
-        *m = *to_world * grip * inv_grip * kh1[GRIP + i];
+        *m = grip * inv_grip * kh1[GRIP + i];
     }
     log_n(&N, 3, || format!("left grip posed, {from_hand:.1} units from the left hand"));
     if let Ok(mut g) = LEFT.try_lock() {
@@ -571,8 +608,7 @@ unsafe fn second(f: Queue, instance: usize, view: usize, params: usize, actor: u
     if rd::<u64>(params + P_WEAPON) == 0 {
         return;
     }
-    let frame = super::takeover::GAME_FRAME.load(Ordering::Relaxed);
-    let Some(left) = LEFT.try_lock().ok().and_then(|g| g.as_ref().filter(|(_, at)| frame.saturating_sub(*at) <= 2).map(|(m, _)| *m)) else { return };
+    let Some(left) = left_world() else { return };
     if !readable(instance + INST_WORLD, 4) {
         return;
     }
@@ -705,8 +741,7 @@ unsafe fn fill_owner() -> bool {
     if !readable(world, SORA_BONES * 0x40) {
         return false;
     }
-    let frame = super::takeover::GAME_FRAME.load(Ordering::Relaxed);
-    let Some(left) = LEFT.try_lock().ok().and_then(|g| g.as_ref().filter(|(_, at)| frame.saturating_sub(*at) <= 2).map(|(m, _)| *m)) else { return false };
+    let Some(left) = left_world() else { return false };
     let mat = |i: usize| Mat4::from_cols_array(&rd::<[f32; 16]>(world + i * 0x40));
     let right = mat(GRIP);
     let grip = proper_like(left[0], right, mat(GRIP + WEAPON_BONES - 1));
@@ -772,8 +807,8 @@ unsafe fn fill_owner() -> bool {
 unsafe fn trail_report(effect: usize) -> String {
     let pos = super::pose::ptr(rd::<u32>(effect));
     let at = if readable(pos, 12) { format!("{:.0?}", rd::<[f32; 3]>(pos)) } else { "?".into() };
-    let grip = LEFT.try_lock().ok().and_then(|g| g.as_ref().map(|(m, _)| m[0].w_axis.truncate())).map_or("?".into(), |v| format!("{v:.0?}"));
-    let tip = LEFT.try_lock().ok().and_then(|g| g.as_ref().map(|(m, _)| m[WEAPON_BONES - 1].w_axis.truncate())).map_or("?".into(), |v| format!("{v:.0?}"));
+    let grip = left_world().map(|m| m[0].w_axis.truncate()).map_or("?".into(), |v| format!("{v:.0?}"));
+    let tip = left_world().map(|m| m[WEAPON_BONES - 1].w_axis.truncate()).map_or("?".into(), |v| format!("{v:.0?}"));
     format!("effect at {at}, left grip {grip}, left last bone {tip}, state {:#x}", rd::<u32>(effect + FX_STATE))
 }
 

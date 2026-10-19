@@ -157,6 +157,25 @@ unsafe fn mp(sora: usize) -> i32 {
     rd::<i32>(stats + 0x44)
 }
 
+/// KH1's HP change `(actor, amount)` (`0x1402A2790`: clamped to the maximum, its HUD mirror kept).
+const HP_ADD_RVA: super::addr::Rva = super::addr::Rva(0x2A2790);
+
+/// Sora's HP back to full as a Drive starts (the user: "activating a drive form should restore
+/// soras health entirely", as KH2's does).
+unsafe fn heal_full(sora: usize) {
+    let stats = pose::ptr(rd::<u32>(sora + 0x6C));
+    if stats < 0x10000 {
+        return;
+    }
+    let (now, max) = (rd::<i32>(stats + 0x3C), rd::<i32>(stats + 0x40));
+    if max > now && now > 0 {
+        let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
+        let add: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(base + HP_ADD_RVA);
+        add(sora, max - now);
+        log(&format!("Drive: HP {now} -> {} of {max}", rd::<i32>(stats + 0x3C)));
+    }
+}
+
 unsafe fn hp(sora: usize) -> i32 {
     let stats = pose::ptr(rd::<u32>(sora + 0x6C));
     if stats < 0x10000 {
@@ -334,6 +353,7 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
             }
             let before = mp(actor);
             super::reflect::pay_mp(actor, COST);
+            heal_full(actor);
             d.change = Some(0);
             d.changing_to = Some(kind);
             CHANGING.store(true, Ordering::Relaxed);

@@ -2732,3 +2732,15 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - Wisdom: a KH1-only spell (Gravity, Stop, Aero) is cut by an Attack from its cast motion's input
   frame (Thunder's, `AllowReactionCommand`), whether or not KH1 counted its shot yet.
 - Aerial Dodge (motion 202) in `kh2_sounds`'s default list: its sound 999019 at frame 1.
+
+### 2026-10-19: Stage 230 (Drive heals; no specials in Valor; the left Keyblade steady)
+- A Drive restores Sora's HP to full as it starts (`form::heal_full`, KH1's own HP change
+  `0x1402A2790 (actor, amount)`, which keeps its HUD mirror).
+- Valor: KH1's specials still came out (the user: Strike Raid, Ragnarok): the command step runs
+  command type 99 as attack row 0x3E (`0x1402A4760`), and s222 had let 99 and 0x47 through. Now
+  Valor refuses every command of Sora's KH1 runs as a move but Attack, magic and items, and its
+  attack-row executor refuses any row for a command other than Attack (logged).
+- The left Keyblade jittered as Valor fell in place: its bones were kept in KH1's world, so a pose
+  a frame old was drawn where he had been. Now kept in model space and placed with the frame's
+  own placement, and paired with KH2's left weapon of the very step whose body is drawn (a
+  signature of the body's bones).
