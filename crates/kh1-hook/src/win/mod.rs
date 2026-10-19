@@ -25,6 +25,8 @@ mod probe;
 mod reflect;
 mod takeover;
 mod tint;
+mod valor;
+mod equip;
 mod sys;
 
 use std::ffi::c_void;

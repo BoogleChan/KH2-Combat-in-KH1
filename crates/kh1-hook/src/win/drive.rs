@@ -22,7 +22,9 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 /// The forms (command record, word index, name).
-pub const FORMS: [(u8, u16, &str); 1] = [(0x7E, 0x1FE, "Wisdom Form")];
+/// (In `form::Kind::ALL`'s order, KH2's: Valor, then Wisdom. Wisdom kept its record and word; Valor
+/// takes the next free ones, record 0x7F and word 0x1FD.)
+pub const FORMS: [(u8, u16, &str); 2] = [(0x7F, 0x1FD, "Valor Form"), (0x7E, 0x1FE, "Wisdom Form")];
 /// The record argument of form `k` (KH1's spells are 0..6, Reflect 7).
 pub const FORM_ARG: u8 = 0x10;
 /// Summon's command (its record opens the summon list) and the summon-is-out one.
@@ -160,8 +162,8 @@ unsafe fn ensure_records(base: usize) -> bool {
 }
 
 /// Whether form `k` can be chosen now (`form`: its MP, or Revert in the form).
-unsafe fn usable(actor: usize, _k: usize) -> bool {
-    super::form::usable(actor)
+unsafe fn usable(actor: usize, k: usize) -> bool {
+    super::form::Kind::ALL.get(k).is_some_and(|&kind| super::form::usable(actor, kind))
 }
 
 /// After KH1's battle-menu fill (and Reflect's entry): page 2's Drive row and list.
@@ -244,7 +246,8 @@ pub fn word(index: i32) -> Option<usize> {
 /// (or reverts, in the form).
 pub unsafe fn chosen(actor: usize, k: usize) {
     let name = FORMS.get(k).map_or("?", |f| f.2);
-    match super::form::choose(actor) {
+    let Some(&kind) = super::form::Kind::ALL.get(k) else { return };
+    match super::form::choose(actor, kind) {
         Ok(what) => {
             SWALLOW_CONFIRM.store(true, Ordering::Relaxed);
             log(&format!("Drive: {what} chosen"));

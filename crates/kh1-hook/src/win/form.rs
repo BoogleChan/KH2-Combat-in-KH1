@@ -17,6 +17,12 @@
 //!   swap and the form's short arrival; in the air he is held where he is through it.
 //! - its shots and its spells: `formmagic`.
 //! The cost is MP (`COST`, KH1's own payment), not a Drive gauge, which KH1 has none of.
+//!
+//! Valor Form (stage 211, the user: "i want to try to add valor form"): the same change and
+//! revert, `P_EX100_BTLF` (moveset 2, its two Keyblades' swings), its growth ability High Jump
+//! (at MAX, as Wisdom's Quick Run), no magic (KH2's Valor can't cast), and its second Keyblade
+//! (`valor`): entered only with an eligible one (the user: "If no keyblade is eligible to be in
+//! that slot, dont let players go into valor form").
 
 use super::{log, pose};
 use character_core::{Abilities, Character, EventKind};
@@ -25,7 +31,7 @@ use kh2_rig::RigAnim;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 
-pub use super::formmagic::{effect, element_sounds, package_spell, shots_step, spell_file, LAST_PACKAGE, SPELL_NAMES};
+pub use super::formmagic::{element_sounds, package_spell, shots_step, spell_file, LAST_PACKAGE, SPELL_NAMES};
 
 pub const DRIVE_MOTION: u16 = 52;
 pub const ARRIVE_MOTION: u16 = 53;
@@ -54,8 +60,42 @@ const DRAIN_FRAMES: u32 = 2;
 /// KH2's magic sub offset in Wisdom Form.
 pub const MAGIC_SUB: i32 = 10;
 
-/// A request: 1 Wisdom, 2 revert (the menu), 3 knocked out (`hurt`).
+/// The forms (`drive::FORMS` in the same order).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Valor,
+    Wisdom,
+}
+
+impl Kind {
+    pub const ALL: [Kind; 2] = [Kind::Valor, Kind::Wisdom];
+    pub fn name(self) -> &'static str {
+        match self {
+            Kind::Valor => "Valor Form",
+            Kind::Wisdom => "Wisdom Form",
+        }
+    }
+    fn code(self) -> u8 {
+        self as u8 + 1
+    }
+    fn from_code(c: u8) -> Option<Kind> {
+        Kind::ALL.get((c as usize).checked_sub(1)?).copied()
+    }
+    /// Its KH2 data, if it loaded.
+    pub fn data(self, kh2: &pose::Kh2) -> Option<&pose::Form> {
+        match self {
+            Kind::Valor => kh2.valor.as_ref(),
+            Kind::Wisdom => kh2.wisdom.as_ref(),
+        }
+    }
+}
+
+/// A request: 1 a form (`WANT`), 2 revert (the menu), 3 knocked out (`hurt`).
 static REQUEST: AtomicU8 = AtomicU8::new(0);
+/// The form asked for (`Kind::code`).
+static WANT: AtomicU8 = AtomicU8::new(0);
+/// The form he is in (`Kind::code`, 0 none).
+static CURRENT: AtomicU8 = AtomicU8::new(0);
 /// In a form (the menu's entry reads "Revert"), or changing into one.
 static IN_FORM: AtomicBool = AtomicBool::new(false);
 static CHANGING: AtomicBool = AtomicBool::new(false);
@@ -71,13 +111,31 @@ pub fn in_form() -> bool {
     IN_FORM.load(Ordering::Relaxed)
 }
 
+/// The form he is in.
+pub fn current() -> Option<Kind> {
+    if !in_form() {
+        return None;
+    }
+    Kind::from_code(CURRENT.load(Ordering::Relaxed))
+}
+
+/// In Wisdom Form (its shots, its spells, its look).
+pub fn in_wisdom() -> bool {
+    current() == Some(Kind::Wisdom)
+}
+
+/// In Valor Form (no magic).
+pub fn in_valor() -> bool {
+    current() == Some(Kind::Valor)
+}
+
 pub fn busy() -> bool {
     CHANGING.load(Ordering::Relaxed) || REQUEST.load(Ordering::Relaxed) != 0
 }
 
 /// KH2's magic sub offset now (`reflect`).
 pub fn magic_sub() -> i32 {
-    if in_form() {
+    if in_wisdom() {
         MAGIC_SUB
     } else {
         0
@@ -113,20 +171,29 @@ pub fn accept_now() -> bool {
     !busy() && (super::takeover::with_kh2(|c, _| c.can_change_form()).unwrap_or(false) || !in_form() && super::takeover::kh1_cut_window())
 }
 
-/// Whether the Drive entry can be chosen now (`drive`'s menu): reverting in the form, else MP
-/// for it and KH2 having Sora, its data loaded.
-pub unsafe fn usable(sora: usize) -> bool {
+/// Whether form `kind`'s entry can be chosen now (`drive`'s menu): reverting in a form, else MP
+/// for it and KH2 having Sora, its data loaded, and what the form itself needs (Valor's second
+/// Keyblade, `valor`).
+pub unsafe fn usable(sora: usize, kind: Kind) -> bool {
     if busy() {
         return false;
     }
     if in_form() {
         return true;
     }
-    pose::kh2().is_some_and(|k| k.wisdom.is_some()) && (super::takeover::kh2_has() || super::takeover::kh1_cut_window()) && sora > 0x10000 && mp(sora) > COST_MP
+    pose::kh2().is_some_and(|k| kind.data(k).is_some()) && (super::takeover::kh2_has() || super::takeover::kh1_cut_window()) && sora > 0x10000 && mp(sora) > COST_MP && own_needs(kind).is_ok()
+}
+
+/// What a form needs besides MP: Valor its second Keyblade (`valor::keyblade`).
+unsafe fn own_needs(kind: Kind) -> Result<(), String> {
+    match kind {
+        Kind::Valor => super::valor::keyblade().map(|_| ()).ok_or_else(|| "no Keyblade for Valor's second hand (one Sora owns that isn't equipped)".into()),
+        Kind::Wisdom => Ok(()),
+    }
 }
 
 /// Chosen from the Drive list (`drive::chosen`). Returns why not, if refused.
-pub unsafe fn choose(sora: usize) -> Result<&'static str, String> {
+pub unsafe fn choose(sora: usize, kind: Kind) -> Result<&'static str, String> {
     if busy() {
         return Err("a change is under way".into());
     }
@@ -134,9 +201,10 @@ pub unsafe fn choose(sora: usize) -> Result<&'static str, String> {
         REQUEST.store(2, Ordering::Relaxed);
         return Ok("Revert");
     }
-    if !pose::kh2().is_some_and(|k| k.wisdom.is_some()) {
-        return Err("Wisdom Form's files didn't load".into());
+    if !pose::kh2().is_some_and(|k| kind.data(k).is_some()) {
+        return Err(format!("{}'s files didn't load", kind.name()));
     }
+    own_needs(kind)?;
     let cut = super::takeover::kh1_cut_window();
     if !super::takeover::kh2_has() && !cut {
         return Err("KH1 has Sora".into());
@@ -145,12 +213,13 @@ pub unsafe fn choose(sora: usize) -> Result<&'static str, String> {
     if have <= COST_MP {
         return Err(format!("MP {have}: it costs {COST_MP} and needs some left to run on"));
     }
+    WANT.store(kind.code(), Ordering::Relaxed);
     REQUEST.store(1, Ordering::Relaxed);
     if cut && !super::takeover::kh2_has() {
         // (KH2 takes him out of KH1's move this frame and changes him.)
         super::takeover::DRIVE_CUT.store(true, Ordering::Relaxed);
     }
-    Ok("Wisdom Form")
+    Ok(kind.name())
 }
 
 /// The Driver's form state (`takeover`).
@@ -162,9 +231,12 @@ pub struct Drive {
     form: Option<InForm>,
     /// Out of MP: a revert as soon as he can change.
     revert: bool,
+    /// The form the change under way goes to.
+    changing_to: Option<Kind>,
 }
 
 struct InForm {
+    kind: Kind,
     /// Half frames toward the next MP drained (2 a frame in battle, 1 out of it).
     left: u32,
     sora: Abilities,
@@ -174,23 +246,23 @@ struct InForm {
 
 /// The form's controller data while in it, else Sora's.
 pub fn character<'a>(d: &Drive, kh2: &'a pose::Kh2) -> &'a Character {
-    match (&d.form, &kh2.wisdom) {
-        (Some(_), Some(f)) => &f.character,
-        _ => &kh2.character,
+    match d.form.as_ref().and_then(|f| f.kind.data(kh2)) {
+        Some(f) => &f.character,
+        None => &kh2.character,
     }
 }
 
 pub fn battle<'a>(d: &Drive, kh2: &'a pose::Kh2) -> &'a Arc<Battle> {
-    match (&d.form, &kh2.wisdom) {
-        (Some(_), Some(f)) => &f.battle,
-        _ => &kh2.battle,
+    match d.form.as_ref().and_then(|f| f.kind.data(kh2)) {
+        Some(f) => &f.battle,
+        None => &kh2.battle,
     }
 }
 
 /// The form's abilities (KH2's, exe): Sora's support abilities carry over, his action and
 /// growth ones don't; the form's own growth ability at its level; every combo row of the form's
 /// table unlocked.
-fn form_abilities(sora: &Abilities, form: &Character) -> Abilities {
+fn form_abilities(sora: &Abilities, form: &Character, kind: Kind) -> Abilities {
     let mut a = Abilities {
         guard: form.moveset.clips.contains_key(&character_core::motion::GUARD),
         aerial_recovery: false,
@@ -200,9 +272,10 @@ fn form_abilities(sora: &Abilities, form: &Character) -> Abilities {
         negative_combo: sora.negative_combo,
         combo_master: sora.combo_master,
         one_swing_on_miss: sora.one_swing_on_miss,
-        high_jump: 0,
-        // (The user: Wisdom with Quick Run MAX.)
-        quick_run: 4,
+        // (Each form's growth ability at MAX: the user, Wisdom with Quick Run MAX; Valor's High
+        // Jump the same.)
+        high_jump: if kind == Kind::Valor { 4 } else { 0 },
+        quick_run: if kind == Kind::Wisdom { 4 } else { 0 },
         aerial_dodge: 0,
         glide: 0,
         dodge_roll: 0,
@@ -241,6 +314,7 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
     }
     match REQUEST.swap(0, Ordering::Relaxed) {
         1 if d.form.is_none() && d.change.is_none() => {
+            let Some(kind) = Kind::from_code(WANT.load(Ordering::Relaxed)) else { return };
             // (Taken on the frame it was pressed in, `accept_now`; in the air too, held there.)
             if mp(actor) <= COST_MP {
                 log(&format!("Drive: MP {} short of {COST_MP} by now", mp(actor)));
@@ -254,8 +328,9 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
             let before = mp(actor);
             super::reflect::pay_mp(actor, COST);
             d.change = Some(0);
+            d.changing_to = Some(kind);
             CHANGING.store(true, Ordering::Relaxed);
-            log(&format!("Drive: Wisdom Form (MP {before} -> {}), Sora's Drive motion{}", mp(actor), if air { ", held in the air" } else { "" }));
+            log(&format!("Drive: {} (MP {before} -> {}), Sora's Drive motion{}", kind.name(), mp(actor), if air { ", held in the air" } else { "" }));
         }
         2 if d.form.is_some() => {
             revert(d, ch, anim, kh2, "the Revert command");
@@ -280,16 +355,23 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
 
 unsafe fn arrive(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &pose::Kh2) {
     CHANGING.store(false, Ordering::Relaxed);
-    let Some(f) = &kh2.wisdom else { return };
+    let kind = d.changing_to.take().unwrap_or(Kind::Wisdom);
+    let Some(f) = kind.data(kh2) else { return };
     let sora = ch.abilities.clone();
-    let own = form_abilities(&sora, &f.character);
+    let own = form_abilities(&sora, &f.character, kind);
     swap(ch, anim, &f.character, &f.rig, own.clone());
     super::kh2fx::owner_gone();
     // (Still held in the air through it; then he falls.)
-    ch.play_held(ARRIVE_MOTION, true);
-    d.form = Some(InForm { left: 0, sora, own, logged_s: 0 });
+    if ch.clip_exists(ARRIVE_MOTION) {
+        ch.play_held(ARRIVE_MOTION, true);
+    }
+    d.form = Some(InForm { kind, left: 0, sora, own, logged_s: 0 });
+    CURRENT.store(kind.code(), Ordering::Relaxed);
     IN_FORM.store(true, Ordering::Relaxed);
-    log(&format!("Wisdom Form (Lv{LEVEL}): yellow MP drained 1 every {DRAIN_FRAMES} frames of battle (half as fast out of it), Quick Run MAX"));
+    if kind == Kind::Valor {
+        super::valor::started();
+    }
+    log(&format!("{} (Lv{LEVEL}): yellow MP drained 1 every {DRAIN_FRAMES} frames of battle (half as fast out of it), {} MAX", kind.name(), if kind == Kind::Valor { "High Jump" } else { "Quick Run" }));
 }
 
 /// Back to Sora: what played is cut, he is free with his movement (the user: on the ground
@@ -299,8 +381,13 @@ unsafe fn revert(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     CHANGING.store(false, Ordering::Relaxed);
     d.change = None;
     d.revert = false;
+    d.changing_to = None;
     let Some(f) = d.form.take() else { return };
     IN_FORM.store(false, Ordering::Relaxed);
+    CURRENT.store(0, Ordering::Relaxed);
+    if f.kind == Kind::Valor {
+        super::valor::ended();
+    }
     swap(ch, anim, &kh2.character, &kh2.rig, f.sora);
     super::formmagic::end_all();
     super::kh2fx::owner_gone();
@@ -340,7 +427,7 @@ pub fn abilities(d: &mut Drive, ch: &mut Character) {
 /// half as often out of it (KH2's gauge drains so); with none left, back to Sora (on the
 /// ground, `before_step`).
 pub unsafe fn after_step(d: &mut Drive, actor: usize, battle: bool) {
-    super::tint::refresh(actor, d.form.is_some());
+    super::tint::refresh(actor, d.form.as_ref().is_some_and(|f| f.kind == Kind::Wisdom));
     let Some(f) = d.form.as_mut() else { return };
     f.left += if battle { 2 } else { 1 };
     if f.left >= DRAIN_FRAMES * 2 {
@@ -350,13 +437,13 @@ pub unsafe fn after_step(d: &mut Drive, actor: usize, battle: bool) {
             super::reflect::pay_mp(actor, 1);
             if mp(actor) != before.0 && f.logged_s < 40 {
                 f.logged_s += 1;
-                log(&format!("Wisdom Form: a blue bar broken into yellow: MP {} -> {} (yellow {} -> {})", before.0, mp(actor), before.1, yellow(actor)));
+                log(&format!("{}: a blue bar broken into yellow: MP {} -> {} (yellow {} -> {})", f.kind.name(), before.0, mp(actor), before.1, yellow(actor)));
             }
         }
     }
     if !super::reflect::has_mp(actor, 1) && !d.revert {
         d.revert = true;
-        log("Wisdom Form: out of MP");
+        log(&format!("{}: out of MP", f.kind.name()));
     }
 }
 
@@ -375,7 +462,16 @@ pub fn own_motion(motion: u16) -> bool {
     matches!(motion, DRIVE_MOTION | REVERT_FX)
 }
 
-/// Whether this frame's event goes to the form (its shots) instead of Sora's effects.
+/// Whether this frame's event goes to the form instead of Sora's effects: Wisdom's shots
+/// (`effect`); Valor's elements are its own archive's (`P_EX100_BTLF.a.us`), not loaded yet, so
+/// they aren't played as Sora's.
 pub fn takes(d: &Drive, e: &EventKind) -> bool {
     d.form.is_some() && matches!(e, EventKind::Effect(_))
+}
+
+/// A frame trigger 1 of the form's motion: Wisdom's shots.
+pub fn effect(n: i16) {
+    if in_wisdom() {
+        super::formmagic::effect(n);
+    }
 }

@@ -1,0 +1,49 @@
+//! Valor Form's second Keyblade (the user: "add the slot in menu for valor form, and
+//! automatically put a keyblade that isnt equipped into the slot. If no keyblade is eligible to
+//! be in that slot, dont let players go into valor form").
+//!
+//! - The slot: a Keyblade id kept in the save at `equip::VALOR_OFF` (`docs/kh1-equipment.md`).
+//! - Eligible: a Keyblade Sora owns with a copy not equipped (`equip::valor_candidates`). The
+//!   slot's Keyblade is kept while it stays eligible; otherwise the eligible one with the most
+//!   Strength is put in it (`equip::valor_keyblade`); with none, the slot is emptied and Valor
+//!   can't be chosen (`form::usable` / `form::choose`).
+//! - In the form, its swings' second-hand hitboxes are KH2's (the rig's second weapon); its model
+//!   in his left hand: `started` / `ended`.
+
+use super::log;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// The Keyblade in Valor's slot, as last decided (0 none), for the log.
+static CHOSEN: AtomicU32 = AtomicU32::new(0);
+
+/// The Keyblade Valor uses now (its item id), the slot filled or fixed as it goes; `None` when
+/// Sora owns no Keyblade with a copy free.
+pub unsafe fn keyblade() -> Option<u8> {
+    let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
+    let save = super::menu::save_block(base)?;
+    let pick = super::equip::valor_keyblade(base);
+    let slot = (save + super::equip::VALOR_OFF) as *mut u8;
+    let stored = std::ptr::read_unaligned(slot);
+    let want = pick.unwrap_or(0);
+    if stored != want {
+        std::ptr::write_unaligned(slot, want);
+    }
+    if CHOSEN.swap(want as u32, Ordering::Relaxed) != want as u32 {
+        let name = pick.and_then(|k| super::equip::item_name(base, k)).unwrap_or_else(|| "none".into());
+        log(&format!(
+            "Valor's Keyblade: {name} ({want:#x}; Sora's {:?}, Keyblades owned {:02x?})",
+            super::equip::sora_weapon(base),
+            super::equip::owned_keyblades(base)
+        ));
+    }
+    pick
+}
+
+/// Sora became Valor: his second Keyblade comes out.
+pub unsafe fn started() {
+    let k = keyblade();
+    log(&format!("Valor Form: second Keyblade {:?}", k.map(|k| format!("{k:#x}"))));
+}
+
+/// Back from Valor.
+pub unsafe fn ended() {}

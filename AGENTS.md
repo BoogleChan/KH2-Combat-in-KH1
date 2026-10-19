@@ -2522,3 +2522,18 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   until KH1's slot is a plain one (0..7) or KH1 takes him for something new, the leftover isn't
   KH1's own action. KH1 greys its menu while its cast plays, so Attack is taken in
   `combat::run_entry` as KH2's press meanwhile (`takeover::cut_left`).
+
+### 2026-10-19: Stage 211 (Valor Form)
+- The user: "i want to try to add valor form, and add the slot in menu for valor form, and
+  automatically put a keyblade that isnt equipped into the slot. If no keyblade is eligible to be
+  in that slot, dont let players go into valor form".
+- `form.rs` takes several forms (`form::Kind`: Valor, Wisdom, in KH2's order; `drive::FORMS`
+  gets Valor first, record 0x7F, word 0x1FD; Wisdom keeps 0x7E / 0x1FE, its argument now 0x11).
+  Valor: `P_EX100_BTLF` (moveset 2: its swings with both Keyblades' hitboxes, the rig's two
+  weapons), High Jump MAX (as Wisdom's Quick Run), no magic (spells refused with KH1's "can't"),
+  its motions' effect elements not played (they're its own archive's, not loaded yet), Sora's
+  footsteps. Wisdom-only paths (`formmagic`, the KH1-spell casts on Wisdom's motions, the tint,
+  the footsteps rule) test `form::in_wisdom`.
+- Valor's Keyblade (`valor.rs`, `equip.rs` from a helper session: `docs/kh1-equipment.md`): a
+  Keyblade Sora owns with a copy not equipped; the save's `+0x488` keeps it while eligible, else
+  the one with the most Strength; none: Valor greyed and refused.

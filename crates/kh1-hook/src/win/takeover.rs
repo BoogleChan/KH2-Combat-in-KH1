@@ -542,7 +542,7 @@ pub fn command_started(shots: usize, spell: Option<u8>) {
     // as thunder, available input window, when the animation is supposed to end"), and slides
     // as the form's casts do ("the same velocity in his casts as he does for the KH2 adjacent
     // spells").
-    let fc = spell.filter(|_| super::form::in_form()).and_then(|sp| {
+    let fc = spell.filter(|_| super::form::in_wisdom()).and_then(|sp| {
         let air = AIR_CAST.try_lock().ok().is_some_and(|a| a.is_some());
         let level = unsafe { super::reflect::kh1_spell_level(sp) };
         let motion = super::formmagic::kh1_spell_motion(level, air);
@@ -1802,7 +1802,7 @@ unsafe fn play_step(actor: usize, kind: i16) {
 /// he is gliding across the ground"; the form's own walk and run have none anyway).
 unsafe fn kh2_footsteps(actor: usize, out: &Output, anim: &RigAnim) {
     static PREV: Mutex<Option<(u16, bool, f32)>> = Mutex::new(None);
-    let in_form = super::form::in_form();
+    let in_form = super::form::in_wisdom();
     let looping = matches!(out.state, StateName::Walk | StateName::Run | StateName::Idle);
     let now = anim.playing();
     let mut steps: Vec<i16> = Vec::new();

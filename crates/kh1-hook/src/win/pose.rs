@@ -136,6 +136,8 @@ pub struct Kh2 {
     pub magi: kh2_formats::pref::MagiTable,
     /// Wisdom Form (`form`): its model's moveset and motions, its script and effect archive.
     pub wisdom: Option<Form>,
+    /// Valor Form (`form`, stage 211): its moveset (two Keyblades' swings) and motions.
+    pub valor: Option<Form>,
     roots: HashMap<u16, Vec<[f32; 3]>>,
     /// Walk and run (battle, field): ground speed in KH2 units per second, from the planted
     /// foot's travel against the hips.
@@ -471,7 +473,22 @@ pub fn load_kh2() {
             } else {
                 None
             };
-            Ok(Kh2 { rig, character: sora.character.clone(), battle: Arc::new(sora.combat.battle.clone()), magi: sora.magi.clone(), wisdom, roots, ground })
+            let valor = if super::settings::get().drive {
+                let t = Instant::now();
+                match load_form(&install, source, kh2_data::sora::FORMS[0], rig.skeleton.len()) {
+                    Ok(f) => {
+                        log(&format!("KH2 Valor Form loaded: {} motions, {} combo rows, {} weapons, in {:.1}s", f.rig.motions.len(), f.character.moveset.combo_rows.len(), f.rig.weapons.len(), t.elapsed().as_secs_f32()));
+                        Some(f)
+                    }
+                    Err(e) => {
+                        log(&format!("KH2 Valor Form did not load: {e}"));
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            Ok(Kh2 { rig, character: sora.character.clone(), battle: Arc::new(sora.combat.battle.clone()), magi: sora.magi.clone(), wisdom, valor, roots, ground })
         })();
         if let Err(e) = &r {
             log(&format!("KH2 Sora did not load: {e}"));
@@ -720,7 +737,7 @@ fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
     // show the form's own cast (the user: "any kh1 magic that doesn't have a kh2 equivalent
     // (gravity, stop) should use the normal thunder/cure wisdom form animation but still cast
     // their respected magic"): Gravity Thunder's, Stop and Aero Cure's; the air ones in the air.
-    if super::form::in_form() {
+    if super::form::in_wisdom() {
         if let Some(spell @ 4..=6) = super::takeover::kh1_spell_now() {
             let air = super::takeover::air_cast().is_some();
             let motion = match (spell, air) {
@@ -837,8 +854,8 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
     }
     f.play = Some(play);
     // (In a Drive Form, the form's motions: KH1's own moves and spells then look like the form's.)
-    let rig: &kh2_data::sora::Rig = match (super::form::in_form(), &kh2.wisdom) {
-        (true, Some(w)) if w.rig.motions.contains_key(&motion) => &w.rig,
+    let rig: &kh2_data::sora::Rig = match super::form::current().and_then(|k| k.data(kh2)) {
+        Some(w) if w.rig.motions.contains_key(&motion) => &w.rig,
         _ => &kh2.rig,
     };
     let clip = field

@@ -226,7 +226,7 @@ pub fn end_all() {
 /// A KH1 spell chosen (`combat::command`, magic `spell`): in the form, KH2's. Returns whether
 /// it was taken (else KH1 casts its own).
 pub unsafe fn spell_chosen(actor: usize, spell: u8) -> bool {
-    if spell > 3 || !super::form::in_form() || !super::takeover::kh2_has() || !super::settings::get().drive {
+    if spell > 3 || !super::form::in_wisdom() || !super::takeover::kh2_has() || !super::settings::get().drive {
         return false;
     }
     let level = super::reflect::kh1_spell_level(spell);

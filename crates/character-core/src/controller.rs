@@ -1063,6 +1063,11 @@ impl Character {
         }
     }
 
+    /// Whether the moveset has a clip for `motion`.
+    pub fn clip_exists(&self, motion: u16) -> bool {
+        self.clip(motion).is_some()
+    }
+
     /// Playing a motion from [`play`](Self::play).
     pub fn scripted(&self) -> bool {
         matches!(&self.mode, Mode::Action(Action { kind: ActionKind::Scripted { .. }, .. }))
