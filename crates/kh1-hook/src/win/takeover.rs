@@ -1536,7 +1536,16 @@ unsafe fn takeover(actor: usize) -> bool {
         }
         if rise3d && rising {
             // KH2's ceiling rule: less than 49% of the rise happened.
-            let got = -rd::<f32>(actor + 0x14);
+            // (KH1's mover may cut the rise short, never add to it: pushed out of an enemy's
+            // body it lifted him, and swing after swing he rode up the target he was locked on
+            // until he was above it and his swings missed, the user.)
+            let got = (-rd::<f32>(actor + 0x14)).min(up_before + out.displacement[1]);
+            if got < -rd::<f32>(actor + 0x14) - 0.5 {
+                static RODE: AtomicU32 = AtomicU32::new(0);
+                if RODE.fetch_add(1, Ordering::Relaxed) < 20 {
+                    log(&format!("rise: KH1's mover lifted him {:.1} past KH2's rise {:.1} (an actor's body): kept to KH2's", -rd::<f32>(actor + 0x14) - got, out.displacement[1]));
+                }
+            }
             y = got;
             // KH1's collision bit 3 (`+0x2D0` 9 = in the air + on a slope's surface): a steep roof
             // he is on or sliding off, not a ceiling. KH1's air mover pushes him along it rather

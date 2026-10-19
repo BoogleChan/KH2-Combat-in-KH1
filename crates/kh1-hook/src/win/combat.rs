@@ -1697,8 +1697,9 @@ impl Launch {
 /// KH2 launches sent farther than their ATKP's knockback (up, sideways): Explosion's last blast
 /// (ATKP 912: reaction 11, up 15, sideways 30) left the foe beside Sora (the user: "the finishing
 /// hitbox on explosion doesn't send the enemies far away enough to give them a chance to
-/// recover"): KH2's default blow's height and twice its distance.
-const FARTHER: [(u16, (i16, i16)); 1] = [(912, (24, 60))];
+/// recover"): twice KH2's default blow's distance, and a third higher than its height (the user,
+/// s226: "the launch distance is good but now can you have the enemies launch a little higher").
+const FARTHER: [(u16, (i16, i16)); 1] = [(912, (32, 60))];
 
 fn farther(attack: u16) -> Option<(i16, i16)> {
     FARTHER.iter().find(|(id, _)| *id == attack).map(|(_, k)| *k)

@@ -2705,3 +2705,10 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   movement began, the Dream Shield held otherwise in battle than in cutscenes): every weapon bone
   held rigidly as KH1 holds it from his hand (`pose::dream_hold`, noted from KH1's own pose), also
   through the blend back to KH1's animation.
+
+### 2026-10-19: Stage 227 (riding up a target in the air; Explosion higher)
+- The user: locked on in the air, attack after attack rode up the enemy's body until Sora was
+  above it and his swings missed. A rising frame took the height KH1's mover left him at, and
+  pushed out of an actor's body it lifted him; now the mover may cut a rise short (a ceiling),
+  never add to it (logged).
+- Explosion's last blast launches a third higher than KH2's default blow (up 32, sideways 60).
