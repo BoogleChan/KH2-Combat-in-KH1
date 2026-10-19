@@ -617,6 +617,9 @@ pub unsafe fn chosen(actor: usize) {
 
 // ---------------------------------------------------------------- casting it
 
+/// Final Form's air Reflect (`P_EX100_TRIF` motion 73, D373): its no-gravity range, 0..54.
+const FINAL_AIR_HOLD: u32 = 54;
+
 struct Runtime {
     magic: Magic,
     /// Each level's spell in `magic` (by level − 1), and each spell's level (by spell index).
@@ -729,6 +732,14 @@ pub unsafe fn before_step(actor: usize, ch: &mut Character) {
         note(format!("Reflect: KH2 couldn't start its cast motion ({m:?})"));
         return;
     };
+    // In the air: Final Form's air Reflect's physics, whoever casts it (the user: "make it so
+    // that base air reflect and wisdom air reflect copy the physics of final forms reflect but
+    // keep their respected animations"): P_EX100_TRIF's air cast (D373) stops him and has no
+    // gravity from its frame 0 to 54, then he falls.
+    if ch.airborne() {
+        ch.hold_air_cast(FINAL_AIR_HOLD);
+        note(format!("Reflect in the air: Final Form's hold ({FINAL_AIR_HOLD} frames without gravity), motion {motion}"));
+    }
     // KH1's own payment of a spell's cost: 1 MP at every level.
     let pay: unsafe extern "system" fn(usize, i32) = std::mem::transmute(base + MP_PAY_RVA);
     let before = mp(actor);

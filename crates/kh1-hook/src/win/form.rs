@@ -108,7 +108,9 @@ unsafe fn hp(sora: usize) -> i32 {
 /// should only be accepted when you press return on an end frame", no queue): KH2 has Sora and
 /// he can change on this frame.
 pub fn accept_now() -> bool {
-    !busy() && super::takeover::with_kh2(|c, _| c.can_change_form()).unwrap_or(false)
+    // (Or in one of KH1's moves at its cut frame, out of a form: the user, "goes into the drive
+    // submenu and selects a drive" from frame 49 of KH1's Fire.)
+    !busy() && (super::takeover::with_kh2(|c, _| c.can_change_form()).unwrap_or(false) || !in_form() && super::takeover::kh1_cut_window())
 }
 
 /// Whether the Drive entry can be chosen now (`drive`'s menu): reverting in the form, else MP
@@ -135,7 +137,8 @@ pub unsafe fn choose(sora: usize) -> Result<&'static str, String> {
     if !pose::kh2().is_some_and(|k| k.wisdom.is_some()) {
         return Err("Wisdom Form's files didn't load".into());
     }
-    if !super::takeover::kh2_has() {
+    let cut = super::takeover::kh1_cut_window();
+    if !super::takeover::kh2_has() && !cut {
         return Err("KH1 has Sora".into());
     }
     let have = mp(sora);
@@ -143,6 +146,10 @@ pub unsafe fn choose(sora: usize) -> Result<&'static str, String> {
         return Err(format!("MP {have}: it costs {COST_MP} and needs some left to run on"));
     }
     REQUEST.store(1, Ordering::Relaxed);
+    if cut && !super::takeover::kh2_has() {
+        // (KH2 takes him out of KH1's move this frame and changes him.)
+        super::takeover::DRIVE_CUT.store(true, Ordering::Relaxed);
+    }
     Ok("Wisdom Form")
 }
 

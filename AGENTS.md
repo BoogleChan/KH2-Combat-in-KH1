@@ -2460,3 +2460,33 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   (`obj/W_EX010.a.us`: a flash that swells and fades over 13 ticks with a turning glint) starts on
   the blade (half way from the hand to the tip). Inferred: KH2's own call for it isn't traced.
 - Open: after a boss falls, KH1 holding Sora with its own animations before the scene (needs a log).
+
+### 2026-10-19: Stage 208 (the user's lists: KH1 takeover frames, walking, Wisdom's KH1 spells, Reflect, hits)
+- Built on s207 (claude-6d's s206/s207 from the GitHub line, applied onto s205).
+- Walking: the stick's direction is now KH1's move vector (`0x142D5F630`, written by its think
+  `0x1402A4090` -> `0x14028A650`: the stick through the camera), not Sora's `+0x20`, which
+  KH1's walk turns toward the stick slowly ("only keeps him moving at the direction hes facing
+  prior"). The same for the form casts of KH1 spells (s206) ("sora does not change his movement
+  direction to the analogs sticks direction"). A log line when the two differ.
+- Wisdom's KH1-only spells: the form's cast clock ends at its motion's length (Thunder 62: 25
+  frames at 30 fps = 50) whether or not a shot was counted ("kh1 stays in the animation for
+  another 17 frames"), on frame 50; his slide starts from KH2's speed going in and is handed to
+  KH2 at the end (`Character::carry_on_ground`; "we don't want sora to have his momentum
+  halted").
+- KH1 takeover frames (`takeover::kh1_cut_frame`): grounded KH1 Fire from frame 49, taken only
+  with an Attack or a Drive chosen then ("only if conditions are met"); an item from frame 51,
+  taken whatever is pressed ("on frame 52 ... they will all be kh1s animations"). Items are told
+  by the list they were picked from (`combat::run_entry`: KH1's Items list `0x140529670` or a
+  party list under it). A Drive chosen during KH1's move goes through `take_chosen_command`
+  to `form::choose` (`accept_now` / `kh1_cut_window`), KH2 takes him (`DRIVE_CUT`) and changes.
+- Air KH1 spells: KH2 lands him on the frame he would touch down (`touchdown`: falling with
+  less than 1.5 frames' drop to the floor, put down through KH1's mover), not a frame after
+  KH1's landing (its roll or jump could come out there).
+- Air Reflect (base and Wisdom): Final Form's physics (`Character::hold_air_cast`, P_EX100_TRIF
+  D373: stopped, no gravity frames 0..54, no drift, then a plain fall), their own animations.
+  Test `air_reflect_holds_as_final_forms`.
+- Revert: the command menu's cursor back on Attack (root `+0xC`).
+- Wisdom Fire / Blizzard / Thunder hits: the attack's effect object (`+8`) is KH1's magic
+  effects (`0x142EFBE90`, as KH1's own spell handlers `0x14039FD60` and others set it), not the
+  Keyblade's (the row's attack takes the weapon's, `0x1402B10E0`), so the hit effect
+  (`0x1402B2190`) is the spells' (the user: "still the physical keyblade effect"). Unconfirmed.

@@ -38,6 +38,26 @@ const MOVE_RVA: Rva = Rva(0x297710);
 const PARTY_RVA: Rva = Rva(0x2D37C80);
 const EVENT_RVA: Rva = Rva(0x298D3A0);
 const BATTLE_RVA: Rva = Rva(0x2867CD8);
+/// KH1's move vector this frame (the stick through its camera, `w` the tilt): written by its
+/// think (`0x1402A4090` from `0x14028A650`).
+const MOVE_VEC_RVA: Rva = Rva(0x2D5F630);
+
+/// The stick's direction in the world: KH1's move vector (`MOVE_VEC_RVA`), not his `+0x20`,
+/// which KH1's own walk only turns toward the stick slowly (the user: walking, and in Wisdom's
+/// casts of KH1's spells, he kept the direction he started in). `+0x20` only if that is empty.
+unsafe fn stick_dir(actor: usize, tilt: f32) -> glam::Vec2 {
+    let base = BASE.load(Ordering::Relaxed);
+    let mv = rd::<[f32; 4]>(base + MOVE_VEC_RVA);
+    let old = glam::Vec2::new(rd::<f32>(actor + 0x20), rd::<f32>(actor + 0x28)).normalize_or_zero();
+    let dir = if mv[0].is_finite() && mv[2].is_finite() && mv[0].hypot(mv[2]) > 1e-3 { glam::Vec2::new(mv[0], mv[2]).normalize_or_zero() } else { old };
+    if tilt > 0.0 && old != glam::Vec2::ZERO && dir.dot(old) < 0.94 {
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 12 {
+            log(&format!("stick direction {dir:?} (KH1's move vector) vs his +0x20 {old:?}, tilt {tilt:.2}"));
+        }
+    }
+    dir
+}
 /// Flight (Neverland): the world flags' bit 0x20 lets Sora fly; KH1's fall state (2) starts
 /// it once he is more than 100 above the floor (`0x1402AFD30`: motion 0x75, state 8, his rise
 /// speed `+0x3C4` cut to 0.3) or, in a few rooms, above a set height (`0x1402AFC10`, the
@@ -140,6 +160,9 @@ const NO_GRAB_FRAMES: u32 = 20;
 static HANDOFF_POS: Mutex<Option<[f32; 3]>> = Mutex::new(None);
 /// KH1's move ended in its fall: his speed then (per frame: sideways, up), for KH2's fall.
 static HANDOFF_FALL: Mutex<Option<([f32; 2], f32)>> = Mutex::new(None);
+/// Out of a Drive Form's KH1 cast on the ground: the speed it slid at (KH2 x / z per frame), for
+/// KH2's first frame (`Character::carry_on_ground`).
+static HANDOFF_SLIDE: Mutex<Option<[f32; 2]>> = Mutex::new(None);
 /// Square was pressed as KH1's move ended: KH2 takes it as a press (not one already held).
 static ROLL_NOW: AtomicBool = AtomicBool::new(false);
 /// KH1's fall state (after a jump's rise, or off an edge): its collision is the air kind
@@ -411,7 +434,41 @@ pub fn kh1_casting() -> bool {
     unsafe { can_act(actor) == 0 }
 }
 
+/// KH2 may take Sora out of one of KH1's moves from this frame (`kh1_cut_frame`).
+static KH1_WINDOW: AtomicBool = AtomicBool::new(false);
+/// A Drive chosen in that window (`form::choose`): KH2 takes him to change.
+pub static DRIVE_CUT: AtomicBool = AtomicBool::new(false);
+/// The command KH1 runs was picked from the Items list (`combat::run_entry`).
+pub static ITEM_COMMAND: AtomicBool = AtomicBool::new(false);
+/// Grounded KH1 Fire: KH2 may take him from this frame (the user, frame by frame).
+const FIRE_CUT: u32 = 49;
+/// An item's use: KH2's from this frame (the user: on its frame 52 KH1's roll, guard or jump
+/// came out).
+const ITEM_CUT: u32 = 51;
+
+/// The frame of KH1's current move from which KH2 may take him, and whether it is an item's
+/// (taken then whatever is pressed). For now grounded Fire (the user: "for now lets just add
+/// this to kh1s fire until we get the logic setup correctly") and items.
+unsafe fn kh1_cut_frame(state: i32) -> Option<(u32, bool)> {
+    if state != 0 || air_cast().is_some() || super::form::in_form() {
+        return None;
+    }
+    let c = COMMAND.try_lock().ok()?.as_ref().copied()?;
+    match c.spell {
+        Some(0) => Some((FIRE_CUT, false)),
+        None if ITEM_COMMAND.load(Ordering::Relaxed) => Some((ITEM_CUT, true)),
+        _ => None,
+    }
+}
+
+/// KH2 may take Sora now out of KH1's move (its cut frame reached): a Drive chosen now is taken.
+pub fn kh1_cut_window() -> bool {
+    HANDOFF.load(Ordering::Relaxed) && KH1_WINDOW.load(Ordering::Relaxed)
+}
+
 pub fn command_started(shots: usize, spell: Option<u8>) {
+    KH1_WINDOW.store(false, Ordering::Relaxed);
+    DRIVE_CUT.store(false, Ordering::Relaxed);
     if let Ok(mut c) = COMMAND.lock() {
         *c = Some(Command { t: Instant::now(), low: shots, spell, logged: false });
     }
@@ -430,7 +487,10 @@ pub fn command_started(shots: usize, spell: Option<u8>) {
         let allow = clip.windows.iter().find(|w| matches!(w.kind, character_core::WindowKind::AllowMovement)).map(|w| (w.start, w.end.unwrap_or(clip.length)));
         let p = &form.character.params;
         log(&format!("Drive Form: KH1 spell {sp} on the form's cast motion {motion}'s clock: {} frames, input from {react}, moving {allow:?}", clip.length));
-        Some(FormCast { len: clip.length, react, allow, accel: p.acceleration, brake: p.brake, walk: p.walk_speed, run: p.run_speed, threshold: p.run_threshold, v: [0.0; 2], air })
+        // (His speed going in, KH2's last frame: no halt at the cast's start, the user.)
+        let v = with_kh2(|_, o| [o.displacement[0], o.displacement[2]]).unwrap_or([0.0; 2]);
+        let v = if v[0].is_finite() && v[1].is_finite() && v[0].hypot(v[1]) < 40.0 { v } else { [0.0; 2] };
+        Some(FormCast { len: clip.length, react, allow, accel: p.acceleration, brake: p.brake, walk: p.walk_speed, run: p.run_speed, threshold: p.run_threshold, v, air })
     });
     if let Ok(mut f) = FORM_CAST.lock() {
         *f = fc;
@@ -464,7 +524,7 @@ unsafe fn form_cast_frame(actor: usize, frames: u32) -> Option<(u32, u32)> {
     let fc = g.as_mut()?;
     if !fc.air && rd::<i32>(actor + 0x70) == 0 {
         let tilt = move_tilt();
-        let dir = glam::Vec2::new(rd::<f32>(actor + 0x20), rd::<f32>(actor + 0x28)).normalize_or_zero();
+        let dir = stick_dir(actor, tilt);
         let moving = fc.allow.is_some_and(|(a, b)| (a..b).contains(&frames));
         let speed = if tilt <= 0.0 { 0.0 } else if tilt >= fc.threshold { fc.run } else { fc.walk };
         // (KH2's physics steps every other frame.)
@@ -770,7 +830,17 @@ unsafe fn takeover(actor: usize) -> bool {
         // lands him, KH2's landing from there, its short hold and a jump out of it (the user:
         // "the same pause buffer, and if he jumps out of it, KH2 Sora's jump"), instead of
         // KH1's landing, its hold and then a snap.
-        let cast_landed = air_cast().is_some() && state == 0 && above <= STEP_DOWN;
+        // (And on the frame he would touch down, before KH1's own landing frame: falling in its air
+        // state with less than this frame's drop left to the floor, he is put down and KH2 lands
+        // him. The user: on KH1's landing frame its roll or jump could still come out, KH2 took
+        // him a frame late.)
+        let touchdown = air_cast().is_some() && matches!(state, 1 | 2) && frames >= 3 && vel.is_some_and(|(_, up)| up < 0.0 && above + up * 1.5 <= STEP_DOWN);
+        if touchdown {
+            let mv: MoveFn = std::mem::transmute(base + MOVE_RVA);
+            mv(actor, &[0.0, above.max(0.0) + 1.0, 0.0, 0.0], 0);
+            log(&format!("KH1's air cast: touching down ({above:.0} above the floor, falling {:.1}/frame): KH2's landing now", vel.map_or(0.0, |v| -v.1)));
+        }
+        let cast_landed = air_cast().is_some() && (state == 0 && above <= STEP_DOWN || touchdown);
         // An Attack during a spell: KH2's once the spell is out (its end frames; the user: KH2's
         // magic can be cut by an attack to go on with the combo), not before (it would cut the
         // spell). In the air too.
@@ -798,19 +868,36 @@ unsafe fn takeover(actor: usize) -> bool {
         }
         let attack = attack || ATTACK_AFTER.load(Ordering::Relaxed);
         let slot = SPELL_SLOT.load(Ordering::Relaxed);
-        let last = slot == 3;
-        let out_any = command && !done && spell_out(actor);
+        // KH1 moves with a frame from which KH2 may take him (`kh1_cut_frame`; the user: "by a
+        // specified frame kh2 is allowed to take over kh1 sora only if conditions are met": at
+        // that frame or later, an Attack or a Drive chosen). An item: KH2's at its frame, any
+        // input or none (the user: its frame 52 gave KH1's roll, guard or jump).
+        let cut_frame = if command && !done { kh1_cut_frame(state) } else { None };
+        let in_cut = cut_frame.is_some_and(|(f, _)| frames + 1 >= f);
+        KH1_WINDOW.store(in_cut, Ordering::Relaxed);
+        let drive_cut = in_cut && DRIVE_CUT.swap(false, Ordering::Relaxed);
+        let item_end = in_cut && cut_frame.is_some_and(|(_, item)| item);
+        let last = slot == 3 && !in_cut;
+        let out_any = command && !done && (spell_out(actor) || in_cut);
         let out = out_any && air_cast().is_none();
         let jump_pressed = buttons() & jump_button() != 0;
         let magic_after = MAGIC_AFTER.load(Ordering::Relaxed);
         // In a Drive Form: the form's cast motion's clock (its input window, then its end).
         let form_cast = if command && !done { form_cast_frame(actor, frames) } else { None };
-        let window = form_cast.map_or(true, |(_, react)| frames >= react);
-        let form_end = form_cast.is_some_and(|(len, _)| frames >= len) && out_any && air_cast().is_none();
+        let window = form_cast.map_or(true, |(_, react)| frames >= react) && (cut_frame.is_none() || in_cut);
+        // (At the form motion's end, KH2's idle, whether or not a shot of the spell was counted:
+        // the user, Wisdom's Thunder ends at frame 49 and is in idle by 50, and KH1 held 17
+        // frames more waiting for Aero's or Gravity's "shot".)
+        // (`frames` counts from 0 on the cast's first frame: frame 50 of a 50-frame motion is
+        // KH2's.)
+        let form_end = form_cast.is_some_and(|(len, _)| frames + 1 >= len) && command && !done && air_cast().is_none();
+        if form_end && !out_any {
+            log("form's cast motion ended before a shot of the KH1 spell was counted: KH2 takes him anyway");
+        }
         let attack_cut = attack && out_any && !last && window;
         let magic_cut = magic_after && out_any && !last && window;
         let other_cut = out && (slot <= 1 || form_cast.is_some()) && window && (jump_pressed || square);
-        let cancel = attack_cut || magic_cut || other_cut || form_end;
+        let cancel = attack_cut || magic_cut || other_cut || form_end || drive_cut || item_end;
         let attack = attack && (!command || done || attack_cut);
         let square = square && (!command || done || other_cut);
         let jump = jump || other_cut && jump_pressed;
@@ -822,7 +909,7 @@ unsafe fn takeover(actor: usize) -> bool {
             }
             log(&format!(
                 "spell's end frames cut by {} (combo slot {slot})",
-                if attack_cut { "an Attack: the combo's next swing" } else if magic_cut { "a spell: the combo's next step" } else if other_cut && jump_pressed { "a jump" } else if other_cut { "Square" } else { "the form's cast motion ending" }
+                if attack_cut { "an Attack: the combo's next swing" } else if magic_cut { "a spell: the combo's next step" } else if other_cut && jump_pressed { "a jump" } else if other_cut { "Square" } else if drive_cut { "a Drive" } else if item_end { "the item's end frame" } else { "the form's cast motion ending" }
             ));
         }
         // (A spell chosen during the cast, which is now over: it runs at once from the queue.)
@@ -854,8 +941,13 @@ unsafe fn takeover(actor: usize) -> bool {
                     ([h[0] * k, h[1] * k], up.clamp(-30.0, 30.0))
                 });
             }
+            if form_cast.is_some() && !falling {
+                *HANDOFF_SLIDE.lock().unwrap() = FORM_CAST.try_lock().ok().and_then(|f| f.map(|f| f.v));
+            }
             FLY_PRESS_GROUND.store(ATTACK_AFTER.swap(false, Ordering::Relaxed), Ordering::Relaxed);
             HANDOFF.store(false, Ordering::Relaxed);
+            KH1_WINDOW.store(false, Ordering::Relaxed);
+            ITEM_COMMAND.store(false, Ordering::Relaxed);
             set_air_cast(None);
             // KH1's state back to the ground one KH2 keeps him in, its exit steps run (the
             // user: after a spell in the air KH1 still had him in its air state 1 / 2 and its
@@ -1010,6 +1102,12 @@ unsafe fn takeover(actor: usize) -> bool {
         // Out of KH1's flight or one of its moves in the air: in the air where it had him.
         d.grounded = false;
     }
+    if let Some(v) = HANDOFF_SLIDE.lock().unwrap().take() {
+        // Out of a form's KH1 cast: his slide goes on (KH2's idle / walk / run by the stick).
+        if d.grounded && !d.character.airborne() {
+            d.character.carry_on_ground(v);
+        }
+    }
     if let Some((h, up)) = HANDOFF_FALL.lock().unwrap().take() {
         // Out of KH1's fall: falling on as KH1 had him (KH2's fall animation).
         d.grounded = false;
@@ -1045,7 +1143,7 @@ unsafe fn takeover(actor: usize) -> bool {
     // Input: direction from KH1's camera-relative move direction, tilt from the left stick.
     let buttons = buttons();
     let tilt = move_tilt();
-    let dir = glam::Vec2::new(rd::<f32>(actor + 0x20), rd::<f32>(actor + 0x28)).normalize_or_zero();
+    let dir = stick_dir(actor, tilt);
     let stick = if tilt > 0.0 { (dir * tilt).to_array() } else { [0.0, 0.0] };
     // With L1 held the face buttons are KH1's shortcuts, not KH2's jump / action; a button
     // still held when L1 lets go stays KH1's until released (`held` sees it raw).

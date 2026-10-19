@@ -44,6 +44,10 @@ const NEW_ATTACK_RVA: Rva = Rva(0x2B10E0);
 const FREE_BIT_RVA: Rva = Rva(0x2B15D0);
 const LAND_RVA: Rva = Rva(0x2B1ED0);
 const FREE_ATTACK_RVA: Rva = Rva(0x2B13D0);
+/// KH1's magic effect object (its spells' effects, the elements' hit sparks among them).
+const MAGIC_FX_RVA: Rva = Rva(0x2EFBE90);
+/// An object's handle (`0x14038B080`).
+const HANDLE_RVA: Rva = Rva(0x38B080);
 /// Enemies farther than this from Sora are not looked at.
 const NEAR: f32 = 1500.0;
 
@@ -361,6 +365,16 @@ pub unsafe fn take_chosen_command() -> Option<u8> {
             wr(base + COMMAND_RVA, 0u8);
             cmd_log("Attack chosen during KH1's cast: KH2's once the spell is out".to_string());
             Some(1)
+        }
+        2 if ((rd::<u32>(base + COMMAND_RVA) >> 8) & 0xFF) as u8 >= super::drive::FORM_ARG && super::drive::on() => {
+            // A Drive form chosen in KH1's move's cut window (`takeover::kh1_cut_window`): the
+            // form's, KH2 takes him to change (`form::choose` sets `takeover::DRIVE_CUT`).
+            let arg = ((rd::<u32>(base + COMMAND_RVA) >> 8) & 0xFF) as u8;
+            wr(base + COMMAND_RVA, 0u8);
+            let sora = rd::<u64>(base + PARTY_RVA) as usize;
+            super::drive::chosen(sora, (arg - super::drive::FORM_ARG) as usize);
+            cmd_log("Drive chosen during KH1's move".to_string());
+            None
         }
         2 => {
             if let Ok(mut p) = PENDING_COMMAND.lock() {
@@ -1542,6 +1556,25 @@ unsafe fn land_hit(sora: usize, part: &Part, at: &Shape, row: Row, power: u16, s
     if !spell {
         wr(obj, rd::<u32>(obj) | 0x400000);
         wr(obj + 0xA8, row.fx);
+    } else {
+        // A spell's hit effect: KH1 plays it from the attack's effect object (`+8`, `0x1402B2190`
+        // from the contact `0x1402B1ED0`). The row's attack takes the Keyblade's
+        // (`0x1402B10E0`: the weapon's effects), so a spell's index played a Keyblade spark (the
+        // user: Wisdom's Fire, Blizzard and Thunder hit with "the physical keyblade effect").
+        // KH1's own spells give their attacks the magic effect object (`0x142EFBE90`, as
+        // `0x14039FD60` does), whose effects are the elements'.
+        let fx = rd::<u64>(base + MAGIC_FX_RVA) as usize;
+        if fx > 0x10000 {
+            let handle: unsafe extern "system" fn(usize) -> u32 = std::mem::transmute(base + HANDLE_RVA);
+            let h = handle(fx);
+            if h != 0 {
+                wr(obj + 8, h);
+            }
+            static N: AtomicU32 = AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 6 {
+                log(&format!("spell hit: from KH1's magic effects ({fx:#x}, handle {h:#x}), attack data {:#x}", row.data));
+            }
+        }
     }
     // KH2's hit records decide what may hit again, not KH1's hit-once bit.
     let saved = rd::<u32>(obj + 0x54);
@@ -1747,7 +1780,28 @@ unsafe extern "system" fn run_entry(menu: usize, entry: i32) -> u64 {
     if spell_not_yet(menu, entry) {
         return 0;
     }
-    f(menu, entry)
+    let r = f(menu, entry);
+    if r != 0 {
+        // An item's use (the Items list, or a party list under it): `takeover`'s item end frame.
+        let base = BASE.load(Ordering::Relaxed);
+        let items = base + ITEMS_MENU_RVA;
+        let from_items = menu == items || rd::<u32>(menu) == 4 && entry_parent(base) == Some(items);
+        takeover::ITEM_COMMAND.store(from_items, Ordering::Relaxed);
+    }
+    r
+}
+
+/// KH1's Items list (menu 2 of `0x140529600`, 0x38 apart).
+const ITEMS_MENU_RVA: Rva = Rva(0x529670);
+
+/// The list under the menu chain's top (a party target list's parent).
+unsafe fn entry_parent(base: usize) -> Option<usize> {
+    let top = rd::<u64>(base + CHAIN_RVA) as usize;
+    if top < 0x10008 {
+        return None;
+    }
+    let parent = rd::<u64>(top - 8) as usize;
+    (parent > 0x10000).then_some(parent)
 }
 
 unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
@@ -1761,9 +1815,6 @@ unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
             return true;
         }
     }
-    if !super::settings::get().commands || !takeover::ON.load(Ordering::Relaxed) || !takeover::kh2_has() || takeover::kh1_casting() {
-        return false;
-    }
     // Disabled entries: KH1's own "can't".
     if rd::<u32>(menu + 8) >> entry & 1 != 0 {
         return false;
@@ -1771,14 +1822,7 @@ unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
     let base = BASE.load(Ordering::Relaxed);
     let record_of: unsafe extern "system" fn(u32) -> usize = std::mem::transmute(base + RECORD_RVA);
     let id = if rd::<u32>(menu) == 4 {
-        let top = rd::<u64>(base + CHAIN_RVA) as usize;
-        if top < 0x10008 {
-            return false;
-        }
-        let parent = rd::<u64>(top - 8) as usize;
-        if parent < 0x10000 {
-            return false;
-        }
+        let Some(parent) = entry_parent(base) else { return false };
         rd::<u8>(parent + 0x14 + (rd::<i32>(parent + 0x34) & 0xF) as usize)
     } else {
         rd::<u8>(menu + 0x14 + entry as usize)
@@ -1788,8 +1832,8 @@ unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
         return false;
     }
     let (kind, arg, sub) = (rd::<u8>(record + 6), rd::<u8>(record + 7), rd::<i8>(record + 8));
-    // A form from the Drive list: only on a frame Sora can change (`form::accept_now`), the same
-    // as a spell (the user: no queue).
+    // A form from the Drive list: only on a frame Sora can change (`form::accept_now`: KH2's,
+    // or a KH1 move's cut frame reached), the same as a spell (the user: no queue).
     if kind == 2 && arg >= super::drive::FORM_ARG && super::drive::on() {
         if super::form::accept_now() {
             return false;
@@ -1799,6 +1843,9 @@ unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
             cmd_log("Drive not taken yet: Sora can't change on this frame; the menu stays open".to_string());
         }
         return true;
+    }
+    if !super::settings::get().commands || !takeover::ON.load(Ordering::Relaxed) || !takeover::kh2_has() || takeover::kh1_casting() {
+        return false;
     }
     // Only spells (Reflect's too); a target list opening is no cast.
     if kind != 2 || (rd::<u32>(menu) != 4 && sub > 0) {

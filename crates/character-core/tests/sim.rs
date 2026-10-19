@@ -1361,3 +1361,27 @@ fn drive_in_the_air_holds_and_swaps_carry_movement() {
     let o = w.step(Pad { stick: [0.0, 1.0], ..IDLE });
     assert!(o.displacement[2] > speed * 0.5, "the swap halted him: {} then {}", speed, o.displacement[2]);
 }
+
+/// An air cast held as Final Form's air Reflect (`hold_air_cast`; the user: base and Wisdom air
+/// Reflect "copy the physics of final forms reflect"): stopped where he is, no fall through the
+/// hold even with the cast's own window later, then a plain fall.
+#[test]
+fn air_reflect_holds_as_final_forms() {
+    let mut ch = sora();
+    let mut cast = Clip::plain(73, 84);
+    cast.windows.push(Window { start: 16, end: Some(74), kind: WindowKind::NoGravity });
+    ch.moveset.clips.insert(73, cast);
+    ch.air_magic_falls = true;
+    ch.air_magic_gravity = 0.3;
+    let mut w = World::new(ch);
+    w.run(3, Pad { jump: true, stick: [0.0, 1.0], ..IDLE });
+    w.run(12, Pad { stick: [0.0, 1.0], ..IDLE });
+    assert_eq!(w.ch.cast(CastMotions { ground: 71, finisher: Some(72), air: 73 }), Some(73));
+    w.ch.hold_air_cast(54);
+    let (y, z) = (w.pos[1], w.pos[2]);
+    w.run(50, Pad { stick: [0.0, 1.0], ..IDLE });
+    assert!((w.pos[1] - y).abs() < 1e-3, "moved up/down in the hold: {} -> {}", y, w.pos[1]);
+    assert!((w.pos[2] - z).abs() < 1e-3, "drifted in the hold");
+    w.run(20, IDLE);
+    assert!(w.pos[1] < y - 1.0, "didn't fall after the hold");
+}

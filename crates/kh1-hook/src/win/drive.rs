@@ -88,6 +88,12 @@ pub unsafe fn revert_row(actor: usize) -> bool {
         return true;
     }
     chosen(actor, 0);
+    // The cursor back on Attack (the user: "when pressing return ... it needs to return to the
+    // 1st slot (attack)"): the top menu's cursor (`+0xC`; KH1's confirm on the fourth row
+    // checks it is 3).
+    if !super::form::in_form() || super::form::busy() {
+        wr(base() + MENU_RVA + 0xC, 0i32);
+    }
     true
 }
 

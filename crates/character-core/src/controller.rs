@@ -392,6 +392,9 @@ pub struct Character {
     /// spells stop his fall when cast and then sink slowly while the spell comes out; KH2's
     /// full gravity from rest dropped Reflect too fast (the user).
     pub air_magic_gravity: f32,
+    /// The air cast playing holds as Final Form's air Reflect does (`hold_air_cast`): frames of
+    /// no gravity from its start, no drift; then a plain fall.
+    cast_hold: Option<u32>,
     facing: f32,
     vel_h: [f32; 2],
     /// The ground speed the stick asks for (with inertia, `vel_h` eases toward it): what walk,
@@ -540,6 +543,7 @@ impl Character {
             glide_button: GlideButton::default(),
             air_magic_falls: false,
             air_magic_gravity: 1.0,
+            cast_hold: None,
             facing: 0.0,
             vel_h: [0.0; 2],
             steer_speed: 0.0,
@@ -754,6 +758,21 @@ impl Character {
         Some(motion)
     }
 
+    /// The air cast just started (`cast`) moves as Final Form's air Reflect (the KH1 port's user:
+    /// "make it so that base air reflect and wisdom air reflect copy the physics of final forms
+    /// reflect but keep their respected animations"): stopped where he is, no gravity for
+    /// `frames` from its start (Final's D373: no-gravity range 0..54), no steering, then a plain
+    /// fall (no `air_magic_gravity` sink). Nothing on the ground.
+    pub fn hold_air_cast(&mut self, frames: u32) {
+        if !self.airborne || !matches!(self.mode, Mode::Action(Action { kind: ActionKind::Magic, .. })) {
+            return;
+        }
+        self.cast_hold = Some(frames);
+        self.vel_h = [0.0; 2];
+        self.vel_y = 0.0;
+        self.arc = None;
+    }
+
     /// Takes a hit: the game's generic reaction (flinch, air flinch,
     /// launch, push), as for enemies. Interrupts whatever was going on.
     pub fn take_hit(&mut self, hit: &crate::reaction::Hit) {
@@ -849,6 +868,19 @@ impl Character {
     /// The Aerial Dodge is there for this fall (taken over from the host's own jump).
     pub fn allow_air_dodge(&mut self) {
         self.air_dodge_ready = self.abilities.aerial_dodge > 0;
+    }
+
+    /// On the ground out of a move of the host's own that slid him (a Drive Form's cast of a KH1
+    /// spell): free, moving at `vel_h` (per frame) so his momentum goes on from there (the user:
+    /// "we don't want sora to have his momentum halted"), eased by the ground inertia toward the
+    /// stick as usual.
+    pub fn carry_on_ground(&mut self, vel_h: [f32; 2]) {
+        self.mode = Mode::Free;
+        self.airborne = false;
+        self.arc = None;
+        self.vel_y = 0.0;
+        self.vel_h = vel_h;
+        self.steer_speed = len2(vel_h);
     }
 
     /// Just touched down out of a move of the host's own (a spell cast in the air): standing,
@@ -1183,6 +1215,7 @@ impl Character {
 
     fn start_action(&mut self, kind: ActionKind, motion: u16) {
         self.get_up = None;
+        self.cast_hold = None;
         self.swing_counter += 1;
         self.mode = Mode::Action(Action { kind, motion, frame: 0, swing: self.swing_counter, timer: 0.0, brake: 1.0, lunge: 0.0 });
     }
@@ -1834,7 +1867,7 @@ impl Character {
                 // (s204 held air casts in their no-gravity frames; s206 reverts that, the user:
                 // "revert our changes to base reflect and wisdom reflect, we do want it to fall
                 // like kh1": the cast stops his fall, then he sinks at `air_magic_gravity`.)
-                WindowKind::NoGravity if !(self.air_magic_falls && matches!(act.kind, ActionKind::Magic)) && !(matches!(act.kind, ActionKind::Attack { .. }) && clip.windows.iter().any(|w| matches!(w.kind, WindowKind::AllowMovement))) => fo.no_gravity = true,
+                WindowKind::NoGravity if self.cast_hold.is_none() && !(self.air_magic_falls && matches!(act.kind, ActionKind::Magic)) && !(matches!(act.kind, ActionKind::Attack { .. }) && clip.windows.iter().any(|w| matches!(w.kind, WindowKind::AllowMovement))) => fo.no_gravity = true,
                 WindowKind::WeaponTrail => fo.weapon_trail = true,
                 WindowKind::Guard { attack, group, weapon } => {
                     fo.guarding = true;
@@ -1845,6 +1878,12 @@ impl Character {
         }
         for e in clip.events.iter().filter(|e| e.frame == f) {
             fo.events.push(e.kind);
+        }
+        // (An air cast held as Final Form's Reflect: no gravity for its hold.)
+        if let (Some(n), ActionKind::Magic) = (self.cast_hold, &act.kind) {
+            if f < n && self.airborne {
+                fo.no_gravity = true;
+            }
         }
         // Moving in an allow-movement range with nothing to aim at: he turns with the stick.
         if target.is_none() && !self.combo_direction_lock && len2(input.stick) > DEAD_ZONE && matches!(act.kind, ActionKind::Attack { .. } | ActionKind::Magic) && clip.has(f, |k| matches!(k, WindowKind::AllowMovement)) {
@@ -2256,8 +2295,11 @@ impl Character {
                     }
                 }
                 ActionKind::Magic => {
-                    let steer = self.clip_has(act.motion, act.frame, |k| matches!(k, WindowKind::AllowMovement));
-                    self.vel_h = if self.airborne && steer {
+                    let steer = self.clip_has(act.motion, act.frame, |k| matches!(k, WindowKind::AllowMovement)) && self.cast_hold.is_none();
+                    self.vel_h = if self.airborne && self.cast_hold.is_some_and(|n| act.frame < n) {
+                        // (Held in place, Final Form's air Reflect.)
+                        [0.0; 2]
+                    } else if self.airborne && steer {
                         // (Steered as in a jump, Wisdom Form's air casts.)
                         air_control(self, true)
                     } else if self.airborne {
@@ -2323,7 +2365,7 @@ impl Character {
 
         if !self.airborne {
             self.vel_y = 0.0;
-        } else if gravity && self.air_magic_falls && self.air_magic_gravity < 1.0 && matches!(self.mode, Mode::Action(Action { kind: ActionKind::Magic, .. })) {
+        } else if gravity && self.air_magic_falls && self.air_magic_gravity < 1.0 && self.cast_hold.is_none() && matches!(self.mode, Mode::Action(Action { kind: ActionKind::Magic, .. })) {
             // An air cast sinking at a share of gravity (KH1's spells). The arc is kept at the
             // speed reached, so the fall after the cast goes on from it.
             let share = self.air_magic_gravity.max(0.0);
