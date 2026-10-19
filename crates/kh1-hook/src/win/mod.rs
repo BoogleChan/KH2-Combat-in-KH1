@@ -18,6 +18,7 @@ mod hook;
 mod hurt;
 mod kh2fx;
 mod kh2sound;
+mod leftblade;
 mod menu;
 mod pose;
 mod settings;
@@ -189,6 +190,7 @@ pub unsafe extern "system" fn DllMain(_inst: *mut c_void, reason: u32, _reserved
         reflect::install();
         drive::install();
         tint::install();
+        leftblade::install();
         gates::install();
         kh2sound::start();
         kh2fx::start();

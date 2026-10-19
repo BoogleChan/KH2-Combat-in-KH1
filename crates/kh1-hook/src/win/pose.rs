@@ -1169,6 +1169,11 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
             *k = Some((o.0, o.1, to_world * pose[280], to_world * pose[283], ours));
         }
     }
+    // Valor's second Keyblade (`leftblade`): the left hand's weapon bones, from this pose and
+    // KH2's, handed to its draw (it does nothing outside Valor or with it off).
+    if let Some((body, weapon)) = s.kh2_now.as_ref() {
+        super::leftblade::note_pose(&pose, &s.bind, body, weapon, &to_world, s.retarget.as_ref().map_or(1.0, |r| r.hip_ratio()));
+    }
     if let Ok(mut h) = HANDS_NOW.lock() {
         let orig = orig_hands.or(h.map(|h| h.orig)).unwrap_or(drawn);
         *h = Some(Hands { orig, drawn, at: Instant::now() });

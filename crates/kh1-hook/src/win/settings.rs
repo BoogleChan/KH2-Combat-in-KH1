@@ -85,7 +85,10 @@ physics = on\r\n\
 kh2_hair = on\r\n\
 ; drive: on = D-pad left at the battle menu's top flips to a second page (Attack, Magic, Items,\r\n\
 ; Drive), Drive listing KH2's forms; off = KH1's menu only\r\n\
-drive = on\r\n";
+drive = on\r\n\
+; valor_left_blade: on = in Valor Form, its Keyblade in Sora's left hand (KH1's own model of it);\r\n\
+; off = nothing of it is installed (turn it off if it misbehaves)\r\n\
+valor_left_blade = on\r\n";
 
 #[derive(Debug)]
 pub struct Settings {
@@ -134,6 +137,8 @@ pub struct Settings {
     pub kh2_hair: bool,
     /// The second command page with Drive (`drive = on`).
     pub drive: bool,
+    /// Valor's Keyblade drawn in his left hand (`valor_left_blade = on`, `leftblade`).
+    pub valor_left_blade: bool,
 }
 
 static SETTINGS: OnceLock<Settings> = OnceLock::new();
@@ -208,6 +213,7 @@ pub fn get() -> &'static Settings {
             physics: on(&text, "physics", "on", true),
             kh2_hair: on(&text, "kh2_hair", "on", true),
             drive: on(&text, "drive", "on", true),
+            valor_left_blade: on(&text, "valor_left_blade", "on", true),
         };
         log(&format!("settings ({path}): {s:?}"));
         s

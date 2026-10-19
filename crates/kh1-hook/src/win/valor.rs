@@ -43,7 +43,10 @@ pub unsafe fn keyblade() -> Option<u8> {
 pub unsafe fn started() {
     let k = keyblade();
     log(&format!("Valor Form: second Keyblade {:?}", k.map(|k| format!("{k:#x}"))));
+    super::leftblade::show(k);
 }
 
 /// Back from Valor.
-pub unsafe fn ended() {}
+pub unsafe fn ended() {
+    super::leftblade::hide();
+}

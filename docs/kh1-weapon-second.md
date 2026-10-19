@@ -366,3 +366,83 @@ hook(instance, view, params, actor):
    takes our record's textures).
 5. Swap the Valor Keyblade twice, and check that nothing crashes (the record drop of 3.1
    step 6).
+
+---
+
+## 7. What is implemented (`crates/kh1-hook/src/win/leftblade.rs`)
+
+The ini switch is `valor_left_blade` (default on). With it off, nothing is installed: no hook
+and no patch, and `show` / `hide` / `note_pose` / `kh2_left` do nothing.
+
+- **Install.** Two steps; if either one's bytes don't match, nothing is installed and the patch
+  is put back.
+  1. The `.wpn` release handler pointer at `0x1404DAF48` (Steam `0x4DA268`) is checked to hold
+     `base + 0x2851E0` and replaced with `wpn_release`. That wrapper calls KH1's handler for
+     every record except those on our buffers.
+  2. `0x1401D1F10` is hooked, with its 5-byte prologue checked.
+- **Load** (`show`, from `valor::started`, on the game thread inside KH2's step).
+  - The item's file name comes from `btltbl.bin` (item record `+2 == 2`, row `+6`, Sora's
+    table). It is loaded with `0x140289A80` into a fresh `VirtualAlloc` buffer of 0x80000.
+  - The callback `loaded(size, id, buffer)` checks:
+    - that it is the buffer we wait for;
+    - the size;
+    - the header offsets;
+    - the `MENV` magic.
+
+    Then it calls `0x1401D45F0` (setup) and reads the mesh model from `container+0x20`
+    (bones 1..13).
+  - It logs whether the remastered table was hooked up (`+0x10 == 0x96969696`).
+  - After that the model stays loaded. A different Keyblade at a later Valor is loaded into a
+    new buffer, and the old one is released:
+    1. its record's row is set to −1;
+    2. `0x1401D49D0(container)`;
+    3. `0x1400E2DF0(record, 1)`.
+
+    Buffers are never freed, because a late answer from the loader could still land in one.
+  - A load with no answer after 15 s is given up for the session. So is one whose model fails a
+    check.
+- **Pose.** `takeover` hands over the form rig's second weapon each step (`kh2_left`, one line
+  after the `POSE` write). `pose`, right after it writes Sora's bones, calls `note_pose` with
+  KH1's pose and bind, KH2's body and right Keyblade, and the placement. The grip is the
+  calibration of section 3.2:
+  - each KH2 hand bone is put on KH1's hand by the bind poses (KH2 translations times
+    `hip_ratio`);
+  - the turn from KH2's right weapon root to KH1's grip 280 is reused for the left;
+  - the chain keeps the right one's shape.
+
+  A grip more than 40 units from the left hand is not drawn that frame.
+- **Draw.** In the queue hook, after KH1's own call, all of these must hold:
+  - Valor is on, and the model is ready;
+  - the actor is Sora and the instance is Sora's;
+  - `params+0x18 != 0` (his Keyblade is out);
+  - the left matrices are at most 2 game frames old.
+
+  Then bones 280..292 of `instance+0x1B4` are saved and overwritten, and the queue is called
+  again on a copy of KH1's 0x60-byte params with `+0x38 = 0xFFFFFFFF` and `+0x18 = our mesh`.
+  The bones are put back.
+- **Logs** (prefix `left Keyblade:`, each a few times): off or installed, load requested, load
+  answered, model set up (HD or not), left grip posed, drawn in the left hand, released, and
+  KH1 releasing our record.
+
+Measured from the files while writing this: KH2's weapon motions move the Keyblade's root
+against its hand bone a lot (up to 18 units and 3.1 rad in `W_EX010_BTLF_L`; the grip
+changes). So the left grip has to come from KH2's posed left weapon. A fixed offset from the
+hand would be wrong.
+
+### Runtime checks for the user's log
+
+1. Startup: `hooked model queue (left Keyblade)`, and no `unexpected bytes` lines for the patch
+   or the hook.
+2. On the first Valor:
+   - `load of xw_ex_5xxx.wpn ... requested`;
+   - within a second, `load answered`;
+   - `model set up: ... 13 bones ... remastered (HD) table hooked up`.
+
+   If it says "no remastered table", the HD hookup did not find our file record (section 2.1).
+3. `left grip posed, N units from the left hand` (expect a few units) and `drawn in the left
+   hand`. In the game, look at whether the Keyblade sits in the palm with the blade forward,
+   and whether its teeth face the right way.
+4. Revert and Valor again: no new load, drawn at once. Change Valor's Keyblade and enter Valor:
+   `released`, then a new load. An area change while loaded: still drawn.
+5. If anything crashes, set `valor_left_blade = off` and send the log. The crash note names the
+   last stage reached.

@@ -2549,3 +2549,12 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   weapon list filtered to the free Keyblades, the pick stored at `save + 0x488` with Sora's own
   weapon put back; help line and accessory rows mapped one down. All "Equipment:" in the log.
 - Valor's effects (stage 211b).
+
+### 2026-10-19: Stage 213 (Valor's left-hand Keyblade)
+- A helper session added `leftblade.rs` (`docs/kh1-weapon-second.md`, its section 7 the checks):
+  in Valor the Valor Keyblade's `.wpn` is loaded with KH1's loader into our own buffer (KH1's
+  `.wpn` release handler `0x1404DAF48` wrapped to skip it), set up as a model, and drawn by a
+  second call of the model queue `0x1401D1F10` with Sora's body meshes hidden and the left-hand
+  matrices in bones 280..292 for that call only (from KH2's own left Keyblade, the rig's second
+  weapon, calibrated on the right hand). ini `valor_left_blade` (default on; off = nothing
+  installed). All "left Keyblade:" in the log.
