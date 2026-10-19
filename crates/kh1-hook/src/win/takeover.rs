@@ -1651,7 +1651,7 @@ unsafe fn takeover(actor: usize) -> bool {
     for e in &out.events {
         if super::form::takes(&d.drive, e) {
             if let character_core::EventKind::Effect(n) = e {
-                super::form::effect(*n);
+                super::form::effect(out.motion, *n);
             }
             continue;
         }

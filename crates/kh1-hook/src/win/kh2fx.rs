@@ -49,6 +49,8 @@ struct State {
     fx: Effects,
     /// Running effects: handle, the motion that started it, whether it ends with that motion.
     running: Vec<(EffectHandle, u16, bool)>,
+    /// Valor Form's elements started (`form_event`): handle, the motion, ends with it.
+    form_running: Vec<(u32, u16, bool)>,
     motion: u16,
     tip_local: Vec3,
     frame: Frame,
@@ -112,11 +114,13 @@ pub unsafe fn start() {
                 // (And Wisdom Form's, as package 4: its shots, `form`.)
                 // (And Wisdom Form's spells, Fire / Blizzard / Thunder / Cure by level, as packages
                 // `form::spell_package`.)
-                let last = if super::settings::get().drive { super::form::LAST_PACKAGE } else { WISDOM };
+                let last = if super::settings::get().drive { VALOR } else { WISDOM };
                 let spell: Vec<Option<SpellFx>> = (1..=last)
                     .map(|level| {
                         let lib = if level == WISDOM {
                             wisdom_library(kh2, &common)
+                        } else if level == VALOR {
+                            valor_library(kh2, &common)
                         } else if level > WISDOM {
                             form_spell_library(level, &common)
                         } else {
@@ -157,7 +161,7 @@ pub unsafe fn start() {
                 let mut fx = Effects::new(lib);
                 fx.seed(0x2D1F);
                 if let Ok(mut g) = STATE.lock() {
-                    *g = Some(State { fx, running: Vec::new(), motion: u16::MAX, tip_local, frame: Frame::new(), test_at: None, started: 0, spell, hidden: false, weapon });
+                    *g = Some(State { fx, running: Vec::new(), form_running: Vec::new(), motion: u16::MAX, tip_local, frame: Frame::new(), test_at: None, started: 0, spell, hidden: false, weapon });
                 }
             }
             Err(e) => log(&format!("KH2 effects: not loaded ({e})")),
@@ -237,6 +241,53 @@ fn wisdom_library(kh2: &super::pose::Kh2, common: &[u8]) -> Option<Library> {
         Err(e) => {
             log(&format!("KH2 effects: Wisdom Form's package not loaded ({e:?})"));
             None
+        }
+    }
+}
+
+/// Valor Form's effect package (`P_EX100_BTLF.a.us`), after Wisdom's spells' (stage 211): its
+/// motions' frame trigger 1 starts its own elements, not Sora's (`form_event`).
+pub const VALOR: u8 = super::form::LAST_PACKAGE + 1;
+
+fn valor_library(kh2: &super::pose::Kh2, common: &[u8]) -> Option<Library> {
+    let archive = kh2.valor.as_ref()?.archive.as_ref()?;
+    let l = Library::load_named(archive, Some("p_ex"), Some(common)).or_else(|_| Library::load(archive, Some(common)));
+    match l {
+        Ok(l) => {
+            log(&format!("KH2 effects: Valor Form's package, {} elements, {} textures", l.elements().len(), l.textures().len()));
+            Some(l)
+        }
+        Err(e) => {
+            log(&format!("KH2 effects: Valor Form's package not loaded ({e:?})"));
+            None
+        }
+    }
+}
+
+/// A frame trigger 1 of Valor's motion (`takeover`, `form::takes`): its element from Valor's
+/// package, on Sora; one that ends with its motion is ended when the motion changes (`step`).
+pub fn form_event(motion: u16, el: i16) {
+    if el < 0 || super::settings::get().kh2_effects.is_none() {
+        return;
+    }
+    let Ok(mut g) = STATE.lock() else { return };
+    let Some(s) = g.as_mut() else { return };
+    let tip = s.tip_local;
+    let Some(sp) = s.spell.get_mut(VALOR as usize - 1).and_then(|p| p.as_mut()) else { return };
+    let ends = sp.fx.library().element(el as u16).is_some_and(|e| e.flags & ENDS_WITH_MOTION != 0);
+    match sp.fx.start(el as u16, &mut |c| bone(c, tip)) {
+        Some(h) => {
+            s.form_running.push((spell_handle(VALOR, h), motion, ends));
+            s.started += 1;
+            if s.started <= 40 {
+                log(&format!("KH2 effect: Valor element {el} of motion {motion} started"));
+            }
+        }
+        None => {
+            static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 10 {
+                log(&format!("KH2 effect: element {el} not in Valor's package"));
+            }
         }
     }
 }
@@ -431,6 +482,13 @@ fn step(s: &mut State, motion: Option<u16>) {
                     s.fx.end(*h);
                 }
             }
+            for (h, from, ends) in &s.form_running {
+                if *ends && *from != m {
+                    if let Some(sp) = s.spell.get_mut((*h >> 27) as usize).and_then(|p| p.as_mut()) {
+                        sp.fx.end(EffectHandle(h & 0x07FF_FFFF));
+                    }
+                }
+            }
             s.motion = m;
         }
     }
@@ -456,6 +514,8 @@ fn step(s: &mut State, motion: Option<u16>) {
     }
     let fx = &s.fx;
     s.running.retain(|(h, _, _)| fx.is_running(*h));
+    let spell = &s.spell;
+    s.form_running.retain(|(h, _, _)| spell.get((*h >> 27) as usize).and_then(|p| p.as_ref()).is_some_and(|sp| sp.fx.is_running(EffectHandle(h & 0x07FF_FFFF))));
 }
 
 unsafe extern "system" fn world_pass() {

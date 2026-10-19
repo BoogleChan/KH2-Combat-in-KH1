@@ -2537,3 +2537,15 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - Valor's Keyblade (`valor.rs`, `equip.rs` from a helper session: `docs/kh1-equipment.md`): a
   Keyblade Sora owns with a copy not equipped; the save's `+0x488` keeps it while eligible, else
   the one with the most Strength; none: Valor greyed and refused.
+- Stage 211b: Valor's effects: its archive (`P_EX100_BTLF.a.us`, PAX "p_ex") is effect package
+  `kh2fx::VALOR` (after Wisdom's spells'); its motions' frame trigger 1 starts those elements on
+  Sora (`kh2fx::form_event`), the ones flagged to end with their motion ended when it changes.
+  No element sounds for them yet.
+
+### 2026-10-19: Stage 212 (Valor's row on the Equipment page; Valor's effects)
+- A helper session added `equipmenu.rs` (`docs/kh1-equipment.md`, "Implemented"): Sora's slots
+  window gets a "V: <Keyblade>" row under his weapon row (rows + 1 through a wrapper on the
+  window's update pointer, a shadow of his record behind `r12`), confirm on it opens KH1's
+  weapon list filtered to the free Keyblades, the pick stored at `save + 0x488` with Sora's own
+  weapon put back; help line and accessory rows mapped one down. All "Equipment:" in the log.
+- Valor's effects (stage 211b).

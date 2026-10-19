@@ -462,16 +462,17 @@ pub fn own_motion(motion: u16) -> bool {
     matches!(motion, DRIVE_MOTION | REVERT_FX)
 }
 
-/// Whether this frame's event goes to the form instead of Sora's effects: Wisdom's shots
-/// (`effect`); Valor's elements are its own archive's (`P_EX100_BTLF.a.us`), not loaded yet, so
-/// they aren't played as Sora's.
+/// Whether this frame's event goes to the form instead of Sora's effects: Wisdom's shots,
+/// Valor's elements (its own archive's, `P_EX100_BTLF.a.us`: `effect`).
 pub fn takes(d: &Drive, e: &EventKind) -> bool {
     d.form.is_some() && matches!(e, EventKind::Effect(_))
 }
 
-/// A frame trigger 1 of the form's motion: Wisdom's shots.
-pub fn effect(n: i16) {
+/// A frame trigger 1 of the form's motion: Wisdom's shots, Valor's own elements.
+pub fn effect(motion: u16, n: i16) {
     if in_wisdom() {
         super::formmagic::effect(n);
+    } else if in_valor() {
+        super::kh2fx::form_event(motion, n);
     }
 }

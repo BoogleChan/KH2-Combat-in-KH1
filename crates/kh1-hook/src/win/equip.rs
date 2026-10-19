@@ -14,7 +14,7 @@
 //! - Sora's weapons that aren't Keyblades: `0x52..=0x55` (Dream Sword / Shield / Rod and the
 //!   wooden sword; KH1 keeps the weapon row locked while one is held, `0x1402E6C60`).
 //!
-//! Not part of the build yet (not in `mod.rs`).
+//! Used by `equipmenu` (the Valor row in the Equipment page).
 
 #![allow(dead_code)]
 

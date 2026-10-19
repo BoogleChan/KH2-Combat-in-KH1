@@ -184,8 +184,8 @@ row count at `+0xF8`, visible rows `+0xFA`, the first visible row and the cursor
 
 ### Proposal: a "Valor" row under Sora's weapon row
 
-Everything below is a plan, in the style of the shortcut work (`docs/kh1-shortcuts.md`); none of it
-is in the mod.
+The plan, in the style of the shortcut work (`docs/kh1-shortcuts.md`); what was built, and where
+it differs, is in the next section.
 
 1. **Where the id lives**: `save + 0x488` (section 5). `equip::valor_keyblade` reads it and, if it
    is no longer a free Keyblade (or holds anything else, as on old saves), picks the free one with
@@ -224,6 +224,58 @@ is in the mod.
 
 Things to check in the game first: that the wrapper's row fix lands before the first draw, and
 the scrolled case (Sora with 7 or 8 accessories gives 9 or 10 rows, KH1 scrolls past 8).
+
+### Implemented (`crates/kh1-hook/src/win/equipmenu.rs`)
+
+The plan above, with these changes once the code was read closer:
+
+- **Confirm** doesn't fake the cursor: `0x1402EDF00` (the confirm test) keeps state in the window
+  (`+0xE8`), so it can't be asked twice. Instead the row test at `0x140303CA4` (`test ebx, ebx;
+  jne <accessory>`, `ebx` = the row) jumps to a stub: row 0 → KH1's weapon way; row 1 with a
+  Valor Keyblade → the weapon way with a "Valor pick" byte set; row 1 with none → sound 4 (KH1's
+  refusal), then the drawing part (`0x140303F87`); other rows → the accessory way. Rows ≥ 2: KH1
+  sets `0x142E9AA4C = row − 1`; right after its update ours makes it `row − 2` (`0x142E9AA5C` is
+  already right, as KH1 reads it through the shadow `r12`).
+- **Rows** are fixed at the start of the slots update and also right after the members' update
+  (it sets its child's rows as its cursor moves): only a window at exactly `acc + 1` rows is
+  changed, to `acc + 2` (visible ≤ 8, height KH1's formula).
+- **The list fill** `0x140304E50` is hooked (its prologue) rather than filtering after the list
+  window exists: the window takes its row count and cursor (`0x142E9AA70 / 74`, set by us to the
+  current Valor Keyblade) when it is made.
+- **No live preview during a Valor pick**: KH1's preview (`0x142E9AAA8 = 1` → `0x1402845A0`)
+  writes Sora's weapon byte, so the list wrapper clears the request (and `0x142E9AA80[slot]`)
+  right after KH1's update. On confirm (state 3) `0x142E9AA90 / 80[slot]` and `save + 0x36` are put
+  back, `0x1402E5A80` refreshes the stats, and the pick (`0x142E9AA60`) is stored at
+  `save + 0x488` if it is a free Keyblade.
+- **Label**: "V: " + KH1's name codes for the item (short, to fit the `0xA6` px row), only while
+  our slots / page wrappers run, only for the Valor Keyblade's id on Sora's page.
+- **Help**: for Sora in state 1 KH1's help runs with the scroll at 0 and the cursor at the row
+  KH1 expects; on row 1 Sora's first accessory byte (`save + 0x1D`) holds the Valor Keyblade for
+  the call (put back after), so KH1 shows its help.
+- The Valor Keyblade shown is `valor::keyblade()` each frame (`equip::valor_keyblade`, written
+  to `save + 0x488` when it changed).
+- Everything is checked first (the five window definitions hold KH1's functions, the bytes at
+  `0x140303C15`, `0x140303CA4`, `0x140304E50`, the call at `0x140304F74`); any mismatch logs and
+  leaves KH1 as it is. The two code jumps go in last.
+
+Log lines (`kh1-kh2.log`, all start with "Equipment:"): the install, "Valor's Keyblade is ..
+(candidates ..)" on change, "Sora's slots N rows", "Valor row picked", "weapon list for Valor:
+[..] -> [..]", "Valor's Keyblade stored: .." or "not stored", "Sora's row N is accessory slot K".
+
+To test in the game:
+
+1. Equipment → Sora: a row "V: <Keyblade>" under his weapon; his accessories below it; the
+   other members unchanged. Move the cursor over each row: the help line matches the row.
+2. Confirm on the V row: KH1's weapon list with only Keyblades Sora owns and isn't holding,
+   the cursor on the current one; resting on one doesn't change the Keyblade in his hand.
+   Confirm one: the row shows it, Sora's weapon (row 0 and in his hand) is unchanged, Strength
+   unchanged. Cancel instead: nothing changes.
+3. Confirm on an accessory row: the right accessory slot is replaced (first, last).
+4. Equip the V row's Keyblade as Sora's weapon: the V row moves to another Keyblade.
+5. With only the Kingdom Key (or in Dive to the Heart): the V row is empty and confirm on it
+   buzzes.
+6. Sora with 7 or 8 accessory slots (9 / 10 rows): scrolling, the last accessory, its help.
+7. Steam build: the same, and the install line without "some patches failed".
 
 ## 5. A spare save byte for the Valor Keyblade
 

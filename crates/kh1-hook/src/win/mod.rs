@@ -8,6 +8,7 @@ mod combat;
 mod config;
 mod crash;
 mod drive;
+mod equipmenu;
 mod feet;
 mod form;
 mod formmagic;
@@ -184,6 +185,7 @@ pub unsafe extern "system" fn DllMain(_inst: *mut c_void, reason: u32, _reserved
         camera::install();
         config::install();
         shortcuts::install();
+        equipmenu::install();
         reflect::install();
         drive::install();
         tint::install();
