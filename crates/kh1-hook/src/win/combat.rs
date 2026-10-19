@@ -1804,6 +1804,14 @@ unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
     // 49): KH1's menu takes nothing while Sora can't act (`0x1402912F0`: its can-act test lets
     // only plain spells through; the user: Attack only came out when Fire ended, the Drive list
     // was greyed), so Attack and a Drive form are taken here, as KH2's.
+    // (KH2 has him again while KH1's leftover cast still plays, `takeover::cut_left`: KH1 greys
+    // its menu then, so Attack is KH2's attack button from here; the user: an Attack waited 21-25
+    // frames after the form's KH1 spell.)
+    if kind == 1 && takeover::cut_left() {
+        PRESSED.store(true, Ordering::Relaxed);
+        cmd_log("Attack while KH1's cut cast plays on: KH2's attack".to_string());
+        return true;
+    }
     if takeover::kh1_cut_window() {
         if kind == 1 {
             takeover::ATTACK_AFTER.store(true, Ordering::Relaxed);

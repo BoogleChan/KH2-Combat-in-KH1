@@ -2513,3 +2513,12 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   command dispatcher (`0x1403975E0` stores it before each handler), not a lasting magic effect
   set; KH1's element hit sparks belong to its spell objects, which exist only during its own
   casts. Still open.
+
+### 2026-10-19: Stage 210 (KH1's leftover motion after a cut)
+- The user: past frame 50 of a form's KH1 spell, KH1 "still thinks its in the aero animation
+  (0x3A)" until the stick moves, and an Attack waits 21-25 frames. The s209 log: the cut handed
+  him to KH2, and the next frame "KH1's own action, slot 55" took him back (KH1's cast motion
+  plays on after our cut). Now a cut (`cancel`, or the air cast's landing) sets `CUT_LEFT`:
+  until KH1's slot is a plain one (0..7) or KH1 takes him for something new, the leftover isn't
+  KH1's own action. KH1 greys its menu while its cast plays, so Attack is taken in
+  `combat::run_entry` as KH2's press meanwhile (`takeover::cut_left`).

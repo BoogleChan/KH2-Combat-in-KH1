@@ -201,6 +201,15 @@ static HANDOFF_SEEN_MS: AtomicU64 = AtomicU64::new(0);
 static FRAME_KIND: AtomicU8 = AtomicU8::new(0);
 static HANDOFF_FRAME: AtomicBool = AtomicBool::new(false);
 static FRESH: AtomicBool = AtomicBool::new(false);
+/// KH2 cut one of KH1's moves short: until KH1's motion slot is a plain one again (0..7), its
+/// leftover isn't taken for an action of KH1's own.
+static CUT_LEFT: AtomicBool = AtomicBool::new(false);
+
+/// KH2 has Sora while what's left of a KH1 move it cut plays on in KH1 (`CUT_LEFT`): KH1's menu
+/// greys its commands meanwhile.
+pub fn cut_left() -> bool {
+    CUT_LEFT.load(Ordering::Relaxed) && kh2_has()
+}
 /// KH2's first frames after KH1's own move: KH1's push speed isn't carried.
 static NO_CARRY: AtomicU32 = AtomicU32::new(0);
 static HANDOFF_FRAMES: AtomicU32 = AtomicU32::new(0);
@@ -986,6 +995,8 @@ unsafe fn takeover(actor: usize) -> bool {
             }
             // A spell chosen during the cast runs from the queue once KH2 has him (`resume_command`).
             MAGIC_AFTER.store(false, Ordering::Relaxed);
+            // (Cut short by KH2: what's left of KH1's motion isn't KH1's own action.)
+            CUT_LEFT.store(cancel || cast_landed, Ordering::Relaxed);
             if cast_landed {
                 // KH1's cast action ends here (it would at the end of its own landing): its
                 // "action running" flag off, so its can-act test lets KH2's input through.
@@ -1113,7 +1124,14 @@ unsafe fn takeover(actor: usize) -> bool {
     // fall KH2 has taken over (KH1 changes slot a few frames later), not an action of KH1's
     // (the user: on landing after a spell, KH1's idle, then a snap to KH2).
     let leftover_fall = matches!(slot, Some(8..=13)) && rd::<i32>(actor + 0x70) == 0;
-    if matches!(slot, Some(s) if s > 7) && !leftover_fall && !airborne && !FLY_PRESS.load(Ordering::Relaxed) {
+    // A KH1 move KH2 cut short (`CUT_LEFT`): its motion plays on in KH1 a while, and isn't KH1's
+    // to take him back for (the user: past frame 50 of a form's KH1 spell, KH1 still had him in
+    // its Aero motion until the stick moved; an Attack then waited 21-25 frames).
+    let cut_left = CUT_LEFT.load(Ordering::Relaxed) && matches!(slot, Some(s) if s > 7);
+    if !matches!(slot, Some(s) if s > 7) {
+        CUT_LEFT.store(false, Ordering::Relaxed);
+    }
+    if matches!(slot, Some(s) if s > 7) && !leftover_fall && !airborne && !FLY_PRESS.load(Ordering::Relaxed) && !cut_left {
         release(&format!("KH1's own action, slot {}, KH1 state {}", slot.map_or("?".into(), |s| s.to_string()), rd::<i32>(actor + 0x70)));
         return false;
     }
@@ -2098,6 +2116,7 @@ pub fn air_cast() -> Option<(u8, f32)> {
 }
 
 pub fn hand_to_kh1(why: &str) {
+    CUT_LEFT.store(false, Ordering::Relaxed);
     ATTACK_AFTER.store(false, Ordering::Relaxed);
     HANDOFF_FRAMES.store(0, Ordering::Relaxed);
     HANDOFF.store(true, Ordering::Relaxed);
