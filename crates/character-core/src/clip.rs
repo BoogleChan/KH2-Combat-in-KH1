@@ -65,6 +65,9 @@ pub enum EventKind {
     Sound(u32),
     /// Play the object's battle voice `n` (frame triggers 13 / 14: `00battle` VTBL id).
     Voice(i16),
+    /// A footstep (frame trigger 2): its kind, the same numbering KH1's material sounds use
+    /// (`0x1402939B0`): 0 run, 4 walk, 10 landing.
+    Footstep(i16),
     Other(u8),
 }
 

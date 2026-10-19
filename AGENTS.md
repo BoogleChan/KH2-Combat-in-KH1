@@ -2388,3 +2388,18 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   magic moves do", Wisdom's too): the no-gravity frames of a cast motion hold him again (s174
   had dropped them for air casts so they fell as KH1's do); `air_magic_falls` now only ends a
   cast that reaches the ground in the landing.
+
+### 2026-10-18: Stage 205 (footsteps follow KH2)
+- "footsteps currently follow whatever the kh1 animations are doing ... we need footstep sfxs to
+  follow what kh2 animations are doing": stage 155 gated `0x140293C70`, which is objects' (crates,
+  pushables); Sora's steps come from his KH1 motion's sound events (`0x14029DA4E` ->
+  `0x140293290` -> table `0x140529788` -> `0x1402939B0 (actor, kind)`, Steam `0x140295B40`):
+  kinds 0..7 the feet (alternated by `+0x39C`), 10 a landing, others walls and objects. Hooked:
+  while KH2 has Sora, KH1's are dropped.
+- KH2's footstep is frame trigger 2 (param: kind, KH1's own numbering: run 0, walk 4, landing
+  10). `kh2-data` loads them per motion and slot (`Rig::footsteps`, battle and field), the clip
+  events carry them (`EventKind::Footstep`); the hook plays KH1's floor sound through
+  `0x1402939B0` when the rig's walk / run track passes one, and for an action's events (the
+  landing).
+- Wisdom Form: none but the landing's ("we generally want footsteps disabled for sora in this
+  form (with the exception of landing) as he is gliding"; its walk and run have no trigger 2).

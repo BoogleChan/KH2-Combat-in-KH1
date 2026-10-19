@@ -157,6 +157,15 @@ impl RigAnim {
         field.then(|| rig.field_motions.get(&m)).flatten().or_else(|| rig.motions.get(&m))
     }
 
+    /// The motion playing, whether its field slot is (one of its own), its frame and length (60
+    /// Hz frames): for the host's footsteps (`Rig::footsteps`).
+    pub fn playing(&self) -> Option<(u16, bool, f32, f32)> {
+        let t = self.track?;
+        let field = t.field && self.rig.field_motions.contains_key(&t.motion);
+        let m = Self::motion_for(&self.rig, t.motion, t.field)?;
+        Some((t.motion, field, t.frame, kh2_anim::length_frames(m)))
+    }
+
     /// Whether to draw the weapons: always in battle; out of combat only
     /// while something other than plain movement plays.
     pub fn weapons_out(&self) -> bool {

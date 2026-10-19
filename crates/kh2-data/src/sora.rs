@@ -95,6 +95,9 @@ pub struct Rig {
     /// motions whose field slot differs from the battle one. Sora: idle,
     /// walk and run.
     pub field_motions: HashMap<u16, Arc<Interpolated>>,
+    /// Footsteps (frame trigger 2) by motion and slot (`true`: the field slot of
+    /// `field_motions`): the frame and its kind (`EventKind::Footstep`).
+    pub footsteps: HashMap<(u16, bool), Vec<(f32, i16)>>,
     /// Weapons, right hand first (Valor, Master and Final carry two).
     pub weapons: Vec<WeaponRig>,
     pub body_shapes: Vec<BoneShape>,
@@ -333,6 +336,7 @@ pub fn clip_from_anb(motion: u16, player: &Anb, weapons: &[Option<&Anb>], combat
                 17 => EventKind::MagicCast(e.params.first().copied().unwrap_or(0)),
                 8 if e.params.len() >= 2 => EventKind::Sound(e.params[0] as u16 as u32 * 1000 + e.params[1] as u16 as u32),
                 13 | 14 => EventKind::Voice(e.params.first().copied().unwrap_or(-1)),
+                2 => EventKind::Footstep(e.params.first().copied().unwrap_or(0)),
                 28 => EventKind::RevengeCheck,
                 34 => EventKind::QuickRunCheck,
                 35 => EventKind::FallCheck,
@@ -387,6 +391,34 @@ pub(crate) fn pose_motions(mset: &Mset) -> HashMap<u16, Arc<Interpolated>> {
     for m in 0..=255u16 {
         if let Some(p) = mset.slot_for(m as usize, true, true).and_then(|s| s.anb.as_ref()).and_then(|a| a.pose.clone()) {
             out.insert(m, Arc::new(p));
+        }
+    }
+    out
+}
+
+/// Each motion's footstep triggers (trigger 2: frame, kind), for its battle slot and, where it
+/// has one of its own (`field_motions`), its field slot.
+pub(crate) fn footsteps(mset: &Mset) -> HashMap<(u16, bool), Vec<(f32, i16)>> {
+    let mut out = HashMap::new();
+    let steps = |anb: &Anb| -> Vec<(f32, i16)> { anb.triggers.frames.iter().filter(|e| e.id == 2).map(|e| (e.frame.max(0) as f32, e.params.first().copied().unwrap_or(0))).collect() };
+    for m in 0..=255u16 {
+        let battle = mset.slot_for(m as usize, true, true);
+        if let Some(a) = battle.and_then(|s| s.anb.as_ref()) {
+            let s = steps(a);
+            if !s.is_empty() {
+                out.insert((m, false), s);
+            }
+        }
+        if mset.kind == 1 {
+            let i = m as usize * 4 + 2;
+            if battle.map(|s| s.index) != Some(i) {
+                if let Some(a) = mset.slots.get(i).and_then(|s| s.anb.as_ref()) {
+                    let s = steps(a);
+                    if !s.is_empty() {
+                        out.insert((m, true), s);
+                    }
+                }
+            }
         }
     }
     out
@@ -507,5 +539,5 @@ fn load_rig(read: &dyn Fn(&str) -> Result<Vec<u8>>, spec: PlayerSpec, player: &M
             shapes: bone_shapes(weapon_collision),
         })
         .collect();
-    Ok(Rig { motions: pose_motions(player), field_motions: field_motions(player), weapons, body_shapes: bone_shapes(&body), skeleton })
+    Ok(Rig { motions: pose_motions(player), field_motions: field_motions(player), footsteps: footsteps(player), weapons, body_shapes: bone_shapes(&body), skeleton })
 }
