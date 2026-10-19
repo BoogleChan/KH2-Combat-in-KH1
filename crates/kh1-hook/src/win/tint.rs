@@ -30,8 +30,14 @@ const TEX_DDS: usize = 0x68;
 const TEX_GPU: usize = 0x70;
 const TEX_W: usize = 0x7C;
 const TEX_H: usize = 0x7E;
-/// The slots recoloured (mesh table entries 0 and 1: `-1c0`, the collar; `-1c1`, the clothes).
-const SLOTS: [usize; 2] = [0, 1];
+/// The slots recoloured (mesh table entries 0 and 1: `-1c0`, the collar; `-1c1`, the clothes;
+/// 3: `-1c3`, the shoes and the yellow pouches, the user: "soras shoes should turn from yellow to
+/// blue in this form").
+const SLOTS: [usize; 3] = [0, 1, 3];
+/// The hue each slot's colour is taken from (red; the shoes' yellow) and how wide (degrees).
+const FROM: [(f32, f32); 3] = [(0.0, RED_WIDTH), (0.0, RED_WIDTH), (YELLOW_HUE, YELLOW_WIDTH)];
+const YELLOW_HUE: f32 = 48.0;
+const YELLOW_WIDTH: f32 = 16.0;
 const MODEL: &str = "xa_ex_0010.mdls";
 /// Red → blue: the hue that is moved, how wide (degrees, soft edge after), the saturation it
 /// takes from (soft edge after), and the hue it goes to.
@@ -51,18 +57,18 @@ struct Pixels {
 }
 
 /// Each slot's recoloured pixels from the PKG (`None`: not read).
-static FROM_PKG: [OnceLock<Option<Arc<Pixels>>>; 2] = [OnceLock::new(), OnceLock::new()];
+static FROM_PKG: [OnceLock<Option<Arc<Pixels>>>; 3] = [OnceLock::new(), OnceLock::new(), OnceLock::new()];
 
 struct Swap {
     /// Per slot: the source texture swapped (its address), KH1's GPU texture to put back.
-    swapped: [Option<(usize, u64)>; 2],
+    swapped: [Option<(usize, u64)>; 3],
     /// Our GPU texture for a source texture (made once per source).
     ours: Option<HashMap<usize, u64>>,
     /// Sources we couldn't make one for (not tried again).
     failed: Vec<usize>,
 }
 
-static SWAP: Mutex<Swap> = Mutex::new(Swap { swapped: [None, None], ours: None, failed: Vec::new() });
+static SWAP: Mutex<Swap> = Mutex::new(Swap { swapped: [None, None, None], ours: None, failed: Vec::new() });
 
 unsafe fn rd<T: Copy>(p: usize) -> T {
     std::ptr::read_unaligned(p as *const T)
@@ -71,8 +77,9 @@ unsafe fn wr<T: Copy>(p: usize, v: T) {
     std::ptr::write_unaligned(p as *mut T, v)
 }
 
-/// Red pixels to blue, in place (B8G8R8A8). Returns how many changed.
-fn recolour(bgra: &mut [u8]) -> usize {
+/// Pixels near hue `from` (within `width` degrees) to blue, in place (B8G8R8A8). Returns how
+/// many changed.
+fn recolour(bgra: &mut [u8], (from, width): (f32, f32)) -> usize {
     let mut changed = 0;
     for px in bgra.chunks_exact_mut(4) {
         let (b, g, r) = (px[0] as f32 / 255.0, px[1] as f32 / 255.0, px[2] as f32 / 255.0);
@@ -90,8 +97,9 @@ fn recolour(bgra: &mut [u8]) -> usize {
             (r - g) / c + 4.0
         } * 60.0;
         let s = c / mx;
-        let d = h.min(360.0 - h);
-        let w = ((RED_WIDTH - d) / RED_SOFT).clamp(0.0, 1.0) * ((s - SAT_FROM) / SAT_SOFT).clamp(0.0, 1.0);
+        let dh = (h - from).rem_euclid(360.0);
+        let d = dh.min(360.0 - dh);
+        let w = ((width - d) / RED_SOFT).clamp(0.0, 1.0) * ((s - SAT_FROM) / SAT_SOFT).clamp(0.0, 1.0);
         if w <= 0.0 {
             continue;
         }
@@ -142,8 +150,8 @@ fn dds_bgra(dds: &[u8]) -> Option<Pixels> {
     Some(Pixels { w, h, bgra })
 }
 
-fn recoloured(mut p: Pixels, what: &str) -> Arc<Pixels> {
-    let n = recolour(&mut p.bgra);
+fn recoloured(mut p: Pixels, what: &str, k: usize) -> Arc<Pixels> {
+    let n = recolour(&mut p.bgra, FROM[k]);
     log(&format!("Wisdom tint: {what}, {}x{}, {n} texels recoloured ({:.1} %)", p.w, p.h, n as f32 * 100.0 / (p.w * p.h).max(1) as f32));
     Arc::new(p)
 }
@@ -168,7 +176,7 @@ pub fn install() {
             let asset = format!("-1c{slot}.dds");
             let p = match install.read_remastered(kh1_data::Source::Live, MODEL, &asset) {
                 Ok((name, bytes)) => match dds_bgra(&bytes) {
-                    Some(p) => Some(recoloured(p, &format!("{MODEL} {name} (from the PKG)"))),
+                    Some(p) => Some(recoloured(p, &format!("{MODEL} {name} (from the PKG)"), k)),
                     None => {
                         log(&format!("Wisdom tint: {name} isn't a plain 32-bit DDS"));
                         None
@@ -260,7 +268,7 @@ unsafe fn ours_for(s: &mut Swap, k: usize, src: usize) -> Option<u64> {
         (dw == w && dh == h && super::crash::readable(dds + len - 1))
             .then(|| dds_bgra(std::slice::from_raw_parts(dds as *const u8, len)))
             .flatten()
-            .map(|p| recoloured(p, &format!("{name} (KH1's copy in memory)")))
+            .map(|p| recoloured(p, &format!("{name} (KH1's copy in memory)"), k))
     } else {
         None
     };

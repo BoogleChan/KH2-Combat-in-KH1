@@ -831,12 +831,24 @@ impl Character {
         self.mode = Mode::Free;
         self.airborne = true;
         self.vel_h = vel_h;
+        let g = self.params.gravity;
+        // Rising (taken over mid-jump): the rest of the rise, as high as that speed carries.
+        if vel_y > 0.0 && g > 0.0 {
+            self.arc = Some(Arc::new(vel_y * vel_y / (2.0 * g), g));
+            self.vel_y = vel_y;
+            return;
+        }
         let mut arc = Arc::fall();
-        if self.params.gravity > 0.0 {
-            arc.t = (-vel_y).max(0.0) / self.params.gravity;
+        if g > 0.0 {
+            arc.t = (-vel_y).max(0.0) / g;
         }
         self.arc = Some(arc);
         self.vel_y = vel_y.min(0.0);
+    }
+
+    /// The Aerial Dodge is there for this fall (taken over from the host's own jump).
+    pub fn allow_air_dodge(&mut self) {
+        self.air_dodge_ready = self.abilities.aerial_dodge > 0;
     }
 
     /// Just touched down out of a move of the host's own (a spell cast in the air): standing,
@@ -1287,7 +1299,11 @@ impl Character {
             .filter(|d| len2(*d) > 1e-3)
             .map(norm)
             .unwrap_or_else(|| self.forward());
-        let all: Vec<TargetGeom> = env.targets.iter().map(|t| self.geom(env, t, aim)).collect();
+        // Locked on, the locked target is the only one the rows are measured against (the user:
+        // locked onto one ahead with another beside him, Sora took the base finisher and lunged
+        // at the one beside him instead of the locked one's Aerial Finish).
+        let locked = self.lock.filter(|id| env.targets.iter().any(|t| t.id == *id));
+        let all: Vec<TargetGeom> = env.targets.iter().filter(|t| locked.is_none_or(|id| t.id == id)).map(|t| self.geom(env, t, aim)).collect();
         let primary = primary_info.map(|t| TargetGeom { facing_dot: 1.0, ..self.geom(env, t, aim) });
         let sit = Situation {
             air,

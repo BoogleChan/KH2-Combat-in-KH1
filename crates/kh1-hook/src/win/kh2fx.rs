@@ -60,6 +60,8 @@ struct State {
     spell: Vec<Option<SpellFx>>,
     /// Whether the effects were hidden for a pause or menu last time (for the log).
     hidden: bool,
+    /// The Keyblade's own package (`obj/W_EX010.a.us`): its flash as it vanishes (`weapon_vanish`).
+    weapon: Option<SpellFx>,
 }
 
 struct SpellFx {
@@ -142,12 +144,20 @@ pub unsafe fn start() {
                         log(&format!("KH2 effects: element {id} skips {skipped:?}"));
                     }
                 }
+                // The Keyblade's package (KH2's Kingdom Key, W_EX010), its textures after the rest.
+                let weapon = weapon_library(&common).map(|l| {
+                    let tex_base = textures.len() as u32;
+                    textures.extend(l.textures().iter().map(|t| (t.width, t.height, t.rgba.clone())));
+                    let mut fx = Effects::new(Arc::new(l));
+                    fx.seed(0x3EA0);
+                    SpellFx { fx, tex_base, frame: Frame::new() }
+                });
                 fx12::set_textures(textures);
                 let lib = Arc::new(lib);
                 let mut fx = Effects::new(lib);
                 fx.seed(0x2D1F);
                 if let Ok(mut g) = STATE.lock() {
-                    *g = Some(State { fx, running: Vec::new(), motion: u16::MAX, tip_local, frame: Frame::new(), test_at: None, started: 0, spell, hidden: false });
+                    *g = Some(State { fx, running: Vec::new(), motion: u16::MAX, tip_local, frame: Frame::new(), test_at: None, started: 0, spell, hidden: false, weapon });
                 }
             }
             Err(e) => log(&format!("KH2 effects: not loaded ({e})")),
@@ -163,6 +173,55 @@ fn load() -> Result<(Library, Vec<u8>), String> {
     let common = install.read_any(src, "effect/texcommon.dpd").map_err(|e| format!("texcommon.dpd: {e}"))?;
     let lib = Library::load_named(&pack, Some("p_ex"), Some(&common)).map_err(|e| format!("{e:?}"))?;
     Ok((lib, common))
+}
+
+/// The Keyblade's effect package (`obj/W_EX010.a.us`).
+fn weapon_library(common: &[u8]) -> Option<Library> {
+    let exe = format!("{}\\KINGDOM HEARTS II FINAL MIX.exe", super::exe_dir());
+    let r = (|| -> Result<Library, String> {
+        let install = kh2_data::Install::locate(&exe).map_err(|e| e.to_string())?;
+        let src = if install.has_backup() { kh2_data::Source::Backup } else { kh2_data::Source::Live };
+        let pack = install.read_any(src, "obj/W_EX010.a.us").map_err(|e| e.to_string())?;
+        Library::load(&pack, Some(common)).map_err(|e| format!("{e:?}"))
+    })();
+    match r {
+        Ok(l) => {
+            log(&format!("KH2 effects: the Keyblade's package, {} elements", l.elements().len()));
+            Some(l)
+        }
+        Err(e) => {
+            log(&format!("KH2 effects: the Keyblade's package not loaded ({e})"));
+            None
+        }
+    }
+}
+
+/// The Keyblade's vanish flash: element 0 of its package (on its blade, bone 2: a flash that
+/// swells and fades over 13 ticks with a turning glint; Data, KH2's own call for it not traced),
+/// started where the blade is as KH2 puts it away (the user: "when a keyblade disappears in any
+/// animation there isn't any visual effects from kh2 for a dissapearing keyblade").
+pub const WEAPON_VANISH: u16 = 0;
+
+/// The Keyblade's bones as the weapon package's elements name them: any code is the blade, half
+/// way from the hand to the tip, turned as the hand.
+fn blade(tip_local: Vec3) -> Option<Mat4> {
+    super::pose::kh2_pose(|pose, w| pose.get(HAND).map(|h| *w * *h * Mat4::from_translation(tip_local * 0.5))).flatten()
+}
+
+pub fn weapon_vanish() {
+    if super::settings::get().kh2_effects.is_none() {
+        return;
+    }
+    let Ok(mut g) = STATE.lock() else { return };
+    let Some(s) = g.as_mut() else { return };
+    let tip = s.tip_local;
+    let Some(wp) = s.weapon.as_mut() else { return };
+    if wp.fx.start(WEAPON_VANISH, &mut |_| blade(tip)).is_some() {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 10 {
+            log("KH2 effect: the Keyblade's vanish");
+        }
+    }
 }
 
 /// Wisdom Form's effect package (`P_EX100_MAGF.a.us`, PAX "p_ex"), played as spell package 4.
@@ -389,6 +448,12 @@ fn step(s: &mut State, motion: Option<u16>) {
     for sp in s.spell.iter_mut().flatten() {
         sp.fx.tick(1.0, &mut |c| bone(c, tip));
     }
+    if let Some(wp) = s.weapon.as_mut() {
+        if let Some((view, _)) = unsafe { fx12::camera(BASE.load(Ordering::Relaxed)) } {
+            wp.fx.set_camera(&Camera::from_view(view));
+        }
+        wp.fx.tick(1.0, &mut |_| blade(tip));
+    }
     let fx = &s.fx;
     s.running.retain(|(h, _, _)| fx.is_running(*h));
 }
@@ -414,7 +479,7 @@ fn draw() {
         }
         // (KH1's frames step the effects too: `takeover::physics`.)
     }
-    if s.fx.running_count() == 0 && s.spell.iter().flatten().all(|sp| sp.fx.running_count() == 0) {
+    if s.fx.running_count() == 0 && s.spell.iter().flatten().all(|sp| sp.fx.running_count() == 0) && s.weapon.as_ref().is_none_or(|w| w.fx.running_count() == 0) {
         return;
     }
     let base = BASE.load(Ordering::Relaxed);
@@ -444,7 +509,7 @@ fn draw() {
     let cam = Camera::from_view(view);
     s.fx.build(&cam, &mut s.frame);
     // The spell's triangles after Sora's, its texture ids moved past his.
-    for sp in s.spell.iter_mut().flatten() {
+    for sp in s.spell.iter_mut().flatten().chain(s.weapon.as_mut()) {
         if sp.fx.running_count() > 0 {
             sp.fx.build(&cam, &mut sp.frame);
             let first = s.frame.vertices.len() as u32;

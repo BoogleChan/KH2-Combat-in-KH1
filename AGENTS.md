@@ -2438,3 +2438,25 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   Test `sora_flinches_and_is_pushed_back_by_a_small_hit` updated.
 - Open: Wisdom's elemental hits still showed the physical spark in s205 (s202's spell data: its
   `+0x28` hit effect is looked up in Sora's effect group, `docs/kh1-attack-elements.md` §4).
+
+### 2026-10-19: Stage 207 (the user's list: ledges, KH1's air states, lock-on, Wisdom's shoes, the Keyblade's vanish)
+- "When sora lets go of a ledge he instantly regrabs the ledge": after KH1 lets go of him in the air
+  (a ledge, a ladder, a pole) KH1's grabs aren't tried for 20 frames of KH2's fall (`NO_GRAB`), as
+  KH1 skips them for 15 frames after jumping off something.
+- "KH2 soras falling animation is unable to grab onto ladders/vines": the grabs are tried out of an
+  Aerial Dodge or a glide too, and with the stick let go the probe move presses along his drift (or
+  facing), so KH1's climb check has a wall face to read.
+- KH1's jump or fall with him free (state 1 / 2, KH1's can-act test passing, not a spell's air
+  cast): KH2 takes him at once (two frames in), rising or falling (`Character::carry_into_air` now
+  carries a rise), its Aerial Dodge ready (`allow_air_dodge`); KH1's jump and Square are KH2's
+  meanwhile, so KH1's glide and Superglide don't come out of it (the user's fail-safe). All through
+  one of KH1's commands (a spell, an item) KH1's jump and Square bits are KH2's too: on the frame it
+  lets him act again KH1 read them as its own jump, high jump or dodge roll (the user).
+- Lock-on: locked onto a target, the combo rows are measured against that target only (the user:
+  one ahead locked, another beside him: the base finisher, lunging at the one beside him).
+- Wisdom's blue takes in the shoes: mesh-table entry 3 (`-1c3`, shoes and the yellow pouches), its
+  yellow (hue 48° ± 16) to blue (`tint::FROM`). The pouches go blue with them (same texture).
+- The Keyblade's vanish: as KH2 puts it away, element 0 of the Keyblade's own package
+  (`obj/W_EX010.a.us`: a flash that swells and fades over 13 ticks with a turning glint) starts on
+  the blade (half way from the hand to the tip). Inferred: KH2's own call for it isn't traced.
+- Open: after a boss falls, KH1 holding Sora with its own animations before the scene (needs a log).

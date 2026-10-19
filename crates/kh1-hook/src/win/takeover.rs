@@ -128,6 +128,14 @@ static FRAME_KIND: AtomicU8 = AtomicU8::new(0);
 static HANDOFF_FRAME: AtomicBool = AtomicBool::new(false);
 static FRESH: AtomicBool = AtomicBool::new(false);
 static HANDOFF_FRAMES: AtomicU32 = AtomicU32::new(0);
+/// Frames of KH2's fall left in which KH1's grabs aren't tried: after KH1 lets go of him in the
+/// air (off a ledge, a ladder, a pole), as KH1 skips them for 15 frames after jumping off
+/// something (its flag 0x10000; the user: "when sora lets go of a ledge he instantly regrabs
+/// the ledge").
+static NO_GRAB: AtomicU32 = AtomicU32::new(0);
+/// KH2's fall taken over from KH1's free jump or fall: its Aerial Dodge is there.
+static AIR_MOVES: AtomicBool = AtomicBool::new(false);
+const NO_GRAB_FRAMES: u32 = 20;
 /// Where KH1's move had him last frame (his speed while it moves him).
 static HANDOFF_POS: Mutex<Option<[f32; 3]>> = Mutex::new(None);
 /// KH1's move ended in its fall: his speed then (per frame: sideways, up), for KH2's fall.
@@ -295,7 +303,11 @@ unsafe extern "system" fn control(actor: usize, dir: usize) {
     // first frame after a pause or an examine, with two pads (Steam Input), or with the swap.
     let strip = actor > 0x10000
         && actor == rd::<u64>(base + PARTY_RVA) as usize
-        && (!HANDOFF.load(Ordering::Relaxed) || kh1_move_done(base, actor))
+        // (Also all through one of KH1's commands, a spell or an item: on the frame it lets him
+        // act again KH1 clears its action flag inside its own step and then read a jump or Square
+        // as its own jump, high jump or dodge roll, the user. Those presses are KH2's when it
+        // takes him back.)
+        && (!HANDOFF.load(Ordering::Relaxed) || kh1_move_done(base, actor) || kh1_air_free(base, actor) || FROM_COMMAND.load(Ordering::Relaxed))
         && kh1_borrows(actor);
     // With L1 down (KH1's shortcuts) or a submenu open, the presses are KH1's (a shortcut, backing
     // out): only the held and repeat bits go then. A jump held while L1 came down was KH1's held
@@ -344,6 +356,13 @@ static SLOPE_RUN: AtomicBool = AtomicBool::new(false);
 /// One of KH1's moves has him standing again and free (its ground state, KH1's own can-act
 /// test): the jump button is KH2's from here (the user: after a spell, a jump on the first free
 /// frame was KH1's high jump, "resulting in many bugs").
+/// KH1 has him free in its jump or fall (state 1 / 2, its can-act test passes), not in a spell's
+/// air cast.
+unsafe fn kh1_air_free(base: usize, actor: usize) -> bool {
+    let can_act: unsafe extern "system" fn(usize) -> i32 = std::mem::transmute(base + CAN_ACT_RVA);
+    matches!(rd::<i32>(actor + 0x70), 1 | 2) && can_act(actor) != 0 && air_cast().is_none()
+}
+
 unsafe fn kh1_move_done(base: usize, actor: usize) -> bool {
     let can_act: unsafe extern "system" fn(usize) -> i32 = std::mem::transmute(base + CAN_ACT_RVA);
     rd::<i32>(actor + 0x70) == 0 && can_act(actor) != 0
@@ -740,6 +759,13 @@ unsafe fn takeover(actor: usize) -> bool {
         let fall_state = if command { matches!(state, 1 | 2) && done } else { matches!(state, 2 | LEAP_OFF_STATE) || state == 1 && done };
         let falling = fall_state && above > STEP_DOWN && vel.is_some_and(|(_, up)| up < 0.0);
         let jump = buttons() & jump_button() != 0 && kh1_move_done(base, actor);
+        // Free in KH1's jump or fall (state 1 / 2, KH1 lets him act, not a spell's air cast): its
+        // jump or high jump off a frame KH2 should have had (the first frame after an air cast's
+        // landing or an item, the user), or the fall after a ledge, a ladder or a pole. KH2 takes
+        // him at once, rising or falling, with its own air moves (Aerial Dodge, Glide); KH1's
+        // glide and Superglide never come out of it (its jump / Square are KH2's meanwhile,
+        // `kh1_air_free`).
+        let air_free = kh1_air_free(base, actor) && above > STEP_DOWN && vel.is_some();
         // A spell cast in the air (KH1's animation all through, the user's choice): when KH1
         // lands him, KH2's landing from there, its short hold and a jump out of it (the user:
         // "the same pause buffer, and if he jumps out of it, KH2 Sora's jump"), instead of
@@ -801,7 +827,8 @@ unsafe fn takeover(actor: usize) -> bool {
         }
         // (A spell chosen during the cast, which is now over: it runs at once from the queue.)
         let magic_waits = magic_after && done;
-        if frames >= 3 && cast_landed || frames >= 10 && (falling || jump || cancel || magic_waits || matches!(state, 0 | 1) && (kh1_moving() || free || square || attack)) {
+        if frames >= 3 && cast_landed || frames >= 2 && air_free || frames >= 10 && (falling || jump || cancel || magic_waits || matches!(state, 0 | 1) && (kh1_moving() || free || square || attack)) {
+            let falling = falling || air_free;
             JUMP_NOW.store(jump, Ordering::Relaxed);
             // The spell's combo goes on only with an Attack or a spell that cut it or was chosen
             // during it (else he is back in idle: the combo is over, the user).
@@ -824,7 +851,7 @@ unsafe fn takeover(actor: usize) -> bool {
                 *HANDOFF_FALL.lock().unwrap() = vel.map(|(h, up)| {
                     let n = (h[0] * h[0] + h[1] * h[1]).sqrt();
                     let k = if n > 20.0 { 20.0 / n } else { 1.0 };
-                    ([h[0] * k, h[1] * k], up.max(-30.0))
+                    ([h[0] * k, h[1] * k], up.clamp(-30.0, 30.0))
                 });
             }
             FLY_PRESS_GROUND.store(ATTACK_AFTER.swap(false, Ordering::Relaxed), Ordering::Relaxed);
@@ -847,7 +874,11 @@ unsafe fn takeover(actor: usize) -> bool {
             if cast_landed {
                 log("KH1's air cast landed: KH2's landing");
             } else if falling {
-                log(&format!("KH1's move ended in its fall ({above:.0} above the floor): KH2's fall"));
+                NO_GRAB.store(NO_GRAB_FRAMES, Ordering::Relaxed);
+                if air_free {
+                    AIR_MOVES.store(true, Ordering::Relaxed);
+                }
+                log(&format!("KH1's move ended in its {} ({above:.0} above the floor): KH2's fall", if state == 1 { "jump" } else { "fall" }));
             } else {
                 log(&format!("KH1's move ended (state {state}): KH2 again"));
             }
@@ -983,6 +1014,9 @@ unsafe fn takeover(actor: usize) -> bool {
         // Out of KH1's fall: falling on as KH1 had him (KH2's fall animation).
         d.grounded = false;
         d.character.carry_into_air(h, up);
+        if AIR_MOVES.swap(false, Ordering::Relaxed) {
+            d.character.allow_air_dodge();
+        }
     }
     if ROLL_NOW.swap(false, Ordering::Relaxed) {
         d.held.1 = false;
@@ -1364,7 +1398,13 @@ unsafe fn takeover(actor: usize) -> bool {
     // has itself; the user: jumping into a ladder didn't catch it until the top of the jump),
     // the stick held or not (KH1 passes its input either way; the user: ladders and poles were
     // hit or miss from a jump).
-    if settings.grabs && d.character.airborne() && matches!(out.state, StateName::Air | StateName::Jump) {
+    let no_grab = NO_GRAB.load(Ordering::Relaxed);
+    if no_grab > 0 {
+        NO_GRAB.store(no_grab - 1, Ordering::Relaxed);
+    }
+    // (Also out of an Aerial Dodge or a glide: KH2's fall, the user: "KH2 soras falling animation
+    // is unable to grab onto ladders/vines".)
+    if settings.grabs && no_grab == 0 && d.character.airborne() && matches!(out.state, StateName::Air | StateName::Jump | StateName::AerialDodge | StateName::Glide) {
         // KH1 tries them in its jump / fall states, whose collision (`0x140297F20`: flag 1)
         // finds the contacts they read; ours ran in its ground state. So: KH1's fall state (3,
         // which has these checks too) and a standing-still move there to refresh the contacts.
@@ -1376,9 +1416,12 @@ unsafe fn takeover(actor: usize) -> bool {
         let state = rd::<i32>(actor + 0x70);
         let at = rd::<[f32; 4]>(actor + 0x10);
         wr(actor + 0x70, AIR_STATE);
-        if tilt > 0.0 {
-            mv(actor, &[dir.x * 4.0, 0.0, dir.y * 4.0, 0.0], 0);
-        }
+        // With the stick let go, the press goes along his drift (or his facing): KH1's climb
+        // check needs a wall face the move touched (a ladder or vine he falls past otherwise
+        // slipped by).
+        let drift = glam::Vec2::new(out.displacement[0], out.displacement[2]);
+        let toward = if tilt > 0.0 { dir } else if drift.length() > 0.5 { drift.normalize() } else { glam::Vec2::new(out.facing.sin(), out.facing.cos()) };
+        mv(actor, &[toward.x * 4.0, 0.0, toward.y * 4.0, 0.0], 0);
         let (gx, gz) = if tilt > 0.0 { (dir.x, dir.y) } else { (0.0, 0.0) };
         let took = grab(base, actor, [gx, 0.0, gz, tilt]);
         if took.is_none() {
@@ -1922,6 +1965,7 @@ unsafe fn keyblade(base: usize, actor: usize, out: bool, logged: &mut u32) {
         let draw: unsafe extern "system" fn(usize, i32) = std::mem::transmute(base + DRAW_WEAPON_RVA);
         draw(actor, 1);
     } else {
+        super::kh2fx::weapon_vanish();
         let put_away: unsafe extern "system" fn(usize) = std::mem::transmute(base + PUT_AWAY_RVA);
         put_away(actor);
     }
