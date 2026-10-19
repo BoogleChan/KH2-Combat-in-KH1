@@ -575,13 +575,15 @@ fn horizontal_slash_is_part_of_the_air_combo() {
     assert!(slashes <= max - 1, "{slashes} Horizontal Slashes in a combo of {max}: {motions:?}");
 }
 
-/// An air cast that falls as it plays (`air_magic_falls`, as Final Form's air Reflect) ends on
-/// touching the ground in KH2's landing, not standing in the rest of the cast (the user).
+/// An air cast (`air_magic_falls`, as Final Form's air Reflect) holds in its motion's
+/// no-gravity frames (the user, s204: Reflect in the air fell at once, "doesn't halt his gravity
+/// for a second ... like other magic moves do"), then falls, and ends on touching the ground in
+/// KH2's landing, not standing in the rest of the cast (the user).
 #[test]
 fn falling_air_cast_lands_into_the_landing() {
     let mut ch = sora();
     let mut cast = Clip::plain(73, 200);
-    cast.windows.push(Window { start: 0, end: Some(190), kind: WindowKind::NoGravity });
+    cast.windows.push(Window { start: 0, end: Some(20), kind: WindowKind::NoGravity });
     ch.moveset.clips.insert(73, cast);
     ch.air_magic_falls = true;
     let mut w = World::new(ch);
@@ -589,6 +591,9 @@ fn falling_air_cast_lands_into_the_landing() {
     w.run(12, IDLE);
     assert!(w.pos[1] > 50.0);
     assert_eq!(w.ch.cast(CastMotions { ground: 71, finisher: Some(72), air: 73 }), Some(73));
+    let y = w.pos[1];
+    w.run(18, IDLE);
+    assert!((w.pos[1] - y).abs() < 1e-3, "fell during the cast's no-gravity frames: {} -> {}", y, w.pos[1]);
     let outs = w.run(150, IDLE);
     let landed = outs.iter().position(|o| o.state == StateName::Land).expect("never landed");
     assert!(outs[..landed].iter().all(|o| o.motion == 73), "left the cast before landing");
@@ -657,7 +662,8 @@ fn spell_mid_combo_is_a_step_of_it() {
         }
     }
     assert_eq!(cast, Some(71), "cast from the swing's window");
-    let outs = w.run(40, Pad { attack: true, ..IDLE });
+    // (Mashed: a press counts only once the cast's end lets it in.)
+    let outs: Vec<_> = (0..40).map(|i| w.step(Pad { attack: i % 2 == 0, ..IDLE })).collect();
     let next: Vec<u16> = outs.iter().filter(|o| o.state == StateName::Attack && o.clip_frame == 0).map(|o| o.motion).collect();
     assert_eq!(next.first(), Some(&110), "the swing after the spell should be the finisher: {next:?}");
 
@@ -1243,4 +1249,64 @@ fn guard_faces_the_locked_target() {
     let o = w.step(Pad { action: true, ..IDLE });
     assert_eq!(o.state, StateName::Guard);
     assert!((o.facing + std::f32::consts::FRAC_PI_2).abs() < 1e-3, "{}", o.facing);
+}
+
+/// No attack buffer (the user: "sora can still queue an attack even if hes not on the available
+/// frame ... We don't want a buffer type system"): an Attack pressed before the swing's combo
+/// window is dropped, and one inside it starts the next swing.
+#[test]
+fn an_early_attack_press_is_not_kept() {
+    let mut w = World::new(sora());
+    w.step(Pad { attack: true, ..IDLE });
+    w.step(IDLE);
+    w.step(Pad { attack: true, ..IDLE });
+    let outs = w.run(80, IDLE);
+    let swings = outs.iter().filter(|o| o.state == StateName::Attack && o.clip_frame == 0).count();
+    assert_eq!(swings, 0, "an Attack pressed before the window came out later");
+    let mut w = World::new(sora());
+    w.step(Pad { attack: true, ..IDLE });
+    let mut next = false;
+    for i in 0..80 {
+        let open = w.ch.can_take_command();
+        let o = w.step(Pad { attack: open && i % 2 == 0, ..IDLE });
+        if i > 2 && o.state == StateName::Attack && o.clip_frame == 0 {
+            next = true;
+            break;
+        }
+    }
+    assert!(next, "a press inside the window started no swing");
+}
+
+/// A Drive in the air holds Sora where he is (`play_held`; the user: "sora inputs a drive in
+/// the air and should stay frozen in that position"), and a form swap carries his movement
+/// (`carry_movement`: a revert on the ground doesn't halt him, one in the air falls on).
+#[test]
+fn drive_in_the_air_holds_and_swaps_carry_movement() {
+    let mut ch = sora();
+    ch.moveset.clips.insert(52, Clip::plain(52, 160));
+    let mut w = World::new(ch);
+    w.run(1, Pad { jump: true, ..IDLE });
+    w.run(12, IDLE);
+    assert!(w.ch.can_change_form(), "free in the air");
+    assert!(w.ch.play_held(52, true));
+    let y = w.pos[1];
+    w.run(40, IDLE);
+    assert!((w.pos[1] - y).abs() < 1e-3, "moved during an air Drive: {} -> {}", y, w.pos[1]);
+    assert!(!w.ch.can_change_form(), "a Drive playing takes no other change");
+    let old = w.ch.clone();
+    let mut c = sora();
+    c.carry_movement(&old);
+    w.ch = c;
+    let outs = w.run(120, IDLE);
+    assert!(outs.iter().any(|o| o.state == StateName::Land) || w.pos[1] <= 0.0, "didn't fall after the swap");
+
+    let mut w = World::new(sora());
+    w.run(30, Pad { stick: [0.0, 1.0], ..IDLE });
+    let speed = w.run(1, Pad { stick: [0.0, 1.0], ..IDLE })[0].displacement[2];
+    let old = w.ch.clone();
+    let mut c = sora();
+    c.carry_movement(&old);
+    w.ch = c;
+    let o = w.step(Pad { stick: [0.0, 1.0], ..IDLE });
+    assert!(o.displacement[2] > speed * 0.5, "the swap halted him: {} then {}", speed, o.displacement[2]);
 }

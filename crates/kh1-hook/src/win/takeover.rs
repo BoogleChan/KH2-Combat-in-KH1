@@ -772,6 +772,14 @@ unsafe fn takeover(actor: usize) -> bool {
                 log(&format!("KH1's move ended (state {state}): KH2 again"));
             }
         } else {
+            // An Attack pressed during KH1's move counts only on the frame it was pressed: if it
+            // couldn't cut the move then (the spell not out yet, the combo's last step), it is
+            // dropped, not kept for the move's end (the user: "We don't want a buffer type
+            // system to be in the game and only inputs to be accepted when its in a acceptable
+            // window").
+            if ATTACK_AFTER.swap(false, Ordering::Relaxed) {
+                note_dropped_attack(state);
+            }
             HANDOFF_SEEN_MS.store(now_ms().max(1), Ordering::Relaxed);
             HANDOFF_FRAME.store(true, Ordering::Relaxed);
             release(&format!("KH1's own move, KH1 state {state}"));
@@ -1645,6 +1653,13 @@ pub fn move_tilt() -> f32 {
 /// Attack pressed while KH1 had him for its own move (`combat::exec`): ends that move as soon
 /// as he stands free (KH1 allowed the cancel) and is KH2's first press.
 pub static ATTACK_AFTER: AtomicBool = AtomicBool::new(false);
+
+fn note_dropped_attack(state: i32) {
+    static N: AtomicU32 = AtomicU32::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) < 30 {
+        log(&format!("Attack during KH1's move (state {state}) dropped: it couldn't cut the move on that frame (no buffer)"));
+    }
+}
 
 /// Sora's physics frames so far (one per game frame): what frame-locked work (`pose`'s hair and
 /// cloth swing) steps by, not the clock (the user: it stuttered; frames arrive 13..22 ms apart).

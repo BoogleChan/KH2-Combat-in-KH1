@@ -60,6 +60,30 @@ pub fn on() -> bool {
     ON.load(Ordering::Relaxed)
 }
 
+/// The menu run is the Drive row (`combat::run_entry`: the magic list, its last entry, on page 2).
+pub unsafe fn is_drive_row(menu: usize, id: u8) -> bool {
+    on() && PAGE2.load(Ordering::Relaxed) && menu == base() + MAGIC_MENU_RVA && id == SUMMON
+}
+
+/// In the form the Drive row is Revert itself (the user: "selecting return should cause the
+/// drive form to return instead of opening a submenu"): taken only on a frame Sora can change
+/// (`form::accept_now`), else nothing, kept for no later (the same as a spell). `true`: handled
+/// (KH1 opens no list).
+pub unsafe fn revert_row(actor: usize) -> bool {
+    if !super::form::in_form() {
+        return false;
+    }
+    if !super::form::accept_now() {
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) % 30 == 0 {
+            log("Revert not taken: Sora's move isn't at its end yet (no queue)");
+        }
+        return true;
+    }
+    chosen(actor, 0);
+    true
+}
+
 /// Before KH1's command step (`shortcuts::step`, or ours when that isn't hooked): D-pad left at
 /// the top level flips the page.
 pub unsafe fn pre_step() {
@@ -185,7 +209,8 @@ pub fn word(index: i32) -> Option<usize> {
     }
     let (drive, forms, revert) = NAMES.get()?;
     if index == SUMMON as i32 && PAGE2.load(Ordering::Relaxed) {
-        return Some(*drive);
+        // (In the form the row is KH2's Revert.)
+        return Some(if super::form::in_form() { *revert } else { *drive });
     }
     // In the form its entry is KH2's Revert.
     FORMS.iter().position(|f| f.1 as i32 == index).map(|k| if super::form::in_form() { *revert } else { forms[k] })

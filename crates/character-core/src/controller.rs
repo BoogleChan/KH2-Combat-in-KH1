@@ -288,7 +288,8 @@ enum ActionKind {
     Magic,
     /// A motion the host asked for (Drive, form arrival, revert): plays to
     /// the end, takes no input.
-    Scripted { invulnerable: bool },
+    /// `hold`: held where he is in the air (no gravity, no drift), a Drive started mid-air.
+    Scripted { invulnerable: bool, hold: bool },
 }
 
 #[derive(Clone, Debug)]
@@ -383,8 +384,9 @@ pub struct Character {
     pub combo_rules: ComboRules,
     /// Which button starts and holds Glide in mid-air.
     pub glide_button: GlideButton,
-    /// Air casts fall while they play (KH1's way) instead of hovering in their motion's
-    /// no-gravity window (KH2's).
+    /// An air cast that reaches the ground while it plays ends there in the landing (as Final
+    /// Form's air Reflect lands). It still holds in its motion's no-gravity window first
+    /// (KH2's), and falls after it.
     pub air_magic_falls: bool,
     facing: f32,
     vel_h: [f32; 2],
@@ -441,7 +443,6 @@ pub struct Character {
     /// Frames since a dodge roll or Quick Run last played (an aerial dodge in the fall off a
     /// ledge it rolled from).
     since_roll: u32,
-    buffered_attack: bool,
     /// Hang point to move onto this frame (a ledge was just grabbed).
     snap: Option<[f32; 3]>,
     /// Hit-back push: direction and speed (units/frame), decaying x0.9 per
@@ -562,7 +563,6 @@ impl Character {
             since_roll: u32::MAX,
             jump_held: false,
             jump_released: false,
-            buffered_attack: false,
             snap: None,
             push: None,
             ceiling_lock: 0.0,
@@ -705,7 +705,6 @@ impl Character {
         self.carry_finisher = matches!(slot, SpellSlot::Finisher { more: true });
         self.cast_finisher = matches!(slot, SpellSlot::Finisher { .. });
         self.since_swing = 0;
-        self.buffered_attack = false;
     }
 
     /// Whether the move playing now is a finisher of the combo (a finisher swing or a spell cast
@@ -931,8 +930,67 @@ impl Character {
         if !self.airborne {
             self.arc = None;
         }
-        self.start_action(ActionKind::Scripted { invulnerable }, motion);
+        self.start_action(ActionKind::Scripted { invulnerable, hold: false }, motion);
         true
+    }
+
+    /// As [`play`](Self::play), and in the air held where he is while it plays (KH2's Drive
+    /// taken mid-air: Sora stays frozen in that position, the user); on the ground the same as
+    /// `play`. When it ends he falls from there.
+    pub fn play_held(&mut self, motion: u16, invulnerable: bool) -> bool {
+        if !self.play(motion, invulnerable) {
+            return false;
+        }
+        if self.airborne {
+            self.vel_y = 0.0;
+            self.arc = None;
+            if let Mode::Action(a) = &mut self.mode {
+                a.kind = ActionKind::Scripted { invulnerable, hold: true };
+            }
+        }
+        true
+    }
+
+    /// Whether a Drive or a Revert is taken now (the KH1 port's user: only on "end frames", no
+    /// buffer): free (idle, walking, running, jumping, falling), landing, or at the end of what
+    /// plays: an attack or a cast once its combo / finisher / reaction-command window is open
+    /// (the move is out, the spell cast) or in its last frames. Never while hurt, launched,
+    /// hanging or in a scripted motion.
+    pub fn can_change_form(&self) -> bool {
+        match &self.mode {
+            Mode::Free | Mode::Glide => true,
+            Mode::Action(a) => match a.kind {
+                ActionKind::Land | ActionKind::Jump { .. } => true,
+                ActionKind::Hurt | ActionKind::Blow { .. } | ActionKind::Scripted { .. } | ActionKind::Hang { .. } | ActionKind::Climb => false,
+                _ => self.clip(a.motion).is_some_and(|c| {
+                    let f = a.frame.saturating_sub(1);
+                    f + FINISHER_END >= c.length || c.has(f, |k| matches!(k, WindowKind::Combo | WindowKind::Finisher | WindowKind::AllowReactionCommand))
+                }),
+            },
+        }
+    }
+
+    /// A form swap (the host replaced the controller with another's data): his movement carries
+    /// over from `old` (speed, the stick's speed, his fall or rise, in the air or not), so a
+    /// revert doesn't halt him and one in the air goes on falling (the user). What `old` was
+    /// playing is not carried: he is free (idle, walk or run by the stick; in the air, falling).
+    pub fn carry_movement(&mut self, old: &Character) {
+        self.vel_h = old.vel_h;
+        self.steer_speed = old.steer_speed;
+        self.vel_y = old.vel_y;
+        self.airborne = old.airborne;
+        self.arc = old.arc;
+        self.tick = old.tick;
+        self.jump_held = old.jump_held;
+        self.jump_released = old.jump_released;
+        self.mode = Mode::Free;
+        if self.airborne && self.arc.is_none() {
+            let mut arc = Arc::fall();
+            if self.params.gravity > 0.0 {
+                arc.t = (-self.vel_y).max(0.0) / self.params.gravity;
+            }
+            self.arc = Some(arc);
+        }
     }
 
     /// Can a command (a reaction command) start now (exe, simplified):
@@ -1321,7 +1379,6 @@ impl Character {
             }
         }
         self.hit = false;
-        self.buffered_attack = false;
         let motion = row.motion;
         self.start_action(ActionKind::Attack { row }, motion);
         if let Mode::Action(a) = &mut self.mode {
@@ -1479,7 +1536,6 @@ impl Character {
         self.finishers = 0;
         self.combo_carry = false;
         self.carry_finisher = false;
-        self.buffered_attack = false;
     }
 
     fn free_motion(&self) -> u16 {
@@ -1754,7 +1810,11 @@ impl Character {
                 // in the air to as well.)
                 // (Nor in a moving attack, Wisdom Form's air shots: he falls as he shoots, the user,
                 // "sora also has gravity".)
-                WindowKind::NoGravity if !(self.air_magic_falls && matches!(act.kind, ActionKind::Magic)) && !(matches!(act.kind, ActionKind::Attack { .. }) && clip.windows.iter().any(|w| matches!(w.kind, WindowKind::AllowMovement))) => fo.no_gravity = true,
+                // (Air casts hold in their motion's no-gravity frames, then fall: the user, s204,
+                // "when sora inputs a reflect in the air the move doesn't halt his gravity for a
+                // second ... like other magic moves do", in Wisdom Form too. `air_magic_falls` now
+                // only ends such a cast in the landing when it reaches the ground.)
+                WindowKind::NoGravity if !(matches!(act.kind, ActionKind::Attack { .. }) && clip.windows.iter().any(|w| matches!(w.kind, WindowKind::AllowMovement))) => fo.no_gravity = true,
                 WindowKind::WeaponTrail => fo.weapon_trail = true,
                 WindowKind::Guard { attack, group, weapon } => {
                     fo.guarding = true;
@@ -1788,9 +1848,12 @@ impl Character {
                     finished = true;
                 }
             }
-            ActionKind::Scripted { invulnerable } => {
+            ActionKind::Scripted { invulnerable, hold } => {
                 if *invulnerable {
                     fo.invulnerable = true;
+                }
+                if *hold {
+                    fo.no_gravity = true;
                 }
             }
             ActionKind::Land => {
@@ -1919,17 +1982,15 @@ impl Character {
                 // only the combo's next finisher (Finishing Plus leaving one), an Attack in its
                 // finisher window (or a spell, `can_cast`).
                 cancel_allowed = false;
-                if input.attack.pressed {
-                    self.buffered_attack = true;
-                }
+                // (A press counts only on a frame the window is open: no buffer, the user: "only
+                // inputs to be accepted when its in a acceptable window".)
                 let next = finisher_more && finisher_window(&clip, f);
-                if self.buffered_attack && next {
+                if input.attack.pressed && next {
                     self.mode = Mode::Action(act.clone());
                     if self.try_attack(input, env) {
                         return true;
                     }
-                    self.buffered_attack = false;
-                }
+                            }
                 if finished {
                     // Its animation over, the combo is (a new one may start).
                     self.reset_combo();
@@ -1941,19 +2002,14 @@ impl Character {
                 if f >= open {
                     cancel_allowed = true;
                 }
-                // An Attack pressed during the cast waits for it (the user: magic is part of the
-                // combo's queue, the next attack waits for the spell), then goes on with the
-                // combo (`combo_carry`, set when the cast came mid-combo).
-                if input.attack.pressed {
-                    self.buffered_attack = true;
-                }
-                if self.buffered_attack && (f >= open || f + 1 >= clip.length) {
+                // An Attack once the window opens goes on with the combo (`combo_carry`, set when
+                // the cast came mid-combo); pressed before, it is not kept (no buffer, the user).
+                if input.attack.pressed && (f >= open || f + 1 >= clip.length) {
                     self.mode = Mode::Action(act.clone());
                     if self.try_attack(input, env) {
                         return true;
                     }
-                    self.buffered_attack = false;
-                }
+                            }
                 if finished && !self.airborne {
                     // Played to its end on the ground: back in idle, the combo is over (the
                     // user). (In the air it goes on until the landing, as a swing's does.)
@@ -2038,19 +2094,18 @@ impl Character {
                 }
             }
             ActionKind::Attack { .. } => {
-                if input.attack.pressed {
-                    self.buffered_attack = true;
-                }
+                // The next swing only for a press inside the combo / finisher window: one before it
+                // is dropped (the user: an attack queued early took the window from a spell; "We
+                // don't want a buffer type system").
                 let combo_open = clip.has(f, |k| matches!(k, WindowKind::Combo));
                 let is_finisher = matches!(&act.kind, ActionKind::Attack { row } if row.is_finisher());
                 let finisher_open = (clip.has(f, |k| matches!(k, WindowKind::Finisher)) || is_finisher && finisher_window(&clip, f)) && self.finishers < self.max_finishers();
-                if self.buffered_attack && (combo_open || finisher_open) {
+                if input.attack.pressed && (combo_open || finisher_open) {
                     self.mode = Mode::Action(act.clone());
                     if self.try_attack(input, env) {
                         return true;
                     }
-                    self.buffered_attack = false;
-                }
+                            }
                 // The action button (Square) in a combo: KH2's Square moves, whose PTYA rows are
                 // kind 0 (reached only this way; the user: Upper Slash and Horizontal Slash never
                 // came out). KH2's help: Finishing Leap "at the end of a combo with Square",
@@ -2198,6 +2253,7 @@ impl Character {
                     }
                 }
                 ActionKind::DodgeRoll | ActionKind::Guard => self.vel_h = [0.0; 2],
+                ActionKind::Scripted { hold: true, .. } => self.vel_h = [0.0; 2],
                 ActionKind::Scripted { .. } => self.vel_h = if self.airborne { scale(self.vel_h, p.air_drag) } else { [0.0; 2] },
                 ActionKind::QuickRun => {
                     let b = act.brake;

@@ -6,8 +6,15 @@
 //!   lock kept, and its arrival (53). Its abilities: Sora's support abilities, not his action
 //!   or growth ones, and the form's own growth ability, Quick Run, at MAX (the user);
 //! - the form runs on Sora's MP (the user): its yellow part drained bit by bit, a blue bar
-//!   broken into it when it runs out (KH1's own payment; `after_step`); out of MP, or on the Revert command (the same Drive entry), back to Sora with
-//!   the revert motion (4), on the ground. Knocked out: back at once;
+//!   broken into it when it runs out (KH1's own payment; `after_step`); out of MP, or on the
+//!   Revert command (the Drive row itself in the form), back to Sora, at once, in the air too:
+//!   what was playing is cut and he is free again with his movement kept (walking, running or
+//!   idle by the stick; in the air, falling). Knocked out: back at once;
+//! - Drive and Revert are taken only on a frame Sora can change (`Character::can_change_form`:
+//!   free, jumping, falling, landing, or at the end of a move or a cast), never buffered: a
+//!   press before that does nothing (the menu refuses it, `combat::run_entry`);
+//! - the change takes 45 frames (the user): Sora's Drive motion for `DRIVE_FRAMES`, then the
+//!   swap and the form's short arrival; in the air he is held where he is through it.
 //! - its shots and its spells: `formmagic`.
 //! The cost is MP (`COST`, KH1's own payment), not a Drive gauge, which KH1 has none of.
 
@@ -22,9 +29,12 @@ pub use super::formmagic::{effect, element_sounds, package_spell, shots_step, sp
 
 pub const DRIVE_MOTION: u16 = 52;
 pub const ARRIVE_MOTION: u16 = 53;
-pub const REVERT_MOTION: u16 = 4;
-/// The longest Sora's Drive motion runs before the swap (KH2: its 160 frames).
-const DRIVE_FRAMES: u32 = 160;
+// (No revert motion: base Sora's motion 4, which the old revert played, is his fall loop (A004),
+// and left him in KH2's fall on the ground, the user.)
+/// Frames of Sora's Drive motion before the swap (its own runs 160; the user: "it should only
+/// take 45 frames ... from start to end"): with the form's arrival (motion 53, 3 frames at 30
+/// fps: 6), 45 in all.
+const DRIVE_FRAMES: u32 = 39;
 /// MP to change (KH1's payment takes hundredths of a bar from 100 up).
 pub const COST_MP: i32 = 3;
 const COST: i32 = COST_MP * 100;
@@ -87,6 +97,13 @@ unsafe fn hp(sora: usize) -> i32 {
     rd::<i32>(stats + 0x3C)
 }
 
+/// Whether a Drive or Revert pressed now is taken (`combat::run_entry`; the user: "return
+/// should only be accepted when you press return on an end frame", no queue): KH2 has Sora and
+/// he can change on this frame.
+pub fn accept_now() -> bool {
+    !busy() && super::takeover::with_kh2(|c, _| c.can_change_form()).unwrap_or(false)
+}
+
 /// Whether the Drive entry can be chosen now (`drive`'s menu): reverting in the form, else MP
 /// for it and KH2 having Sora, its data loaded.
 pub unsafe fn usable(sora: usize) -> bool {
@@ -129,7 +146,7 @@ pub struct Drive {
     change: Option<u32>,
     /// In the form: battle frames left, Sora's own abilities (back on revert), the form's.
     form: Option<InForm>,
-    /// A revert asked for, waiting for the ground.
+    /// Out of MP: a revert as soon as he can change.
     revert: bool,
 }
 
@@ -181,10 +198,12 @@ fn form_abilities(sora: &Abilities, form: &Character) -> Abilities {
     a
 }
 
-/// Replaces the controller (keeps facing, lock-on, the glide button).
+/// Replaces the controller (keeps facing, lock-on, the glide button, and his movement: speed,
+/// fall, in the air or not).
 fn swap(ch: &mut Character, anim: &mut RigAnim, data: &Character, rig: &Arc<kh2_data::sora::Rig>, abilities: Abilities) {
     let (facing, lock, glide) = (ch.facing(), ch.lock(), ch.glide_button);
     let mut c = data.clone();
+    c.carry_movement(ch);
     c.abilities = abilities;
     c.glide_button = glide;
     c.air_magic_falls = ch.air_magic_falls;
@@ -202,22 +221,18 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
     // Knocked out in the form: Sora again at once (KH2: a KO reverts).
     let knocked = REQUEST.load(Ordering::Relaxed) == 3 && REQUEST.swap(0, Ordering::Relaxed) == 3;
     if (d.form.is_some() || d.change.is_some()) && (knocked || hp(actor) <= 0) {
-        revert(d, ch, anim, kh2, false, "knocked out");
+        revert(d, ch, anim, kh2, "knocked out");
         return;
     }
     match REQUEST.swap(0, Ordering::Relaxed) {
         1 if d.form.is_none() && d.change.is_none() => {
-            if ch.airborne() || !ch.can_take_command() {
-                // (KH2 takes the Drive command in the air too; here it waits for the ground.)
-                log(&format!("Drive: Wisdom Form waits (airborne {}, busy {})", ch.airborne(), !ch.can_take_command()));
-                REQUEST.store(1, Ordering::Relaxed);
-                return;
-            }
+            // (Taken on the frame it was pressed in, `accept_now`; in the air too, held there.)
             if mp(actor) <= COST_MP {
                 log(&format!("Drive: MP {} short of {COST_MP} by now", mp(actor)));
                 return;
             }
-            if !ch.play(DRIVE_MOTION, true) {
+            let air = ch.airborne();
+            if !ch.play_held(DRIVE_MOTION, true) {
                 log("Drive: Sora has no Drive motion (52)");
                 return;
             }
@@ -225,9 +240,12 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
             super::reflect::pay_mp(actor, COST);
             d.change = Some(0);
             CHANGING.store(true, Ordering::Relaxed);
-            log(&format!("Drive: Wisdom Form (MP {before} -> {}), Sora's Drive motion", mp(actor)));
+            log(&format!("Drive: Wisdom Form (MP {before} -> {}), Sora's Drive motion{}", mp(actor), if air { ", held in the air" } else { "" }));
         }
-        2 if d.form.is_some() => d.revert = true,
+        2 if d.form.is_some() => {
+            revert(d, ch, anim, kh2, "the Revert command");
+            return;
+        }
         _ => {}
     }
     if let Some(n) = d.change {
@@ -239,9 +257,9 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
         }
         return;
     }
-    if d.revert && !ch.airborne() && ch.can_take_command() {
+    if d.revert && ch.can_change_form() {
         d.revert = false;
-        revert(d, ch, anim, kh2, true, "the Revert command");
+        revert(d, ch, anim, kh2, "out of MP");
     }
 }
 
@@ -252,13 +270,17 @@ unsafe fn arrive(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     let own = form_abilities(&sora, &f.character);
     swap(ch, anim, &f.character, &f.rig, own.clone());
     super::kh2fx::owner_gone();
-    ch.play(ARRIVE_MOTION, true);
+    // (Still held in the air through it; then he falls.)
+    ch.play_held(ARRIVE_MOTION, true);
     d.form = Some(InForm { left: 0, sora, own, logged_s: 0 });
     IN_FORM.store(true, Ordering::Relaxed);
     log(&format!("Wisdom Form (Lv{LEVEL}): yellow MP drained 1 every {DRAIN_FRAMES} frames of battle (half as fast out of it), Quick Run MAX"));
 }
 
-unsafe fn revert(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &pose::Kh2, motion: bool, why: &str) {
+/// Back to Sora: what played is cut, he is free with his movement (the user: on the ground
+/// "return you to whatever animation is being called from the control stick and not halt his
+/// movement"; in the air, falling).
+unsafe fn revert(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &pose::Kh2, why: &str) {
     CHANGING.store(false, Ordering::Relaxed);
     d.change = None;
     d.revert = false;
@@ -267,10 +289,7 @@ unsafe fn revert(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     swap(ch, anim, &kh2.character, &kh2.rig, f.sora);
     super::formmagic::end_all();
     super::kh2fx::owner_gone();
-    if motion {
-        ch.play(REVERT_MOTION, true);
-    }
-    log(&format!("Revert ({why})"));
+    log(&format!("Revert ({why}){}", if ch.airborne() { ", falling" } else { "" }));
 }
 
 /// After KH1's menu set Sora's abilities (`menu::Growth`): in the form, they are his own for
@@ -331,10 +350,10 @@ unsafe fn yellow(sora: usize) -> u16 {
     rd::<u16>(stats + 0xBE)
 }
 
-/// Sora's Drive and revert motions: their effects and sounds play whatever the ini's lists
-/// (`kh2fx`, `kh2sound`).
+/// Sora's Drive motion: its effects and sounds play whatever the ini's lists (`kh2fx`,
+/// `kh2sound`).
 pub fn own_motion(motion: u16) -> bool {
-    matches!(motion, DRIVE_MOTION | REVERT_MOTION)
+    motion == DRIVE_MOTION
 }
 
 /// Whether this frame's event goes to the form (its shots) instead of Sora's effects.

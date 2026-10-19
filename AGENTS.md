@@ -2360,3 +2360,31 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   no sound, the menu stays where it is, and the next press tries again. So a spell is never
   chosen to wait for a window, and an Attack pressed meanwhile is simply the combo's next
   swing. Drive forms and KH1's own casts keep their paths.
+
+### 2026-10-18: Stage 204 (Drive and Revert on end frames, no attack buffer, air casts hold)
+- Drive (the user's list): "you can't transform in the air ... sora inputs a drive in the air
+  and should stay frozen in that position": the Drive is taken in the air and Sora is held where
+  he is through it (`Character::play_held`: a scripted motion with no gravity and no drift),
+  the arrival too, then he falls. "transforming ... should only take 45 frames": Sora's Drive
+  motion runs 160 frames (80 at 30 fps); the swap now comes at 39, plus the form's 6-frame
+  arrival (53), 45 in all.
+- Revert: base Sora's motion 4, which the revert played, is his fall loop (A004), hence "stuck
+  in the kh2 free fall animation". The revert now plays nothing: what was playing is cut and he
+  is free with his movement carried over (`Character::carry_movement`: speed, fall or rise, in
+  the air or not), so on the ground the stick's walk/run/idle takes over without halting him and
+  in the air he falls. It works in the air too. Out of MP it happens at the first frame he can.
+- Page 2's Drive row reads "Revert" in the form and reverts directly (no list). Drive and
+  Revert are taken only on a frame Sora can change (`Character::can_change_form`: free,
+  jumping, falling, landing, or an attack / cast in its combo, finisher or reaction-command
+  window or last 6 frames): before that the press does nothing (`combat::run_entry`), as spells
+  since s203.
+- Attack (the user: "there is a buffer system ... We don't want a buffer type system to be in
+  the game and only inputs to be accepted when its in a acceptable window"): `character-core`'s
+  `buffered_attack` is gone; a press counts only on a frame the combo / finisher / cast window is
+  open. An Attack pressed during one of KH1's moves (its spell's cast, a reaction) counts only on
+  the frame it is pressed: if it can't cut the move then, it's dropped. Tests
+  `an_early_attack_press_is_not_kept`, `drive_in_the_air_holds_and_swaps_carry_movement`.
+- Air casts (the user: Reflect in the air "doesn't halt his gravity for a second ... like other
+  magic moves do", Wisdom's too): the no-gravity frames of a cast motion hold him again (s174
+  had dropped them for air casts so they fell as KH1's do); `air_magic_falls` now only ends a
+  cast that reaches the ground in the landing.

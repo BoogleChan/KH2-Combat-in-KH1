@@ -1670,7 +1670,17 @@ unsafe extern "system" fn run_entry(menu: usize, entry: i32) -> u64 {
 }
 
 unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
-    if menu < 0x10000 || !(0..16).contains(&entry) || !super::settings::get().commands || !takeover::ON.load(Ordering::Relaxed) || !takeover::kh2_has() || takeover::kh1_casting() {
+    if menu < 0x10000 || !(0..16).contains(&entry) {
+        return false;
+    }
+    // Page 2's Drive row in a form: Revert at once, no list (`drive::revert_row`).
+    if rd::<u32>(menu) != 4 && rd::<u32>(menu + 8) >> entry & 1 == 0 && super::drive::is_drive_row(menu, rd::<u8>(menu + 0x14 + entry as usize)) {
+        let sora = rd::<u64>(BASE.load(Ordering::Relaxed) + PARTY_RVA) as usize;
+        if super::drive::revert_row(sora) {
+            return true;
+        }
+    }
+    if !super::settings::get().commands || !takeover::ON.load(Ordering::Relaxed) || !takeover::kh2_has() || takeover::kh1_casting() {
         return false;
     }
     // Disabled entries: KH1's own "can't".
@@ -1697,8 +1707,20 @@ unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
         return false;
     }
     let (kind, arg, sub) = (rd::<u8>(record + 6), rd::<u8>(record + 7), rd::<i8>(record + 8));
-    // Only spells (Reflect's too); a Drive form is `drive`'s; a target list opening is no cast.
-    if kind != 2 || arg >= super::drive::FORM_ARG || (rd::<u32>(menu) != 4 && sub > 0) {
+    // A form from the Drive list: only on a frame Sora can change (`form::accept_now`), the same
+    // as a spell (the user: no queue).
+    if kind == 2 && arg >= super::drive::FORM_ARG && super::drive::on() {
+        if super::form::accept_now() {
+            return false;
+        }
+        static D: AtomicU32 = AtomicU32::new(0);
+        if D.fetch_add(1, Ordering::Relaxed) % 30 == 0 {
+            cmd_log("Drive not taken yet: Sora can't change on this frame; the menu stays open".to_string());
+        }
+        return true;
+    }
+    // Only spells (Reflect's too); a target list opening is no cast.
+    if kind != 2 || (rd::<u32>(menu) != 4 && sub > 0) {
         return false;
     }
     let free = takeover::with_kh2(|c, _| c.can_cast());

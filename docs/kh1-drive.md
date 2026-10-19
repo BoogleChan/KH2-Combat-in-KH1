@@ -193,3 +193,15 @@ KH1 itself looks it up) with an argument below the Drive forms', while KH2 has S
 move can't take a spell this frame, it returns 0 before KH1 does anything: the menu chain is
 not popped, no command record is written, no sound. Entries that open a submenu (Cure's party
 target list) still open it.
+
+## Stage 204: the change and the revert
+
+- The change: 45 frames (the user). Sora's Drive motion 52 (80 frames at 30 fps, 160 at 60)
+  until frame 39, the swap, the form's arrival 53 (3 at 30 fps). In the air Sora is held in
+  place through both (`play_held`), then falls.
+- The revert plays no motion (base Sora's 4 is A004, his fall loop): Sora's controller comes
+  back free with the form's movement (`carry_movement`), on the ground or in the air.
+- Taken only on a frame Sora can change (`can_change_form`), never queued: the form entry in
+  the Drive list and, in the form, the Drive row itself (it reads Revert and opens no list;
+  `drive::revert_row` from `combat::run_entry`, which returns 0 before KH1's run so the list
+  isn't pushed).
