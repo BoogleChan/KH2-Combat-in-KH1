@@ -435,6 +435,14 @@ pub fn abilities(d: &mut Drive, ch: &mut Character) {
 pub unsafe fn after_step(d: &mut Drive, actor: usize, battle: bool) {
     super::tint::refresh(actor, d.form.as_ref().is_some_and(|f| f.kind == Kind::Wisdom));
     let Some(f) = d.form.as_mut() else { return };
+    // (Valor: its Keyblade checked every 10 frames, so a change made in the menu reaches his
+    // hand, `valor::keyblade`.)
+    if f.kind == Kind::Valor {
+        static TICK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if TICK.fetch_add(1, Ordering::Relaxed) % 10 == 0 {
+            super::valor::keyblade();
+        }
+    }
     f.left += if battle { 2 } else { 1 };
     if f.left >= DRAIN_FRAMES * 2 {
         f.left = 0;

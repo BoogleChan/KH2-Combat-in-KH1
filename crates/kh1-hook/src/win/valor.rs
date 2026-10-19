@@ -28,6 +28,13 @@ pub unsafe fn keyblade() -> Option<u8> {
     if stored != want {
         std::ptr::write_unaligned(slot, want);
     }
+    // While he is Valor, the slot's Keyblade in his hand, changed or not (the Equipment row, the
+    // user: "when switching the second keyblade out while in valor form it doesnt swap
+    // properly"; `leftblade::show` does nothing more when it's the one loaded, and asks again
+    // while another load is still under way).
+    if super::form::in_valor() {
+        super::leftblade::show(pick);
+    }
     if CHOSEN.swap(want as u32, Ordering::Relaxed) != want as u32 {
         let name = pick.and_then(|k| super::equip::item_name(base, k)).unwrap_or_else(|| "none".into());
         log(&format!(

@@ -2588,3 +2588,15 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - "the second keyblade isnt there": the log, "item 0x5b's model not used: header 0x80 0xa800
   0x1f700 (size 0x1f690)": the `.wpn`'s `+0xC` runs past the bytes loaded (end padding), and
   `leftblade::set_up` refused it. Only `+4` / `+8` are checked now, as KH1's own handler reads.
+
+### 2026-10-19: Stage 217 (Valor's Keyblade swap in the form, sound diagnostics)
+- "when switching the second keyblade out while in valor form it doesnt swap properly": the
+  left Keyblade was loaded only at the form's start. While he is Valor the slot is read every 10
+  frames (`form::after_step`) and `leftblade::show` gets it each time (no-op when it's loaded;
+  asks again while another load is under way).
+- "the sounds are still not there": the s216 log has Valor's sounds loaded (package 17's
+  elements, its swings 5000xx) and the volume offsets check out against the Steam exe (KH1's own
+  reads of `0x14012AC50`'s settings, all 4 bytes later). `kh2sound` now logs its first 40 plays
+  ("KH2 sound played: ..."), sounds asked for but not loaded, a muted volume, and Windows
+  refusing the sound device, which `play` dropped silently.
+- The left Keyblade's trail: a helper session is on it.

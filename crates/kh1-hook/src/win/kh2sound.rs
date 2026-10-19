@@ -277,12 +277,17 @@ pub unsafe fn event(motion: u16, kind: character_core::EventKind) {
         EventKind::Effect(el) => {
             if let Some(s) = l.elements.get(&el) {
                 play(s, Channel::Effects);
+                note_play(|| format!("Sora's element {el} (motion {motion})"));
             }
         }
         EventKind::Sound(id) => {
             let id = if (500_000..501_000).contains(&id) { id - 500_000 + WEAPON_BANK * 1000 } else { id };
-            if let Some(s) = l.sounds.get(&id) {
-                play(s, Channel::Effects);
+            match l.sounds.get(&id) {
+                Some(s) => {
+                    play(s, Channel::Effects);
+                    note_play(|| format!("sound {id} (motion {motion}{})", if valor { ", Valor" } else { "" }));
+                }
+                None => note_play(|| format!("sound {id} (motion {motion}) not loaded")),
             }
         }
         EventKind::Voice(v) => {
@@ -300,8 +305,22 @@ pub unsafe fn event(motion: u16, kind: character_core::EventKind) {
 /// (the game's effects and volume sliders).
 pub unsafe fn spell_element(level: u8, el: u16) {
     let Ok(g) = LOADED.try_lock() else { return };
-    if let Some(s) = g.as_ref().and_then(|l| l.spell_elements.get(&(level, el))) {
-        play(s, Channel::Effects);
+    match g.as_ref().and_then(|l| l.spell_elements.get(&(level, el))) {
+        Some(s) => {
+            play(s, Channel::Effects);
+            note_play(|| format!("package {level}'s element {el}"));
+        }
+        None if g.is_none() => note_play(|| format!("package {level}'s element {el}: KH2 sounds not loaded (yet)")),
+        None => {}
+    }
+}
+
+/// The first plays, for the log (the user: "the sounds are still not there"; a sound that loads
+/// but isn't heard: was it asked for, what did Windows say).
+fn note_play(what: impl FnOnce() -> String) {
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 40 {
+        log(&format!("KH2 sound played: {} (volume {:.2})", what(), game_volume(Channel::Effects)));
     }
 }
 
@@ -355,12 +374,21 @@ fn game_volume(c: Channel) -> f32 {
 unsafe fn play(s: &Sound, channel: Channel) {
     let gain = game_volume(channel);
     if gain <= 0.001 {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 5 {
+            log("KH2 sound: muted (the game's volume for it is 0)");
+        }
         return;
     }
     let block = s.channels * 2;
     let fmt = WaveFormatEx { format_tag: 1, channels: s.channels, samples_per_sec: s.rate, avg_bytes_per_sec: s.rate * block as u32, block_align: block, bits_per_sample: 16, cb_size: 0 };
     let mut handle = 0usize;
-    if waveOutOpen(&mut handle, WAVE_MAPPER, &fmt, 0, 0, 0) != 0 {
+    let r = waveOutOpen(&mut handle, WAVE_MAPPER, &fmt, 0, 0, 0);
+    if r != 0 {
+        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 10 {
+            log(&format!("KH2 sound: Windows refused to open the sound device (waveOutOpen {r}, {} Hz, {} ch; {} playing)", s.rate, s.channels, VOICES.lock().map_or(0, |v| v.len())));
+        }
         return;
     }
     let data = if gain < 0.999 { Arc::new(s.data.iter().map(|&x| (x as f32 * gain) as i16).collect::<Vec<i16>>()) } else { s.data.clone() };
