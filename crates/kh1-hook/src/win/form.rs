@@ -57,6 +57,8 @@ const LEVEL: u32 = 1;
 /// bar breaks into its number × 30 units (KH1's own conversion), so the top bar lasts that many
 /// units.
 const DRAIN_FRAMES: u32 = 2;
+/// Upper Slash's ability (KH2's id): Sora's Square launch, given to Valor (`pose::port_moves`).
+const UPPER_SLASH: u16 = 95;
 /// KH2's magic sub offset in Wisdom Form.
 pub const MAGIC_SUB: i32 = 10;
 
@@ -282,6 +284,10 @@ fn form_abilities(sora: &Abilities, form: &Character, kind: Kind) -> Abilities {
         ..sora.clone()
     };
     a.equipped = form.moveset.combo_rows.iter().map(|r| r.ability).filter(|&x| x != 0).collect();
+    // (Sora's own moves added to the form, `pose::port_moves`: only while he has them equipped.)
+    if kind == Kind::Valor {
+        a.equipped.retain(|&x| x != UPPER_SLASH || sora.equipped.contains(&UPPER_SLASH));
+    }
     a
 }
 

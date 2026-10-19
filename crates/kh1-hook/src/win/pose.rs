@@ -155,6 +155,40 @@ pub struct Form {
     pub archive: Option<Arc<Vec<u8>>>,
 }
 
+/// Sora's moves a form gets from his own tables (the user: "make sure that soras square launch
+/// attack works in valor"): Upper Slash (combo row 37, kind 0, Square in a combo, motion 167,
+/// ability 95). KH2's Valor has none of Sora's Square moves; its own kind-0 rows (12, 38, 40, 11)
+/// are its finishers and guard, so their ids aren't taken.
+const PORTED_TO_VALOR: [u8; 1] = [37];
+
+/// Copies Sora's combo rows `rows` (and their motions: the clip, the body's and the first
+/// Keyblade's animation) into a form's data, where the form has no row of that id (the same
+/// skeleton, `load_form` checks it).
+fn port_moves(f: &mut Form, sora: &character_core::Character, sora_rig: &Rig, rows: &[u8]) {
+    let mut rig = (*f.rig).clone();
+    for &id in rows {
+        if f.character.moveset.combo_rows.iter().any(|r| r.id == id) {
+            continue;
+        }
+        let Some(row) = sora.moveset.combo_rows.iter().find(|r| r.id == id).cloned() else { continue };
+        let m = row.motion;
+        if let Some(c) = sora.moveset.clips.get(&m) {
+            f.character.moveset.clips.entry(m).or_insert_with(|| c.clone());
+        }
+        if let Some(a) = sora_rig.motions.get(&m) {
+            rig.motions.entry(m).or_insert_with(|| a.clone());
+        }
+        if let (Some(w), Some(sw)) = (rig.weapons.get_mut(0), sora_rig.weapons.first()) {
+            if let Some(a) = sw.motions.get(&m) {
+                w.motions.entry(m).or_insert_with(|| a.clone());
+            }
+        }
+        log(&format!("form: Sora's combo row {id} (motion {m}, ability {}) added", row.ability));
+        f.character.moveset.combo_rows.push(row);
+    }
+    f.rig = Arc::new(rig);
+}
+
 fn load_form(install: &kh2_data::Install, source: kh2_data::Source, spec: kh2_data::sora::PlayerSpec, skeleton: usize) -> Result<Form, String> {
     let data = install.load_player(source, spec).map_err(|e| e.to_string())?;
     let rig = data.rig.clone().ok_or_else(|| data.rig_error.clone().unwrap_or_else(|| "no rig".into()))?;
@@ -476,7 +510,8 @@ pub fn load_kh2() {
             let valor = if super::settings::get().drive {
                 let t = Instant::now();
                 match load_form(&install, source, kh2_data::sora::FORMS[0], rig.skeleton.len()) {
-                    Ok(f) => {
+                    Ok(mut f) => {
+                        port_moves(&mut f, &sora.character, &rig, &PORTED_TO_VALOR);
                         log(&format!("KH2 Valor Form loaded: {} motions, {} combo rows, {} weapons, in {:.1}s", f.rig.motions.len(), f.character.moveset.combo_rows.len(), f.rig.weapons.len(), t.elapsed().as_secs_f32()));
                         Some(f)
                     }

@@ -1633,7 +1633,9 @@ unsafe fn takeover(actor: usize) -> bool {
         d.fought = Some(Instant::now());
     }
     let lingering = d.fought.is_some_and(|t| t.elapsed().as_secs_f32() < BATTLE_LINGER);
-    d.anim.field = !battle && !lingering;
+    // (In a Drive Form always the battle stance, Keyblades out, as KH2's forms: the user, "dont
+    // let soras keyblades disappear in valor form".)
+    d.anim.field = !battle && !lingering && !super::form::in_form();
     d.anim.update(&out, &d.character, [q[0], -q[1], q[2]]);
     kh2_footsteps(actor, &out, &d.anim);
     keyblade(base, actor, d.anim.weapons_out(), &mut d.logged);

@@ -2558,3 +2558,13 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   matrices in bones 280..292 for that call only (from KH2's own left Keyblade, the rig's second
   weapon, calibrated on the right hand). ini `valor_left_blade` (default on; off = nothing
   installed). All "left Keyblade:" in the log.
+
+### 2026-10-19: Stage 214 (Valor: Keyblades kept out, Upper Slash)
+- "dont let soras keyblades disappear in valor form": in a Drive Form the rig is always in its
+  battle stance (`anim.field` false), so the Keyblade isn't put away out of battle (KH2's forms
+  hold theirs); the left one (s213) draws only while the right one is out.
+- "make sure that soras square launch attack works in valor": KH2's Valor table has none of
+  Sora's Square moves (its kind-0 rows are 11, 12, 38, 40: guard and finishers). Sora's Upper
+  Slash (row 37, motion 167, ability 95) is copied into Valor's data at load
+  (`pose::port_moves`: the row, the clip, the body's and the right Keyblade's animation), usable
+  while Sora has Upper Slash equipped.
