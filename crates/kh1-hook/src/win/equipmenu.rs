@@ -14,8 +14,13 @@
 //!   buzzes when no Keyblade is free); rows 2.. are accessories one lower (fixed after KH1's
 //!   update).
 //! - The weapon list's fill (`0x140304E50`) keeps only the free Keyblades during a Valor pick;
-//!   the list window (`0x140549140`) takes no live preview then (KH1's preview writes Sora's
-//!   weapon byte), and its confirm is undone for Sora and stored for Valor.
+//!   the list window (`0x140549140`) keeps KH1's live preview (the hovered Keyblade loaded into
+//!   Sora's hand, `0x1402845A0`, which also writes his weapon byte), and its confirm is undone
+//!   for Sora and stored for Valor. KH1 puts his own weapon back itself once the list closes:
+//!   the list's close handler (`0x1403033D0`) opens a window (`0x140302AF0`) that loads the
+//!   chosen weapon again when the one loaded differs, and writes his weapon byte.
+//! - While the preview may have changed Sora's weapon byte (`PICK_WEAPON`), the Valor slot isn't
+//!   re-decided and the free Keyblades are counted with his own weapon.
 //! - The row's name (`call 0x1402E6570` at `0x140304F74`, in KH1's row drawing) is our "V: "
 //!   label while the slots window or the page header draws the Valor Keyblade.
 //! - The help line (`0x140549080`) shows the Valor Keyblade's help on its row and the right
@@ -73,7 +78,8 @@ const LIST_SCROLL: Rva = Rva(0x2E9AA70);
 const LIST_CURSOR: Rva = Rva(0x2E9AA74);
 const LOADED: Rva = Rva(0x2E9AA80); // per slot: the weapon model loaded
 const CHOSEN: Rva = Rva(0x2E9AA90); // per slot: the weapon chosen
-const PREVIEW: Rva = Rva(0x2E9AAA8); // 1: put the hovered weapon in his hand
+#[allow(dead_code)]
+const PREVIEW: Rva = Rva(0x2E9AAA8); // 1: put the hovered weapon in his hand (KH1's preview steps)
 const LIST: Rva = Rva(0x2E9AAB0); // ints
 const LIST_COUNTS: Rva = Rva(0x2E9AEB0); // ints
 const LIST_LEN: Rva = Rva(0x2E9B2B0);
@@ -103,6 +109,12 @@ const LABEL_LEN: usize = 64;
 /// The last Valor Keyblade logged / Sora rows count logged (logs on change only).
 static LOGGED_ID: AtomicU32 = AtomicU32::new(u32::MAX);
 static LOGGED_ROWS: AtomicU32 = AtomicU32::new(u32::MAX);
+/// Sora's own weapon while a Valor pick's preview may have put another in his weapon byte
+/// (0: none): kept from the list's opening until his byte holds it again with the list closed.
+static PICK_WEAPON: AtomicU32 = AtomicU32::new(0);
+/// The hovered Keyblade last logged during a Valor pick, and how many were logged.
+static LOGGED_HOVER: AtomicU32 = AtomicU32::new(u32::MAX);
+static HOVER_LOGS: AtomicU32 = AtomicU32::new(0);
 
 // Layout of `MEM`.
 const STUB_R12: usize = 0x00;
@@ -276,10 +288,40 @@ unsafe fn sora_in(save: usize, slot: i32) -> bool {
     (0..4).contains(&slot) && rd::<u8>(save + SAVE_PARTY + slot as usize) == 0
 }
 
+/// Sora's own weapon while a Valor pick's preview may hold another in his weapon byte; the
+/// guard ends once the list is closed and his byte is his own again (KH1's restore).
+unsafe fn pick_guard(save: usize) -> Option<u8> {
+    let w = PICK_WEAPON.load(Ordering::Relaxed);
+    if w == 0 {
+        return None;
+    }
+    if g::<i32>(STATE) != 2 && rd::<u8>(save + WEAPON) as u32 == w {
+        PICK_WEAPON.store(0, Ordering::Relaxed);
+        log(&format!("Equipment: Sora's own weapon {w:#04x} back after the Valor pick"));
+        return None;
+    }
+    Some(w as u8)
+}
+
+/// `f` with Sora's own weapon in his weapon byte (the preview's put back after).
+unsafe fn with_real_weapon<R>(save: usize, f: impl FnOnce() -> R) -> R {
+    let Some(w) = pick_guard(save) else { return f() };
+    let now = rd::<u8>(save + WEAPON);
+    wr(save + WEAPON, w);
+    let r = f();
+    wr(save + WEAPON, now);
+    r
+}
+
 /// The Valor Keyblade (0 for none): `valor::keyblade`, which keeps `save + VALOR_OFF` up to
-/// date (the slot refilled when its Keyblade stops being free).
-unsafe fn valor_id(_save: usize) -> u8 {
-    let id = super::valor::keyblade().unwrap_or(0);
+/// date (the slot refilled when its Keyblade stops being free); during a pick, the stored one
+/// as it is (the preview's Keyblade in Sora's byte would look equipped).
+unsafe fn valor_id(save: usize) -> u8 {
+    let id = if pick_guard(save).is_some() {
+        rd::<u8>(save + equip::VALOR_OFF)
+    } else {
+        super::valor::keyblade().unwrap_or(0)
+    };
     if LOGGED_ID.swap(id as u32, Ordering::Relaxed) != id as u32 {
         log(&format!("Equipment: Valor row shows {id:#04x} (candidates {:02x?})", equip::valor_candidates(base())));
     }
@@ -342,6 +384,7 @@ unsafe fn after(save: usize) {
         if rd::<u8>(m + CELL_PICK) != 0 {
             wr(m + CELL_PICK, 0u8);
         }
+        pick_guard(save);
         return;
     }
     if rd::<u8>(m + CELL_PICK) != 0 {
@@ -444,7 +487,19 @@ unsafe extern "system" fn fill() {
     if m == 0 || rd::<u8>(m + CELL_PICK) == 0 {
         return;
     }
-    let keep = equip::valor_candidates(base());
+    // (Sora's own weapon noted as the list opens, before any preview; a rebuild of the open
+    // list by the page counts with it too.)
+    if let Some(save) = save() {
+        if PICK_WEAPON.load(Ordering::Relaxed) == 0 {
+            PICK_WEAPON.store(rd::<u8>(save + WEAPON) as u32, Ordering::Relaxed);
+            HOVER_LOGS.store(0, Ordering::Relaxed);
+            LOGGED_HOVER.store(u32::MAX, Ordering::Relaxed);
+        }
+    }
+    let keep = match save() {
+        Some(save) => with_real_weapon(save, || equip::valor_candidates(base())),
+        None => equip::valor_candidates(base()),
+    };
     let current = rd::<u8>(m + SHADOW + ACC_FIRST) as i32;
     let n = g::<i32>(LIST_LEN).clamp(0, 256) as usize;
     let (list, counts) = (base() + LIST, base() + LIST_COUNTS);
@@ -467,8 +522,9 @@ unsafe extern "system" fn fill() {
     log(&format!("Equipment: weapon list for Valor: {before:02x?} -> {:02x?}", (0..k).map(|i| rd::<i32>(list + i * 4)).collect::<Vec<_>>()));
 }
 
-/// The weapon list during a Valor pick: no live preview (KH1's writes Sora's weapon byte), and
-/// a confirmed Keyblade goes to Valor, Sora keeping his own.
+/// The weapon list during a Valor pick: KH1's live preview shows the hovered Keyblade in
+/// Sora's hand (KH1 loads his own back once the list closes); a confirmed Keyblade goes to
+/// Valor, Sora keeping his own.
 unsafe extern "system" fn list_update(win: usize) {
     let f: unsafe extern "system" fn(usize) = std::mem::transmute(ORIG_LIST.load(Ordering::Acquire));
     let m = mem();
@@ -476,19 +532,29 @@ unsafe extern "system" fn list_update(win: usize) {
     let (Some(save), true) = (save, m != 0 && rd::<u8>(m + CELL_PICK) != 0) else { return f(win) };
     let slot = g::<i32>(SLOT).clamp(0, 3) as usize;
     let (loaded_at, chosen_at) = (base() + LOADED + slot * 4, base() + CHOSEN + slot * 4);
-    let loaded = rd::<i32>(loaded_at);
     let chosen = rd::<i32>(chosen_at);
-    let weapon = rd::<u8>(save + WEAPON);
-    let preview = g::<i32>(PREVIEW);
+    let weapon = match pick_guard(save) {
+        Some(w) => w,
+        None => rd::<u8>(save + WEAPON),
+    };
     f(win);
-    if preview == 0 && g::<i32>(PREVIEW) != 0 {
-        s(PREVIEW, 0i32);
-        wr(loaded_at, loaded);
+    // What the list shows (logged as the cursor moves, a few times a pick).
+    let n = g::<i32>(LIST_LEN);
+    let at = g::<i32>(LIST_SCROLL) + g::<i32>(LIST_CURSOR);
+    let hovered = if (0..n.min(256)).contains(&at) { rd::<i32>(base() + LIST + at as usize * 4) } else { 0 };
+    if LOGGED_HOVER.swap(hovered as u32, Ordering::Relaxed) != hovered as u32 && HOVER_LOGS.fetch_add(1, Ordering::Relaxed) < 24 {
+        let name = if (1..=255).contains(&hovered) { equip::item_name(base(), hovered as u8).unwrap_or_default() } else { String::new() };
+        log(&format!(
+            "Equipment: Valor pick hovers {hovered:#04x} {name} (row {at} of {n}; preview loads {:#04x}, Sora's byte {:#04x}, his own {weapon:#04x})",
+            rd::<i32>(loaded_at),
+            rd::<u8>(save + WEAPON)
+        ));
     }
     if g::<i32>(STATE) == 3 {
         let picked = g::<i32>(NEW_ITEM);
+        // Sora keeps his weapon: chosen and his byte as they were. The model loaded (the
+        // preview's) is left for KH1's restore to swap back as the list closes.
         wr(chosen_at, chosen);
-        wr(loaded_at, loaded);
         wr(save + WEAPON, weapon);
         let refresh: unsafe extern "system" fn() = std::mem::transmute(base() + REFRESH_FN);
         refresh();
@@ -496,10 +562,14 @@ unsafe extern "system" fn list_update(win: usize) {
         if (1..=255).contains(&picked) && equip::valor_candidates(base()).contains(&(picked as u8)) {
             wr(save + equip::VALOR_OFF, picked as u8);
             let name = equip::item_name(base(), picked as u8).unwrap_or_default();
-            log(&format!("Equipment: Valor's Keyblade stored: {picked:#04x} {name} (Sora keeps {weapon:#04x})"));
+            log(&format!(
+                "Equipment: Valor's Keyblade stored: {picked:#04x} {name} (Sora keeps {weapon:#04x}; model loaded {:#04x}, put back by KH1)",
+                rd::<i32>(loaded_at)
+            ));
         } else {
             log(&format!("Equipment: Valor pick {picked:#x} isn't a free Keyblade: not stored (Sora keeps {weapon:#04x})"));
         }
+        pick_guard(save);
     }
 }
 

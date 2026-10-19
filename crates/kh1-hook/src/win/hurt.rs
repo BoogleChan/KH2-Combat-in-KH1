@@ -23,12 +23,23 @@
 //!   instead (a flinch for 3 / 4, a blow for 5), and the voice, rumble and hit count KH1 would
 //!   have played for it are played here.
 //! Sora's HP gone: KH1 had its dying pass (kind kept), and `takeover` lets KH1 have him.
+//!
+//! Repeated hits (the user: Sephiroth's flame pillar "hits sora way too fast to react to ...
+//! even with leaf bracer its an instant kill"): KH1 lets an attack hit an actor once (the queue
+//! `0x1402BD480` skips a target whose `+0x3E0` has the attack's bit, and sets it), but a lasting
+//! attack re-arms on an interval of its own (`0x1402B11F0` clears its bit from every actor each
+//! `+0x50`), so a pillar he stands in hits him again and again. KH1's own reactions knock him out
+//! of it; KH2's, played instead, kept him there, and every re-hit's damage was taken (Second
+//! Chance only spares the first, from full HP). So, as KH2 does:
+//! - knocked down (KH2's blow, from launch to getting up): no hit lands (`Fate::Down`);
+//! - flinching from a hit: the same attacker's hits within `REHIT_GRACE` frames don't land
+//!   (`Fate::Rehit`, the re-armed attack, not a new swing).
 
 use super::addr::Rva;
 use super::{combat, hook, log, pose, takeover};
 use character_core::reaction::Hit;
 use character_core::StateName;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 const HURT_RVA: Rva = Rva(0x299A40);
 const HURT_PROLOGUE: [u8; 11] = [0x48, 0x8B, 0xC4, 0x55, 0x57, 0x41, 0x54, 0x41, 0x56, 0x41, 0x57];
@@ -44,6 +55,12 @@ const NO_EFFECT: u8 = 0x20;
 static BASE: AtomicUsize = AtomicUsize::new(0);
 static ORIG: AtomicUsize = AtomicUsize::new(0);
 static LOGGED: AtomicU32 = AtomicU32::new(0);
+/// The last hit taken: its attacker's handle and the game frame (`takeover::GAME_FRAME`).
+static LAST_FROM: AtomicU32 = AtomicU32::new(0);
+static LAST_AT: AtomicU64 = AtomicU64::new(0);
+/// While flinching, the same attacker's hits this soon after the last one don't land (game
+/// frames, 60 a second).
+const REHIT_GRACE: u64 = 20;
 
 unsafe fn rd<T: Copy>(p: usize) -> T {
     std::ptr::read_unaligned(p as *const T)
@@ -65,6 +82,10 @@ enum Fate {
     /// Stopped by a Reflect barrier (`reflect`), counted for its counter.
     Reflected,
     Guarded,
+    /// Knocked down (KH2's blow): no hit lands.
+    Down,
+    /// The same attacker again while he still flinches from its last hit.
+    Rehit,
     Taken(u32),
 }
 
@@ -91,6 +112,8 @@ unsafe extern "system" fn hurt(actor: usize, out: usize) -> usize {
     }
     let kind_of: unsafe extern "system" fn(usize, usize) -> u32 = std::mem::transmute(base + KIND_RVA);
     let me = rd::<[f32; 3]>(actor + 0x10);
+    let frame = takeover::GAME_FRAME.load(Ordering::Relaxed);
+    let (last_from, last_at) = (LAST_FROM.load(Ordering::Relaxed), LAST_AT.load(Ordering::Relaxed));
     let fates = takeover::with_kh2(|ch, out| {
         let reacting = out.state;
         let fwd = glam::Vec2::new(out.facing.sin(), out.facing.cos());
@@ -110,8 +133,13 @@ unsafe extern "system" fn hurt(actor: usize, out: usize) -> usize {
                 fwd
             };
             let kind = kind_of(actor, r);
+            let from_h = rd::<u32>(r + 4);
             let fate = if out.invulnerable {
                 Fate::Evaded
+            } else if reacting == StateName::Blown {
+                Fate::Down
+            } else if reacting == StateName::Hurt && from_h != 0 && from_h == last_from && frame.saturating_sub(last_at) < REHIT_GRACE {
+                Fate::Rehit
             } else if super::reflect::barrier_up() {
                 // KH2's Reflect: the barrier round him stops any attack (from every side) and
                 // counts it.
@@ -143,9 +171,14 @@ unsafe extern "system" fn hurt(actor: usize, out: usize) -> usize {
     let mut react: Option<(u32, glam::Vec2)> = None;
     for (&r, fate) in ready.iter().zip(&fates) {
         let Some((fate, toward)) = *fate else { continue };
-        note(format!("Sora hit by {:#x}: damage {}, record kind {}, {fate:?}", pose::ptr(rd::<u32>(r + 4)), rd::<i32>(r + 8), rd::<u32>(r + 0xC) & 0x1F));
+        note(format!(
+            "Sora hit by {:#x}: damage {}, record kind {}, {fate:?} (frame {frame}, {reacting:?})",
+            pose::ptr(rd::<u32>(r + 4)),
+            rd::<i32>(r + 8),
+            rd::<u32>(r + 0xC) & 0x1F
+        ));
         match fate {
-            Fate::Evaded => wr(r, rd::<u8>(r) | NO_EFFECT),
+            Fate::Evaded | Fate::Down | Fate::Rehit => wr(r, rd::<u8>(r) | NO_EFFECT),
             Fate::Reflected => {
                 wr(r, rd::<u8>(r) | NO_EFFECT);
                 super::reflect::blocked(pose::ptr(rd::<u32>(r + 4)));
@@ -156,6 +189,8 @@ unsafe extern "system" fn hurt(actor: usize, out: usize) -> usize {
                 combat::clang(at);
             }
             Fate::Taken(kind) => {
+                LAST_FROM.store(rd::<u32>(r + 4), Ordering::Relaxed);
+                LAST_AT.store(frame, Ordering::Relaxed);
                 wr(r + 0xC, rd::<u32>(r + 0xC) & !0x1F);
                 if kind >= 3 && react.is_none_or(|(k, _)| kind > k) {
                     react = Some((kind, toward));
@@ -173,8 +208,9 @@ unsafe extern "system" fn hurt(actor: usize, out: usize) -> usize {
         super::form::knocked_out();
         return r;
     }
-    // Already reeling: the damage counts, but a flinch doesn't restart KH2's reaction (nor
-    // anything restart a blow), so a crowd can't lock him in place.
+    // Already flinching (a blow lets no hit land, above): the damage counts, but a flinch
+    // doesn't restart KH2's reaction (nor anything restart a blow), so a crowd can't lock him in
+    // place.
     if matches!(reacting, StateName::Blown) || (matches!(reacting, StateName::Hurt) && kind < 5) {
         note(format!("KH2 reaction skipped (already {reacting:?}), HP {}", if stats > 0x10000 { rd::<i32>(stats + 0x3C) } else { 0 }));
         return r;

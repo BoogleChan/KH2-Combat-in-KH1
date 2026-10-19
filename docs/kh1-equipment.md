@@ -92,6 +92,25 @@ KH1's item table is in `btltbl.bin` (loaded by `0x14028D840`): the pointer at `0
   (writes `+0x36`, fills a scratch stats block, puts it back); `0x1402E5DA0` and its siblings do
   the same for an accessory slot.
 
+### Live stats and Valor's second Keyblade (high, read statically; s220)
+
+- A party actor's stats block (`actor + 0x6C`, filled by `0x1402A2FA0`): `+0x3C` HP, `+0x40`
+  max HP, `+0x44` MP (bars), `+0x48` max MP, `+0x4C` Strength, `+0x50` Defense, `+0xBE` the MP
+  gauge (u16, at most max MP × 30), `+0xE4` AP, `+0xC8` the save record it came from.
+- `0x1402A2CC0` (the party refresh) runs the stats function into each of the three actors'
+  blocks: HP and MP are taken from the save record (`R+0x05` / `+0x07`, then written back), so
+  it can't be run mid-fight to refresh one number.
+- Level-up bonuses are applied in place too (`0x1402B34C0 (member, kind)`: max HP +3, max MP +1,
+  AP +2, Strength +2, Defense +2 on both the record and the live block), so the live block is
+  not always one stats-function call old.
+- Valor's second Keyblade (`kh1-hook/src/win/valorstats.rs`): while Sora is Valor his live
+  Strength and max MP are set each KH2 step to what the stats function gives for his own
+  equipment (run into a scratch block, unhooked) plus the Valor Keyblade's row `+0x30` / `+0x38`
+  (Strength capped at 100, max MP at least 0), with MP and the gauge clamped as KH1 clamps them;
+  once out of Valor they are set back to the stats function's figures. The hooked stats function
+  adds the same for Sora while he is Valor, so the pause menu's pages show it. Current MP is not
+  raised by a bigger max (KH1's equipping doesn't either).
+
 ## 2. The inventory (high)
 
 - **One count per item id at `save + 0x499 + id`** (ids 1..255; capped at 99). `0x140282CF0
@@ -242,11 +261,23 @@ The plan above, with these changes once the code was read closer:
 - **The list fill** `0x140304E50` is hooked (its prologue) rather than filtering after the list
   window exists: the window takes its row count and cursor (`0x142E9AA70 / 74`, set by us to the
   current Valor Keyblade) when it is made.
-- **No live preview during a Valor pick**: KH1's preview (`0x142E9AAA8 = 1` → `0x1402845A0`)
-  writes Sora's weapon byte, so the list wrapper clears the request (and `0x142E9AA80[slot]`)
-  right after KH1's update. On confirm (state 3) `0x142E9AA90 / 80[slot]` and `save + 0x36` are put
-  back, `0x1402E5A80` refreshes the stats, and the pick (`0x142E9AA60`) is stored at
-  `save + 0x488` if it is a free Keyblade.
+- **The live preview during a Valor pick** (changed after the user's report: "in the menu when
+  selecting the second keyblade, it doesnt display the correct keyblade"). The first version
+  cleared KH1's preview request, so the preview panel kept Sora's own Keyblade. KH1's preview
+  is kept now. `0x142E9AAA8 = 1` → `0x140302BA0` loads `0x142E9AA80[slot]` into Sora's hand
+  (`0x1402845A0`, which writes his weapon byte), then puts its model in the panel
+  (`0x1402D86B0`). KH1 undoes it itself: the list's close handler (`0x1403033D0`, the list
+  definition's second qword) opens a window (`0x140548F60` → `0x140302AF0`). Once no load is
+  in flight (`0x142E9AAA4 == 0`), that window loads `0x142E9AA90[slot]` again if it differs
+  from `0x142E9AA80[slot]`, and writes `+0x36` = that.
+  - On confirm (state 3), `0x142E9AA90[slot]` and `save + 0x36` are put back to Sora's own
+    weapon; `0x142E9AA80[slot]` is left as the preview's, so the restore runs. Then
+    `0x1402E5A80` refreshes the stats, and the pick (`0x142E9AA60`) is stored at
+    `save + 0x488` if it is a free Keyblade.
+  - Sora's own weapon is noted when the list opens (the fill). Until his byte holds it again
+    with the list closed, two things use it instead of the preview's byte: the Valor slot
+    isn't re-decided (`valor::keyblade` would see the previewed Keyblade as equipped), and
+    the fill counts free Keyblades with his own weapon.
 - **Label**: "V: " + KH1's name codes for the item (short, to fit the `0xA6` px row), only while
   our slots / page wrappers run, only for the Valor Keyblade's id on Sora's page.
 - **Help**: for Sora in state 1 KH1's help runs with the scroll at 0 and the cursor at the row

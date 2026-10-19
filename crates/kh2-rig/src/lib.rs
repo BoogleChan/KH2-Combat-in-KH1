@@ -106,6 +106,9 @@ pub struct RigAnim {
     /// Blend (60 Hz frames) into the motion queued after a finished action. The game uses none
     /// (`blend::QUEUED`); a host can soften the snap.
     pub queued_blend: f32,
+    /// Motions shown as another, looping (`(motion, shown)`): a form whose clip for a motion is
+    /// only Sora's own (Valor's landing is his, without the Keyblade) shows its stance instead.
+    pub stand_in: Vec<(u16, u16)>,
 }
 
 /// Movement motions that keep the weapons put away out of combat. Attacks,
@@ -149,7 +152,7 @@ impl RigAnim {
     pub fn new(rig: Arc<Rig>) -> RigAnim {
         let bones = kh2_anim::Pose::bind(&rig.skeleton).bones;
         let weapons = rig.weapons.iter().map(|w| kh2_anim::Pose::bind(&w.skeleton).bones).collect();
-        RigAnim { rig, track: None, bones, weapons, to_world: Mat4::IDENTITY, object: Mat4::IDENTITY, blend_from: None, blend_t: 1.0, blend_len: blend::DEFAULT, field: false, queued_blend: blend::QUEUED }
+        RigAnim { rig, track: None, bones, weapons, to_world: Mat4::IDENTITY, object: Mat4::IDENTITY, blend_from: None, blend_t: 1.0, blend_len: blend::DEFAULT, field: false, queued_blend: blend::QUEUED, stand_in: Vec::new() }
     }
 
     /// The keyframes a track plays: the field variant when it asks for one.
@@ -173,6 +176,20 @@ impl RigAnim {
     }
 
     fn pick(&self, out: &Output) -> Track {
+        let t = self.pick_motion(out);
+        match self.stand_in.iter().find(|(m, _)| *m == t.motion) {
+            Some(&(_, shown)) => {
+                let frame = match self.track {
+                    Some(p) if p.motion == shown && !p.field => p.frame + 1.0,
+                    _ => 0.0,
+                };
+                Track { motion: shown, frame, looping: true, field: false, root: false }
+            }
+            None => t,
+        }
+    }
+
+    fn pick_motion(&self, out: &Output) -> Track {
         let prev = self.track;
         let field_of = |m: u16| self.field && self.rig.field_motions.contains_key(&m);
         let free = |m: u16, looping: bool| {

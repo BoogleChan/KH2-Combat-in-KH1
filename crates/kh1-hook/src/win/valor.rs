@@ -56,4 +56,6 @@ pub unsafe fn started() {
 /// Back from Valor.
 pub unsafe fn ended() {
     super::leftblade::hide();
+    // Sora's own Strength and max MP again (`valorstats`).
+    super::valorstats::step(super::takeover::sora_actor());
 }

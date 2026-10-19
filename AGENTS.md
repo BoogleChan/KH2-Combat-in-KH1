@@ -2617,3 +2617,23 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   own logic. Now the touchdown doesn't start KH2 in the air, and on every cut of a KH1 move
   (`cancel`, the air cast's landing) KH1's motion is set to its idle (`0x14029D7F0 (actor, 0,
   0)`), logged.
+
+### 2026-10-19: Stage 220 (Valor's second Keyblade: trail, menu, stats; forms' MP; Sephiroth)
+- The left trail followed the right blade: KH1 takes a point along a bone from its parent's
+  world matrix and the bone's local offset (`0x1401D41C0`), and the grip's parent is the right
+  hand. The trail owner's matrices are now all of Sora's moved by the right-grip-to-left-grip
+  turn. Its look is the left Keyblade's own: the `.wpn`'s effect section (`+4..+8`) is set up as
+  KH1's handler does (`0x1401DDF20`, released with `0x1401DED70`) and used for the trail (the
+  right one's when it has no such trail).
+- Equipment: KH1's live preview runs during the Valor pick (the hovered Keyblade shown, put back
+  by KH1's own restore on close).
+- Valor adds its Keyblade's Strength and max MP to Sora's each step (from KH1's own figures,
+  `0x1402A2FA0`), taken off when it ends (`valorstats.rs`).
+- Valor's fall and landing clips are base Sora's no-Keyblade ones (identical in both msets): its
+  idle stands in for the landing (`RigAnim::stand_in`).
+- Forms drain one unit every 3 frames of battle (was 2), and each melee hit in a form charges MP
+  with KH1's own charge (`0x1402A2950`): the hit's units (attack data `+0x2C`) × his bars, as a
+  hit is to a point outside a form.
+- Sephiroth's pillar killed through Leaf Bracer / Second Chance: a lasting KH1 attack re-arms its
+  hit on an interval and KH2's reaction kept Sora in it. No hit lands while he is knocked down,
+  nor the same attacker's within 20 frames while he flinches (`hurt.rs`, `docs/kh1-rehit.md`).

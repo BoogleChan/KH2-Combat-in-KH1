@@ -1307,6 +1307,10 @@ impl Strikes {
                 let dealt = land(sora, &b.parts[ti], &swept[ai], kh1, row.power, false);
                 MAGIC.store(false, Ordering::Relaxed);
                 HOLD.store(false, Ordering::Relaxed);
+                // (In a Drive Form, MP for the hit, `form::melee_hit`.)
+                if dealt.is_some() {
+                    super::form::melee_hit(sora, BASE.load(Ordering::Relaxed) + ATTACK_DATA_RVA + kh1.data as usize);
+                }
                 // (Again once the contact is done, in case its direction came after the record.)
                 let rec = HELD_REC.swap(0, Ordering::Relaxed);
                 if rec > 0x10000 {

@@ -261,6 +261,8 @@ static ORIG_STATS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsi
 unsafe extern "system" fn stats(member: i32, out: usize) {
     let f: unsafe extern "system" fn(i32, usize) = std::mem::transmute(ORIG_STATS.load(std::sync::atomic::Ordering::Acquire));
     f(member, out);
+    // Valor's second Keyblade's Strength and MP on Sora's (`valorstats`).
+    super::valorstats::add(member, out);
     let set = super::settings::get();
     if member != 0 || out < 0x10000 || !set.bonus_ap || set.abilities != growth::Mode::Kh1 {
         return;
@@ -320,6 +322,20 @@ pub unsafe fn install() {
     super::hook::install(base + TABLE_LOAD_RVA, &TABLE_LOAD_PROLOGUE, table_load as *const () as usize, &ORIG_LOAD, "ability table load");
     super::hook::install(base + REWARD_LINE_RVA, &REWARD_LINE_PROLOGUE, reward_line as *const () as usize, &ORIG_REWARD_LINE, "reward message line");
     super::hook::install(base + STATS_RVA, &STATS_PROLOGUE, stats as *const () as usize, &ORIG_STATS, "party stats");
+}
+
+/// KH1's stats function for `member` into `out` as KH1 alone fills it (unhooked: no Valor
+/// Keyblade, no KH2 AP), for `valorstats`; false if it can't be run.
+pub unsafe fn kh1_stats(member: i32, out: usize) -> bool {
+    let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
+    if out < 0x10000 || save_block(base).is_none() {
+        return false;
+    }
+    let orig = ORIG_STATS.load(std::sync::atomic::Ordering::Acquire);
+    let at = if orig != 0 { orig } else { base + STATS_RVA };
+    let f: unsafe extern "system" fn(i32, usize) = std::mem::transmute(at);
+    f(member, out);
+    true
 }
 
 /// KH1's level-up prompt boxes (`0x14283BD90`, Sora's first, `0x3A20` apart; the box count

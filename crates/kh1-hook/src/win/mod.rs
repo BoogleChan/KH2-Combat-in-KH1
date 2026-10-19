@@ -28,6 +28,7 @@ mod reflect;
 mod takeover;
 mod tint;
 mod valor;
+mod valorstats;
 mod equip;
 mod sys;
 
