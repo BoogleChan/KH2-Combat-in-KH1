@@ -1701,8 +1701,9 @@ unsafe fn takeover(actor: usize) -> bool {
     if let Ok(mut pz) = POSE.try_lock() {
         *pz = Some((d.anim.bones.clone(), d.anim.weapons.first().cloned().unwrap_or_default(), Instant::now()));
     }
-    // Valor's left Keyblade (the form rig's second weapon), for `leftblade`.
-    super::leftblade::kh2_left(d.anim.weapons.get(1).map(|w| w.as_slice()));
+    // Valor's left Keyblade (the form rig's second weapon), and the clip playing for its trail,
+    // for `leftblade`.
+    super::leftblade::kh2_left(d.anim.weapons.get(1).map(|w| w.as_slice()), out.motion, out.clip_frame, out.weapon_trail);
     // The Keyblade during attacks (the user: invisible while attacking): every 15 frames.
     static ATTACK_FRAMES: AtomicU32 = AtomicU32::new(0);
     if matches!(out.state, StateName::Attack) {

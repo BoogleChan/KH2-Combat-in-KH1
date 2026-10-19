@@ -16,6 +16,14 @@
 //!    body mesh hidden, our model as the weapon and the left-hand matrices put in bones
 //!    280..292 for that call only (put back at once).
 //!
+//! 4. **Trail**: KH1's own Keyblade trail, with the right one's look: the effect data from the
+//!    right Keyblade's `.wpn`, and the trail id KH1 was last asked for this swing. It runs on the
+//!    frames KH2's left weapon has its trail (`W_EX010_BTLF_L`'s trail ranges).
+//!    - KH1's trail is an effect that follows a bone of its owner actor each frame
+//!      (`0x1402AC780`), read through the owner's model instance's world matrices.
+//!    - Its owner here is a copy of Sora's actor. That copy's instance is a copy of his, with its
+//!      own matrices: his, with the left hand's in 280..292.
+//!
 //! Everything is off with `valor_left_blade = off` (nothing installed). Every step is logged a
 //! few times.
 
@@ -49,6 +57,38 @@ const WPN_RELEASE_SLOT_RVA: Rva = Rva(0x4DAF48);
 const ITEM_TABLE_PTR_RVA: Rva = Rva(0x2D23738);
 const BTLTBL_RVA: Rva = Rva(0x2D23740);
 const WEAPON_TABLE_OFFSETS_RVA: Rva = Rva(0x528D60);
+
+/// KH1's trail request `(actor, id)`, hooked to learn the swing's trail id. The trail effect
+/// maker `(owner, effect data, id) -> effect`. An effect's end (`jmp 0x1401EA310`). Pointer →
+/// handle.
+const TRAIL_START_RVA: Rva = Rva(0x2C0160);
+const TRAIL_START_PROLOGUE: [u8; 5] = [0x48, 0x89, 0x5C, 0x24, 0x08];
+const TRAIL_MAKE_RVA: Rva = Rva(0x2AC100);
+const EFFECT_KILL_RVA: Rva = Rva(0x1DE890);
+const TO_HANDLE_RVA: Rva = Rva(0x38B080);
+/// Actor fields: its size, its weapon object and model instance handles, and its state bits
+/// (`+0x374`: bit 0 alive, bit 1 gone; `0x14028FE60`).
+const ACTOR_SIZE: usize = 0x4B0;
+const ACTOR_WEAPON: usize = 0x14C;
+const ACTOR_INSTANCE: usize = 0x15C;
+const ACTOR_STATE: usize = 0x374;
+/// The actor's flags word holding the "trail wanted" bit (`combat::TRAIL_FLAG`).
+const ACTOR_TRAIL_FLAGS: usize = 0x1CC;
+const TRAIL_FLAG: u32 = 0x80_0000;
+/// A model instance's size, and the weapon object's effect data (the `.wpn`'s second section).
+const INSTANCE_SIZE: usize = 0x200;
+const OBJ_EFFECTS: usize = 0x18;
+/// An effect: its handle to the "end" byte, its state (`& 3 == 1` running; bit 0x20 followed),
+/// and its handle to the block whose first word is its owner.
+const FX_END: usize = 0x10;
+const FX_STATE: usize = 0x14;
+const FX_OWNER: usize = 0x18;
+/// Our owner block: the actor copy, the instance copy, the matrices.
+const FAKE_SIZE: usize = 0x8000;
+const FAKE_INSTANCE: usize = 0x800;
+const FAKE_MATS: usize = 0x1000;
+/// Trails kept at once (one swinging, the others fading).
+const MAX_TRAILS: usize = 4;
 
 /// A file record's buffer, size, and its file-type row (-1: no handler is called on release).
 const REC_BUFFER: usize = 0x658;
@@ -106,6 +146,30 @@ static STATE: Mutex<State> = Mutex::new(State { loaded: None, pending: None, fai
 static KH2_LEFT: Mutex<Option<(Vec<Mat4>, Instant)>> = Mutex::new(None);
 /// The left hand's weapon bones in KH1's world, and the game frame they were made on.
 static LEFT: Mutex<Option<([Mat4; WEAPON_BONES], u64)>> = Mutex::new(None);
+static ORIG_TRAIL_START: AtomicUsize = AtomicUsize::new(0);
+static TRAIL_HOOKED: AtomicBool = AtomicBool::new(false);
+/// The trail id KH1 was last asked for Sora (`u32::MAX`: none yet).
+static TRAIL_ID: AtomicU32 = AtomicU32::new(u32::MAX);
+/// Our owner block (0: not made), the instance copy's and matrices' handles; whether it was
+/// filled this Valor.
+static FAKE: AtomicUsize = AtomicUsize::new(0);
+static FAKE_INSTANCE_H: AtomicU32 = AtomicU32::new(0);
+static FAKE_MATS_H: AtomicU32 = AtomicU32::new(0);
+static FAKE_FILLED: AtomicBool = AtomicBool::new(false);
+/// The left weapon's trail window is open (last KH2 step).
+static LEFT_OPEN: AtomicBool = AtomicBool::new(false);
+/// KH2's left weapon's trail ranges by motion id (the Valor moveset's left weapon motion set,
+/// trigger 12), read once.
+type Windows = std::collections::HashMap<u16, Vec<(u32, Option<u32>)>>;
+static TRAIL_WINDOWS: std::sync::OnceLock<Windows> = std::sync::OnceLock::new();
+
+struct Trail {
+    effect: usize,
+    fading: bool,
+}
+/// Our trails, and whether the left weapon's trail window was open last step.
+static TRAILS: Mutex<(Vec<Trail>, bool)> = Mutex::new((Vec::new(), false));
+
 /// KH2's bind pose of the Valor skeleton (for the hand offsets), made once.
 static KH2_BIND: Mutex<Option<Vec<Mat4>>> = Mutex::new(None);
 
@@ -145,6 +209,13 @@ pub unsafe fn install() {
         return;
     }
     INSTALLED.store(true, Ordering::Relaxed);
+    // The trail (fails alone: the Keyblade is still drawn).
+    if super::hook::install(base + TRAIL_START_RVA, &TRAIL_START_PROLOGUE, trail_start as *const () as usize, &ORIG_TRAIL_START, "Keyblade trail request (left Keyblade)").is_some() {
+        TRAIL_HOOKED.store(true, Ordering::Relaxed);
+        std::thread::spawn(load_trail_windows);
+    } else {
+        log("left Keyblade: trail off (KH1's trail request not where expected)");
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -352,14 +423,22 @@ unsafe extern "system" fn wpn_release(record: usize) -> u64 {
 // ---------------------------------------------------------------------------------------------
 // Posing
 
-/// `takeover`: KH2's left Keyblade this frame (the rig's second weapon), if there is one.
-pub fn kh2_left(bones: Option<&[Mat4]>) {
-    if !INSTALLED.load(Ordering::Relaxed) || !super::form::in_valor() {
+/// `takeover`, each KH2 step. Gets:
+/// - KH2's left Keyblade this frame (the rig's second weapon), if there is one;
+/// - the clip playing (`motion`, `frame`);
+/// - whether any of the clip's trail windows is open (`trail`, used if the left weapon's own
+///   ranges couldn't be read).
+pub fn kh2_left(bones: Option<&[Mat4]>, motion: u16, frame: u32, trail: bool) {
+    if !INSTALLED.load(Ordering::Relaxed) {
         return;
     }
-    if let Ok(mut g) = KH2_LEFT.try_lock() {
-        *g = bones.filter(|b| !b.is_empty()).map(|b| (b.to_vec(), Instant::now()));
+    let valor = super::form::in_valor() && SHOWN.load(Ordering::Relaxed) && MESH.load(Ordering::Relaxed) != 0;
+    if valor {
+        if let Ok(mut g) = KH2_LEFT.try_lock() {
+            *g = bones.filter(|b| !b.is_empty()).map(|b| (b.to_vec(), Instant::now()));
+        }
     }
+    unsafe { trail_step(valor, motion, frame, trail) };
 }
 
 /// A matrix with its translation times `k` (KH2 units to KH1's).
@@ -420,6 +499,9 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
     if let Ok(mut g) = LEFT.try_lock() {
         *g = Some((out, super::takeover::GAME_FRAME.load(Ordering::Relaxed)));
     }
+    if TRAIL_HOOKED.load(Ordering::Relaxed) {
+        unsafe { fill_owner(kh1, to_world, &out) };
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -477,4 +559,198 @@ unsafe fn second(f: Queue, instance: usize, view: usize, params: usize, actor: u
     std::ptr::copy_nonoverlapping(saved.as_ptr(), at as *mut u8, saved.len());
     static N: AtomicU32 = AtomicU32::new(0);
     log_n(&N, 3, || format!("drawn in the left hand (mesh {mesh:#x}, grip at {:.0?})", left[0].w_axis.truncate()));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Trail
+
+/// KH1's trail request: the id is noted for Sora (KH1's own swings, and `combat`'s for KH2's).
+unsafe extern "system" fn trail_start(actor: usize, id: u32) {
+    if actor != 0 && actor == super::takeover::sora_actor() {
+        TRAIL_ID.store(id, Ordering::Relaxed);
+    }
+    let f: unsafe extern "system" fn(usize, u32) = std::mem::transmute(ORIG_TRAIL_START.load(Ordering::Acquire));
+    f(actor, id);
+}
+
+/// KH2's left weapon's trail ranges, from the KH2 install (as `pose::load_kh2` finds it).
+fn load_trail_windows() {
+    let r = (|| -> Result<(String, Windows), String> {
+        let exe = format!("{}\\KINGDOM HEARTS II FINAL MIX.exe", super::exe_dir());
+        let install = kh2_data::Install::locate(&exe).map_err(|e| format!("KH2 install: {e}"))?;
+        let source = if install.has_backup() { kh2_data::Source::Backup } else { kh2_data::Source::Live };
+        // Valor's moveset (2): its left weapon's motion set name in 03system's `wmst`.
+        let name = install
+            .read_any(source, "03system.bin")
+            .ok()
+            .and_then(|b| kh2_formats::objentry::parse_wmst(&b).ok())
+            .and_then(|n| n.get(2 * 2 + 1).filter(|s| !s.is_empty()).cloned())
+            .unwrap_or_else(|| "W_EX010_BTLF_L".into());
+        let bytes = install.read_any(source, &format!("obj/{name}.mset")).map_err(|e| format!("{name}.mset: {e}"))?;
+        let mset = kh2_formats::motion::Mset::parse(&bytes).map_err(|e| format!("{name}.mset: {e}"))?;
+        let mut out = Windows::new();
+        for m in 0..=255u16 {
+            let Some(anb) = mset.slot_for(m as usize, true, true).and_then(|s| s.anb.as_ref()) else { continue };
+            let w: Vec<(u32, Option<u32>)> = anb
+                .triggers
+                .ranges
+                .iter()
+                .filter(|r| r.id == kh2_formats::motion::range_id::WEAPON_TRAIL)
+                .map(|r| (r.start.max(0) as u32, (r.end >= 0).then_some(r.end as u32)))
+                .collect();
+            if !w.is_empty() {
+                out.insert(m, w);
+            }
+        }
+        Ok((name, out))
+    })();
+    match r {
+        Ok((name, w)) => {
+            log(&format!("left Keyblade: trail windows of {name} for {} motions", w.len()));
+            let _ = TRAIL_WINDOWS.set(w);
+        }
+        Err(e) => log(&format!("left Keyblade: trail windows not read ({e}); KH2's trail windows of either hand used")),
+    }
+}
+
+/// `pose`: our trail owner, a copy of Sora's actor and model instance whose world matrices are
+/// his with the left hand's weapon bones (game thread).
+unsafe fn fill_owner(kh1: &[Mat4], to_world: &Mat4, left: &[Mat4; WEAPON_BONES]) {
+    static N: AtomicU32 = AtomicU32::new(0);
+    let base = BASE.load(Ordering::Relaxed);
+    let sora = super::takeover::sora_actor();
+    let inst = super::pose::SORA_INSTANCE.load(Ordering::Relaxed);
+    if kh1.len() < SORA_BONES || !readable(sora, ACTOR_SIZE) || !readable(inst, INSTANCE_SIZE) {
+        return;
+    }
+    let mut fake = FAKE.load(Ordering::Relaxed);
+    if fake == 0 {
+        fake = super::sys::VirtualAlloc(std::ptr::null_mut(), FAKE_SIZE, 0x3000, 0x04) as usize;
+        if fake == 0 {
+            log_n(&N, 3, || "trail: no memory for its owner".into());
+            return;
+        }
+        let to_handle: unsafe extern "system" fn(usize) -> u32 = std::mem::transmute(base + TO_HANDLE_RVA);
+        let (ih, mh) = (to_handle(fake + FAKE_INSTANCE), to_handle(fake + FAKE_MATS));
+        if super::pose::ptr(ih) != fake + FAKE_INSTANCE || super::pose::ptr(mh) != fake + FAKE_MATS {
+            log_n(&N, 3, || format!("trail: handles of its owner don't resolve ({ih:#x} {mh:#x}): no trail"));
+            TRAIL_HOOKED.store(false, Ordering::Relaxed);
+            return;
+        }
+        FAKE_INSTANCE_H.store(ih, Ordering::Relaxed);
+        FAKE_MATS_H.store(mh, Ordering::Relaxed);
+        FAKE.store(fake, Ordering::Relaxed);
+        log_n(&N, 3, || format!("trail: its owner made at {fake:#x}"));
+    }
+    std::ptr::copy_nonoverlapping(sora as *const u8, fake as *mut u8, ACTOR_SIZE);
+    std::ptr::copy_nonoverlapping(inst as *const u8, (fake + FAKE_INSTANCE) as *mut u8, INSTANCE_SIZE);
+    std::ptr::write_unaligned((fake + ACTOR_INSTANCE) as *mut u32, FAKE_INSTANCE_H.load(Ordering::Relaxed));
+    std::ptr::write_unaligned((fake + FAKE_INSTANCE + INST_WORLD) as *mut u32, FAKE_MATS_H.load(Ordering::Relaxed));
+    for (i, m) in kh1.iter().enumerate().take(SORA_BONES) {
+        let m = if (GRIP..GRIP + WEAPON_BONES).contains(&i) { left[i - GRIP] } else { *to_world * *m };
+        std::ptr::write_unaligned((fake + FAKE_MATS + i * 0x40) as *mut [f32; 16], m.to_cols_array());
+    }
+    // Its trail flag (`+0x1CC` 0x800000, which KH1 keeps set while a trail is wanted) follows the
+    // left window, not the right one's (in case the effect reads it from its owner).
+    let flags = rd::<u32>(fake + ACTOR_TRAIL_FLAGS);
+    let flags = if LEFT_OPEN.load(Ordering::Relaxed) { flags | TRAIL_FLAG } else { flags & !TRAIL_FLAG };
+    std::ptr::write_unaligned((fake + ACTOR_TRAIL_FLAGS) as *mut u32, flags);
+    FAKE_FILLED.store(true, Ordering::Relaxed);
+}
+
+/// Whether the left weapon's trail is on at this frame of this motion.
+fn left_window(motion: u16, frame: u32, either: bool) -> bool {
+    match TRAIL_WINDOWS.get() {
+        Some(w) => w.get(&motion).is_some_and(|v| v.iter().any(|&(s, e)| frame >= s && e.map_or(true, |e| frame < e))),
+        None => either,
+    }
+}
+
+/// Our trail effect is still running, and still ours (the effect pool reuses entries).
+unsafe fn trail_alive(effect: usize, fake: usize) -> bool {
+    if !readable(effect, 0x3C) || rd::<u32>(effect + FX_STATE) & 3 != 1 {
+        return false;
+    }
+    let owner = super::pose::ptr(rd::<u32>(effect + FX_OWNER));
+    readable(owner, 8) && rd::<u64>(owner) as usize == fake
+}
+
+/// Each KH2 step: our trails started, faded and ended as KH1 does its own (`0x1402BFD70`):
+/// - made as the left weapon's trail window opens;
+/// - told to end (its end byte) as it closes;
+/// - ended at once out of Valor.
+unsafe fn trail_step(valor: bool, motion: u16, frame: u32, either: bool) {
+    static N: AtomicU32 = AtomicU32::new(0);
+    if !TRAIL_HOOKED.load(Ordering::Relaxed) {
+        return;
+    }
+    let base = BASE.load(Ordering::Relaxed);
+    let fake = FAKE.load(Ordering::Relaxed);
+    let Ok(mut g) = TRAILS.try_lock() else { return };
+    let (trails, was_open) = &mut *g;
+    let open = valor && left_window(motion, frame, either);
+    // Those that ended, or aren't ours any more, are forgotten; out of Valor, ended.
+    trails.retain_mut(|t| {
+        if !trail_alive(t.effect, fake) {
+            log_n(&N, 12, || format!("trail {:#x} ended", t.effect));
+            return false;
+        }
+        if !valor {
+            let kill: unsafe extern "system" fn(usize) = std::mem::transmute(base + EFFECT_KILL_RVA);
+            kill(t.effect);
+            log_n(&N, 12, || format!("trail {:#x} ended (out of Valor)", t.effect));
+            return false;
+        }
+        if !open {
+            t.fading = true;
+        }
+        if t.fading {
+            let end = super::pose::ptr(rd::<u32>(t.effect + FX_END));
+            if readable(end, 1) {
+                std::ptr::write_volatile(end as *mut u8, 1);
+            }
+        }
+        true
+    });
+    if !valor {
+        FAKE_FILLED.store(false, Ordering::Relaxed);
+    }
+    LEFT_OPEN.store(open, Ordering::Relaxed);
+    let opened = open && !*was_open;
+    *was_open = open;
+    if !opened {
+        return;
+    }
+    // The window opened: a new trail, as KH1 makes the right one (`0x1402BFD70`).
+    let id = TRAIL_ID.load(Ordering::Relaxed);
+    let sora = super::takeover::sora_actor();
+    let obj = if readable(sora + ACTOR_WEAPON, 4) { super::pose::ptr(rd::<u32>(sora + ACTOR_WEAPON)) } else { 0 };
+    let source = if readable(obj + OBJ_EFFECTS, 8) { rd::<u64>(obj + OBJ_EFFECTS) as usize } else { 0 };
+    let why = if id == u32::MAX {
+        Some("no trail id asked of KH1 yet")
+    } else if source == 0 || !readable(source, 0x10) {
+        Some("the right Keyblade has no effect data")
+    } else if fake == 0 || !FAKE_FILLED.load(Ordering::Relaxed) {
+        Some("its owner isn't ready")
+    } else if rd::<u32>(fake + ACTOR_STATE) & 3 != 1 {
+        Some("Sora isn't in the field")
+    } else if trails.len() >= MAX_TRAILS {
+        Some("too many trails")
+    } else {
+        None
+    };
+    if let Some(why) = why {
+        log_n(&N, 12, || format!("trail not made at motion {motion} frame {frame}: {why}"));
+        return;
+    }
+    let make: unsafe extern "system" fn(usize, usize, u32) -> usize = std::mem::transmute(base + TRAIL_MAKE_RVA);
+    let effect = make(fake, source, id & !0x4000_0000);
+    if effect == 0 || !readable(effect, 0x3C) {
+        log_n(&N, 12, || format!("trail not made at motion {motion} frame {frame}: KH1 made no effect (id {id:#x})"));
+        return;
+    }
+    // (KH1 clears this bit on its own trail too, `0x1402BFD70`.)
+    std::ptr::write_unaligned((effect + FX_STATE) as *mut u32, rd::<u32>(effect + FX_STATE) & !0x20);
+    trails.push(Trail { effect, fading: false });
+    log_n(&N, 12, || format!("trail {effect:#x} made at motion {motion} frame {frame} (id {id:#x})"));
 }

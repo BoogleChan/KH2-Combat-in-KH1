@@ -2600,3 +2600,10 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   ("KH2 sound played: ..."), sounds asked for but not loaded, a muted volume, and Windows
   refusing the sound device, which `play` dropped silently.
 - The left Keyblade's trail: a helper session is on it.
+
+### 2026-10-19: Stage 218 (the left Keyblade's trail)
+- "the secondary keyblade doesnt have its trail": a helper session gave it KH1's own swing trail
+  (`leftblade.rs`, `docs/kh1-weapon-second.md` section 8): the trail id KH1 is asked for Sora
+  (`0x1402C0160`, hooked) on an owner of ours (a copy of Sora's actor and instance with the
+  left-hand weapon bones), made as the left weapon's own trail windows open (read from
+  `W_EX010_BTLF_L`), faded as they close. "left Keyblade: trail ..." in the log.

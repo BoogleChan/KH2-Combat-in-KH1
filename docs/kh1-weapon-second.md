@@ -446,3 +446,81 @@ hand would be wrong.
    `released`, then a new load. An area change while loaded: still drawn.
 5. If anything crashes, set `valor_left_blade = off` and send the log. The crash note names the
    last stage reached.
+
+---
+
+## 8. The left Keyblade's trail (KH1's own)
+
+### How KH1 makes its Keyblade trail [high, from the code]
+
+- **`0x1402C0160(actor, id)`** (Steam `0x2C2310`) is called by a move's row (`0x1402A17F0`, the
+  row's `+2`) and by `combat` for KH2's swings. It ends the trail the weapon object has at
+  `+0x28` (`0x1401DE890`, a `jmp` to `0x1401EA310`). Then it stores the weapon object's effect
+  data (`+0x18`) at `+0x30` and `id | 0x40000000` at `+0x38`.
+- **`0x1402BFD70(actor)`**, each frame (from the actor step `0x140295E50`):
+  - **No trail:**
+    - With `+0x38 >= 0`, the 0x40000000 bit is first cleared, one frame.
+    - Then, while the actor's `+0x1CC` bit 0x800000 is set and the actor is alive
+      (`0x14028FE60`: `+0x374` bit 0 set, bit 1 clear), it makes the trail with
+      **`0x1402AC100(actor, effect data, id)`** (Steam `0x2AE290`). It clears the effect's
+      `+0x14` bit 0x20, stores the effect at `+0x28` and sets `+0x38 = -1`.
+  - **A trail running** (effect `+0x14 & 3 == 1`):
+    - while the actor's flags have `0xC001` and the trail bit is set, it is left alone;
+    - when the bit goes, the byte at `ptr(effect+0x10)` is set to 1 (the trail ends and fades);
+    - otherwise it is ended at once.
+
+    When it isn't running any more, `+0x28` is cleared.
+- **The effect** comes from a pool of 0x3C-byte entries (`0x142D682B0`); `ptr(effect+0x18)`'s
+  first word is the owner. `0x1402AC100` → `0x1402AC660` / `0x1402AC6F0` registers a follower
+  task (`0x1402AC780`). Each frame it places the effect on a bone of the owner:
+  - `0x14029C870(actor, bone, out)`: the owner's model instance (`actor+0x15C`), then its world
+    matrices (`instance+0x1B4`, `0x1401D40C0`). The bone either comes straight from the effect
+    data (flag 0x2000) or is mapped through the instance's skeleton (`0x14029D920`).
+  - It also reads the owner's `+0x88`, `+0x160`/`+0x164` (the trail ends when the motion slot
+    changes), `+0x370..` (colour) and `+0x374`.
+  - So **the trail follows whatever world matrices the owner's instance has when the follower
+    runs.**
+
+### What is implemented (`leftblade.rs`, same `valor_left_blade` switch)
+
+- **The swing's trail id:** `0x1402C0160` is hooked (prologue `48 89 5C 24 08`, checked). Its
+  id is noted whenever it's asked for Sora. That is the id `combat` asks for the right trail of
+  each KH2 swing, so the left trail has the same look. It is made from the right Keyblade's
+  effect data (the weapon object's `+0x18`).
+- **The owner:** a block of ours (0x8000 bytes) holds a copy of Sora's actor (0x4B0 bytes) and
+  of his model instance (0x200).
+  - The actor copy's `+0x15C` is a handle to the instance copy. The instance copy's `+0x1B4` is
+    a handle to our 293 matrices: his world matrices, with the left hand's weapon bones in
+    280..292.
+  - It is refreshed in `note_pose`, every time the left bones are made. Its `+0x1CC` trail bit
+    follows the left window.
+  - Handles are made with KH1's `0x14038B080` and checked to resolve back.
+- **When:**
+  - The left weapon's own trail ranges (trigger 12) are read at start, in the background, from
+    the KH2 install's `wmst`-named mset for Valor's left hand (`W_EX010_BTLF_L`).
+  - `takeover` passes the clip's motion, frame and its trail flag (the same `kh2_left` line,
+    now with three more arguments). If the mset can't be read, KH2's trail window of either
+    hand is used.
+  - As the window opens, a trail is made with `0x1402AC100(owner, effect data, id)` and bit 0x20
+    cleared, as KH1 does. When the window closes, its end byte is set each step until it stops
+    running.
+  - Out of Valor it is ended at once (`0x1401DE890`). At most 4 run at once, fading ones
+    included.
+  - A tracked effect counts as ours only while it is running and its owner word is our block
+    (the pool reuses entries).
+- **Logs** (`left Keyblade: trail ...`, a few each):
+  - the windows read;
+  - the owner made;
+  - each trail made (motion, frame, id) or not made, and why: no id yet, no effect data, owner
+    not ready, Sora not in the field, too many;
+  - each trail ended.
+
+### Risks and runtime checks
+
+1. A copy of the actor as an effect's owner: if anything in the effect code writes through
+   the owner, or keeps it past Valor, it writes into our block (never freed), not into Sora.
+2. The trail's motion-slot check reads the copy's `+0x164`, which is Sora's. A left trail ends
+   when Sora's KH1 motion slot changes, as the right one does.
+3. Check in the log: `trail windows of W_EX010_BTLF_L for N motions` at start, then for each
+   Valor swing `trail ... made at motion M frame F`, then `ended`. In the game, check that the
+   ribbon follows the left blade, not the right one.
