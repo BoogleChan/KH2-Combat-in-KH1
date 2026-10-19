@@ -2744,3 +2744,20 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   a frame old was drawn where he had been. Now kept in model space and placed with the frame's
   own placement, and paired with KH2's left weapon of the very step whose body is drawn (a
   signature of the body's bones).
+
+### 2026-10-19: Stage 231 (Final Form, a secret)
+- The user: "lets work on implementing final form ... instead of it being listed in the drive
+  menu, lets make it a secret": Up, Up, Down, Down, Left, Right, Left, Right, Circle, Cross on the
+  pad (KH1's pad bits 4, 4, 6, 6, 7, 5, 7, 5, 13, 14; at most 1.5 s between presses; another
+  watched button starts it over) asks for Final Form as the Drive list would (`form::pad`, read in
+  `probe::pad`; taken in `form::before_step` when KH2 can change him: free, jumping, falling,
+  landing or at a move's end, not in a form). The Drive list is unchanged.
+- Final Form: `P_EX100_ULTF` (moveset 5, form id 5; TRIF is Master Form), the same change, cost,
+  drain and revert as the others, its growth ability Glide at MAX, its own effect package
+  (`kh2fx::FINAL`, after Valor's) and sounds, KH1's specials refused as in Valor.
+- Its second Keyblade is always the Kingdom Key (item 0x51; the user: "just default it to
+  kingdom key and keep the menu how it is"), with its Strength and MP as Valor's Keyblade's.
+- Its Keyblades float where KH2's weapon motions put them (W_EX010_ULTF_R / _L on bones 178 / 86;
+  their idle roots some 70 units from the hands, Valor's 5): KH1's weapon bones keep the turn from
+  base Sora's held Keyblade root to KH1's grip, put on Final's root now
+  (`leftblade::final_float`); the left one follows by the same turn (its reach check 400 there).

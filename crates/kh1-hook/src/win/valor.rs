@@ -46,8 +46,16 @@ pub unsafe fn keyblade() -> Option<u8> {
     pick
 }
 
-/// Sora became Valor: his second Keyblade comes out.
+/// Final Form's second Keyblade: always the Kingdom Key (KH1 item 0x51), no slot (the user).
+pub const FINAL_KEYBLADE: u8 = 0x51;
+
+/// Sora became Valor (or Final): his second Keyblade comes out.
 pub unsafe fn started() {
+    if super::form::in_final() {
+        log("Final Form: second Keyblade the Kingdom Key (0x51)");
+        super::leftblade::show(Some(FINAL_KEYBLADE));
+        return;
+    }
     let k = keyblade();
     log(&format!("Valor Form: second Keyblade {:?}", k.map(|k| format!("{k:#x}"))));
     super::leftblade::show(k);

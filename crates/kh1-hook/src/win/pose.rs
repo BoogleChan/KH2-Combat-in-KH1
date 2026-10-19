@@ -138,6 +138,8 @@ pub struct Kh2 {
     pub wisdom: Option<Form>,
     /// Valor Form (`form`, stage 211): its moveset (two Keyblades' swings) and motions.
     pub valor: Option<Form>,
+    /// Final Form (`form`, stage 231: `P_EX100_ULTF`, its floating Keyblades).
+    pub final_form: Option<Form>,
     roots: HashMap<u16, Vec<[f32; 3]>>,
     /// Walk and run (battle, field): ground speed in KH2 units per second, from the planted
     /// foot's travel against the hips.
@@ -523,7 +525,30 @@ pub fn load_kh2() {
             } else {
                 None
             };
-            Ok(Kh2 { rig, character: sora.character.clone(), battle: Arc::new(sora.combat.battle.clone()), magi: sora.magi.clone(), wisdom, valor, roots, ground })
+            let final_form = if super::settings::get().drive {
+                let t = Instant::now();
+                match load_form(&install, source, kh2_data::sora::FORMS[4], rig.skeleton.len()) {
+                    Ok(f) => {
+                        log(&format!(
+                            "KH2 Final Form loaded: {} motions, {} combo rows, {} weapons (on bones {:?}), effects {}, in {:.1}s",
+                            f.rig.motions.len(),
+                            f.character.moveset.combo_rows.len(),
+                            f.rig.weapons.len(),
+                            f.rig.weapons.iter().map(|w| w.bone).collect::<Vec<_>>(),
+                            if f.archive.is_some() { "read" } else { "missing" },
+                            t.elapsed().as_secs_f32()
+                        ));
+                        Some(f)
+                    }
+                    Err(e) => {
+                        log(&format!("KH2 Final Form did not load: {e}"));
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            Ok(Kh2 { rig, character: sora.character.clone(), battle: Arc::new(sora.combat.battle.clone()), magi: sora.magi.clone(), wisdom, valor, final_form, roots, ground })
         })();
         if let Err(e) = &r {
             log(&format!("KH2 Sora did not load: {e}"));
@@ -1251,6 +1276,10 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
     }
     // A dream weapon whole, as KH1 holds it.
     dream_hold(&mut pose, &s.parents, (!ours).then_some(world));
+    // Final Form's Keyblade floating where KH2's weapon motion has it.
+    if let (Some((body, weapon)), true) = (s.kh2_now.as_ref(), super::form::in_final()) {
+        super::leftblade::final_float(&mut pose, &s.bind, body, weapon, s.retarget.as_ref().map_or(1.0, |r| r.hip_ratio()));
+    }
     for (i, m) in pose.iter().enumerate().take(SORA_BONES as usize) {
         std::ptr::write_unaligned((world + i * 0x40) as *mut [f32; 16], (to_world * *m).to_cols_array());
     }

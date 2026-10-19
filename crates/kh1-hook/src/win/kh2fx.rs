@@ -114,13 +114,15 @@ pub unsafe fn start() {
                 // (And Wisdom Form's, as package 4: its shots, `form`.)
                 // (And Wisdom Form's spells, Fire / Blizzard / Thunder / Cure by level, as packages
                 // `form::spell_package`.)
-                let last = if super::settings::get().drive { VALOR } else { WISDOM };
+                let last = if super::settings::get().drive { FINAL } else { WISDOM };
                 let spell: Vec<Option<SpellFx>> = (1..=last)
                     .map(|level| {
                         let lib = if level == WISDOM {
                             wisdom_library(kh2, &common)
                         } else if level == VALOR {
                             valor_library(kh2, &common)
+                        } else if level == FINAL {
+                            form_library(kh2.final_form.as_ref(), "Final Form", &common)
                         } else if level > WISDOM {
                             form_spell_library(level, &common)
                         } else {
@@ -249,16 +251,23 @@ fn wisdom_library(kh2: &super::pose::Kh2, common: &[u8]) -> Option<Library> {
 /// motions' frame trigger 1 starts its own elements, not Sora's (`form_event`).
 pub const VALOR: u8 = super::form::LAST_PACKAGE + 1;
 
+/// Final Form's (`P_EX100_ULTF.a.us`), after Valor's (stage 231).
+pub const FINAL: u8 = VALOR + 1;
+
 fn valor_library(kh2: &super::pose::Kh2, common: &[u8]) -> Option<Library> {
-    let archive = kh2.valor.as_ref()?.archive.as_ref()?;
+    form_library(kh2.valor.as_ref(), "Valor Form", common)
+}
+
+fn form_library(form: Option<&super::pose::Form>, name: &str, common: &[u8]) -> Option<Library> {
+    let archive = form?.archive.as_ref()?;
     let l = Library::load_named(archive, Some("p_ex"), Some(common)).or_else(|_| Library::load(archive, Some(common)));
     match l {
         Ok(l) => {
-            log(&format!("KH2 effects: Valor Form's package, {} elements, {} textures", l.elements().len(), l.textures().len()));
+            log(&format!("KH2 effects: {name}'s package, {} elements, {} textures", l.elements().len(), l.textures().len()));
             Some(l)
         }
         Err(e) => {
-            log(&format!("KH2 effects: Valor Form's package not loaded ({e:?})"));
+            log(&format!("KH2 effects: {name}'s package not loaded ({e:?})"));
             None
         }
     }
@@ -273,15 +282,17 @@ pub fn form_event(motion: u16, el: i16) {
     let Ok(mut g) = STATE.lock() else { return };
     let Some(s) = g.as_mut() else { return };
     let tip = s.tip_local;
-    let Some(sp) = s.spell.get_mut(VALOR as usize - 1).and_then(|p| p.as_mut()) else { return };
+    // (Final Form's own package in Final, else Valor's.)
+    let pkg = if super::form::in_final() { FINAL } else { VALOR };
+    let Some(sp) = s.spell.get_mut(pkg as usize - 1).and_then(|p| p.as_mut()) else { return };
     let ends = sp.fx.library().element(el as u16).is_some_and(|e| e.flags & ENDS_WITH_MOTION != 0);
     match sp.fx.start(el as u16, &mut |c| bone(c, tip)) {
         Some(h) => {
-            unsafe { super::kh2sound::spell_element(VALOR, el as u16) };
-            s.form_running.push((spell_handle(VALOR, h), motion, ends));
+            unsafe { super::kh2sound::spell_element(pkg, el as u16) };
+            s.form_running.push((spell_handle(pkg, h), motion, ends));
             s.started += 1;
             if s.started <= 40 {
-                log(&format!("KH2 effect: Valor element {el} of motion {motion} started"));
+                log(&format!("KH2 effect: form package {pkg} element {el} of motion {motion} started"));
             }
         }
         None => {

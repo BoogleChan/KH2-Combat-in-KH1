@@ -124,7 +124,7 @@ unsafe extern "system" fn exec(actor: usize, row: i32, dir: usize) {
     // Valor Form: no KH1 attack row run for a command other than Attack (its specials, which the
     // command step runs as attack rows; `command` refuses them, this in case one comes another
     // way).
-    if actor == sora && command != 1 && super::form::in_valor() {
+    if actor == sora && command != 1 && super::form::two_blades() {
         static N: AtomicU32 = AtomicU32::new(0);
         if N.fetch_add(1, Ordering::Relaxed) < 30 {
             log(&format!("KH1 attack row {row} for command {command:#x} refused: not in Valor Form"));
@@ -274,7 +274,7 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     // Valor by the menu, `spell_not_yet`) and an item. (Type 99 too, which s222 let through: the
     // command step runs it as attack row 0x3E, `0x1402A4760`; the user, s229: "valor form can
     // still use strike raid, ragnarok".)
-    if actor == sora && super::form::in_valor() && !matches!(kind, 0 | 1 | 2 | ITEM_COMMAND_TYPE) && !NOT_SORAS.contains(&kind) {
+    if actor == sora && super::form::two_blades() && !matches!(kind, 0 | 1 | 2 | ITEM_COMMAND_TYPE) && !NOT_SORAS.contains(&kind) {
         static N: AtomicU32 = AtomicU32::new(0);
         if N.fetch_add(1, Ordering::Relaxed) < 30 {
             log(&format!("command {kind:#x} ({full:08x}) refused: not in Valor Form"));

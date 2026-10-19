@@ -501,7 +501,7 @@ pub fn kh2_left(bones: Option<&[Mat4]>, body: &[Mat4], motion: u16, frame: u32, 
     if !INSTALLED.load(Ordering::Relaxed) {
         return;
     }
-    let valor = super::form::in_valor() && SHOWN.load(Ordering::Relaxed) && MESH.load(Ordering::Relaxed) != 0;
+    let valor = super::form::two_blades() && SHOWN.load(Ordering::Relaxed) && MESH.load(Ordering::Relaxed) != 0;
     if valor {
         if let (Ok(mut g), Some(b)) = (KH2_LEFT.try_lock(), bones.filter(|b| !b.is_empty())) {
             g.push_back((body_sig(body), b.to_vec(), Instant::now()));
@@ -511,6 +511,53 @@ pub fn kh2_left(bones: Option<&[Mat4]>, body: &[Mat4], motion: u16, frame: u32, 
         }
     }
     unsafe { trail_step(valor, motion, frame, trail) };
+}
+
+/// Base Sora's Keyblade root relative to his KH2 right hand bone in his idle (held), once.
+static HELD: std::sync::OnceLock<Option<Mat4>> = std::sync::OnceLock::new();
+
+/// Final Form's right Keyblade (`pose`, before the weapon bones are drawn): KH1's weapon bones
+/// (`kh1`, model space) moved from his hand to where KH2's own weapon motion floats it (the
+/// user: Final Form, its Keyblades floating as KH2's). The turn from KH2's held Keyblade root
+/// (base Sora's idle, at his hand) to KH1's grip as drawn is kept, and put on Final's root now;
+/// the left one then follows by the same turn (`note_pose`). `kh2_body`, `kh2_right`: KH2's body
+/// and right Keyblade of the drawn frame (model space); `ratio`: KH1's size against KH2's.
+pub fn final_float(kh1: &mut [Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: &[Mat4], ratio: f32) {
+    static N: AtomicU32 = AtomicU32::new(0);
+    if !super::form::in_final() || kh1.len() < SORA_BONES || kh1_bind.len() < SORA_BONES || kh2_right.is_empty() {
+        return;
+    }
+    let Some(kh2) = super::pose::kh2() else { return };
+    let Some(form) = kh2.final_form.as_ref() else { return };
+    let Some(sr) = form.rig.weapons.first().and_then(|w| w.bone) else { return };
+    let held = *HELD.get_or_init(|| {
+        let w = kh2.rig.weapons.first()?;
+        let m = w.motions.get(&character_core::motion::IDLE).or_else(|| w.motions.get(&0))?;
+        let root = kh2_anim::evaluate(&w.skeleton, m, 0.0, kh2_anim::Options::default()).bones.first().copied()?;
+        log(&format!("Final Form: base Sora's held Keyblade root at {:.1?} from his hand bone", root.w_axis.truncate()));
+        Some(root)
+    });
+    let Some(held) = held else { return };
+    if kh2_body.len() <= sr {
+        return;
+    }
+    let b2 = kh2_anim::Pose::bind(&form.rig.skeleton).bones;
+    if b2.len() <= sr {
+        return;
+    }
+    let k = if ratio.is_finite() && ratio > 0.1 { ratio } else { 1.0 };
+    let offset = kh1_bind[RIGHT_HAND].inverse() * scaled(b2[sr], k);
+    let held_root = kh1[RIGHT_HAND] * offset * scaled(held, k);
+    let turn = held_root.inverse() * kh1[GRIP];
+    let now_root = kh1[RIGHT_HAND] * offset * scaled(kh2_body[sr].inverse() * kh2_right[0], k);
+    let grip = now_root * turn;
+    if !grip.is_finite() {
+        return;
+    }
+    let inv = kh1[GRIP].inverse();
+    let moved: Vec<Mat4> = (0..WEAPON_BONES).map(|i| grip * inv * kh1[GRIP + i]).collect();
+    kh1[GRIP..GRIP + WEAPON_BONES].copy_from_slice(&moved);
+    log_n(&N, 3, || format!("Final Form: right Keyblade floated {:.0} units from his hand", (grip.w_axis - kh1[RIGHT_HAND].w_axis).truncate().length()));
 }
 
 /// A matrix with its translation times `k` (KH2 units to KH1's).
@@ -531,7 +578,7 @@ fn scaled(m: Mat4, k: f32) -> Mat4 {
 ///   grip (280, as `pose` drew it: KH1's grip, `flip_weapons`, teeth up) is then the same for the
 ///   left, and the chain keeps the right one's shape.
 pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: &[Mat4], to_world: &Mat4, ratio: f32) {
-    if !INSTALLED.load(Ordering::Relaxed) || !SHOWN.load(Ordering::Relaxed) || !super::form::in_valor() || MESH.load(Ordering::Relaxed) == 0 {
+    if !INSTALLED.load(Ordering::Relaxed) || !SHOWN.load(Ordering::Relaxed) || !super::form::two_blades() || MESH.load(Ordering::Relaxed) == 0 {
         return;
     }
     static N: AtomicU32 = AtomicU32::new(0);
@@ -566,7 +613,9 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
     let turn = right_root.inverse() * kh1[GRIP];
     let grip = kh1[LEFT_HAND] * offset(LEFT_HAND, sl) * rel(sl, left) * turn;
     let from_hand = (grip.w_axis - kh1[LEFT_HAND].w_axis).truncate().length();
-    if !grip.is_finite() || from_hand > 40.0 {
+    // (Final Form's floats away from his hand.)
+    let reach = if super::form::in_final() { 400.0 } else { 40.0 };
+    if !grip.is_finite() || from_hand > reach {
         log_n(&N, 5, || format!("left grip {from_hand:.0} units from the left hand: not drawn this frame"));
         return;
     }
@@ -598,7 +647,7 @@ unsafe extern "system" fn queue(instance: usize, view: usize, params: usize, act
 /// The left Keyblade: Sora queued again, body hidden, our model in the left hand's bones.
 unsafe fn second(f: Queue, instance: usize, view: usize, params: usize, actor: usize) {
     let mesh = MESH.load(Ordering::Relaxed);
-    if mesh == 0 || !SHOWN.load(Ordering::Relaxed) || !super::form::in_valor() || actor == 0 || actor != super::takeover::sora_actor() {
+    if mesh == 0 || !SHOWN.load(Ordering::Relaxed) || !super::form::two_blades() || actor == 0 || actor != super::takeover::sora_actor() {
         return;
     }
     if instance != super::pose::SORA_INSTANCE.load(Ordering::Relaxed) || !readable(params, P_SIZE) {

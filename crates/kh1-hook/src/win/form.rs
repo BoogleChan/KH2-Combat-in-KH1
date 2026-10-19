@@ -23,6 +23,13 @@
 //! (at MAX, as Wisdom's Quick Run), no magic (KH2's Valor can't cast), and its second Keyblade
 //! (`valor`): entered only with an eligible one (the user: "If no keyblade is eligible to be in
 //! that slot, dont let players go into valor form").
+//!
+//! Final Form (stage 231, the user: "lets work on implementing final form ... make it a secret"):
+//! the same change and revert, `P_EX100_ULTF` (moveset 5), its growth ability Glide at MAX, its
+//! two Keyblades floating where KH2's own weapon motions put them (the second always the Kingdom
+//! Key, no menu slot: the user, "don't add the final form keyblade selection into the menu like we
+//! did for valor, just default it to kingdom key"). Not in the Drive list: Up, Up, Down, Down, Left, Right, Left, Right,
+//! Circle, Cross on the pad (`pad`) asks for it, as the Drive list would.
 
 use super::{log, pose};
 use character_core::{Abilities, Character, EventKind};
@@ -68,28 +75,37 @@ pub const MAGIC_SUB: i32 = 10;
 pub enum Kind {
     Valor,
     Wisdom,
+    Final,
 }
 
 impl Kind {
+    /// The Drive list's (Final is secret, `pad`).
     pub const ALL: [Kind; 2] = [Kind::Valor, Kind::Wisdom];
+    const EVERY: [Kind; 3] = [Kind::Valor, Kind::Wisdom, Kind::Final];
     pub fn name(self) -> &'static str {
         match self {
             Kind::Valor => "Valor Form",
             Kind::Wisdom => "Wisdom Form",
+            Kind::Final => "Final Form",
         }
     }
     fn code(self) -> u8 {
         self as u8 + 1
     }
     fn from_code(c: u8) -> Option<Kind> {
-        Kind::ALL.get((c as usize).checked_sub(1)?).copied()
+        Kind::EVERY.get((c as usize).checked_sub(1)?).copied()
     }
     /// Its KH2 data, if it loaded.
     pub fn data(self, kh2: &pose::Kh2) -> Option<&pose::Form> {
         match self {
             Kind::Valor => kh2.valor.as_ref(),
             Kind::Wisdom => kh2.wisdom.as_ref(),
+            Kind::Final => kh2.final_form.as_ref(),
         }
+    }
+    /// With a second Keyblade (Valor's slot's).
+    pub fn two_blades(self) -> bool {
+        matches!(self, Kind::Valor | Kind::Final)
     }
 }
 
@@ -130,6 +146,56 @@ pub fn in_wisdom() -> bool {
 /// In Valor Form (no magic).
 pub fn in_valor() -> bool {
     current() == Some(Kind::Valor)
+}
+
+/// In Final Form.
+pub fn in_final() -> bool {
+    current() == Some(Kind::Final)
+}
+
+/// In a form with a second Keyblade (Valor, Final).
+pub fn two_blades() -> bool {
+    current().is_some_and(|k| k.two_blades())
+}
+
+/// The secret code's buttons in order (KH1's pad bits: Up 4, Down 6, Left 7, Right 5, Circle 13,
+/// Cross 14).
+const CODE: [u16; 10] = [1 << 4, 1 << 4, 1 << 6, 1 << 6, 1 << 7, 1 << 5, 1 << 7, 1 << 5, 1 << 13, 1 << 14];
+/// The buttons the code watches (any other pressed starts it over), and the longest gap.
+const CODE_BUTTONS: u16 = (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7) | (1 << 13) | (1 << 14) | (1 << 12) | (1 << 15);
+const CODE_GAP_MS: u64 = 1500;
+/// The code so far: buttons held last time, how far in, when the last one came; and whether it was
+/// just completed (taken on the game thread, `before_step`).
+static CODE_STATE: std::sync::Mutex<(u16, usize, Option<std::time::Instant>)> = std::sync::Mutex::new((0, 0, None));
+static CODE_DONE: AtomicBool = AtomicBool::new(false);
+
+/// The pad as pressed, every read (`probe::pad`): the secret code for Final Form (the user: "If
+/// somebody hits dpad up, dpad up, dpad down, dpad down, dpad left, dpad right, dpad left, dpad
+/// right, circle, x, in that exact sequence, put them into final form").
+pub fn pad(buttons: u16) {
+    let Ok(mut g) = CODE_STATE.try_lock() else { return };
+    let (held, at, last) = &mut *g;
+    let pressed = buttons & !*held & CODE_BUTTONS;
+    *held = buttons;
+    if pressed == 0 {
+        return;
+    }
+    if last.is_some_and(|t| t.elapsed().as_millis() as u64 > CODE_GAP_MS) {
+        *at = 0;
+    }
+    *last = Some(std::time::Instant::now());
+    for bit in (0..16).map(|i| 1u16 << i).filter(|b| pressed & b != 0) {
+        if bit == CODE[*at] {
+            *at += 1;
+        } else {
+            *at = usize::from(bit == CODE[0]);
+        }
+        if *at == CODE.len() {
+            *at = 0;
+            CODE_DONE.store(true, Ordering::Relaxed);
+            log("Final Form: the secret code entered");
+        }
+    }
 }
 
 pub fn busy() -> bool {
@@ -209,8 +275,8 @@ pub unsafe fn usable(sora: usize, kind: Kind) -> bool {
 /// What a form needs besides MP: Valor its second Keyblade (`valor::keyblade`).
 unsafe fn own_needs(kind: Kind) -> Result<(), String> {
     match kind {
-        Kind::Valor => super::valor::keyblade().map(|_| ()).ok_or_else(|| "no Keyblade for Valor's second hand (one Sora owns that isn't equipped)".into()),
-        Kind::Wisdom => Ok(()),
+        Kind::Valor => super::valor::keyblade().map(|_| ()).ok_or_else(|| "no Keyblade for the second hand (one Sora owns that isn't equipped)".into()),
+        Kind::Wisdom | Kind::Final => Ok(()),
     }
 }
 
@@ -299,7 +365,8 @@ fn form_abilities(sora: &Abilities, form: &Character, kind: Kind) -> Abilities {
         high_jump: if kind == Kind::Valor { 4 } else { 0 },
         quick_run: if kind == Kind::Wisdom { 4 } else { 0 },
         aerial_dodge: 0,
-        glide: 0,
+        // (Final's growth ability: Glide.)
+        glide: if kind == Kind::Final { 4 } else { 0 },
         dodge_roll: 0,
         ..sora.clone()
     };
@@ -337,6 +404,18 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
     if (d.form.is_some() || d.change.is_some()) && (knocked || hp(actor) <= 0) {
         revert(d, ch, anim, kh2, "knocked out");
         return;
+    }
+    // The secret code (`pad`): Final Form, as if chosen from the Drive list (KH2 must be able to
+    // change him now, as for the list: `accept_now`).
+    if CODE_DONE.swap(false, Ordering::Relaxed) {
+        if d.form.is_some() || d.change.is_some() || !ch.can_change_form() {
+            log("Final Form: not now (in a form, changing, or mid-move)");
+        } else {
+            match choose(actor, Kind::Final) {
+                Ok(_) => log("Final Form: asked for by the secret code"),
+                Err(e) => log(&format!("Final Form: refused ({e})")),
+            }
+        }
     }
     match REQUEST.swap(0, Ordering::Relaxed) {
         1 if d.form.is_none() && d.change.is_none() => {
@@ -397,10 +476,15 @@ unsafe fn arrive(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     d.form = Some(InForm { kind, left: 0, sora, own, logged_s: 0 });
     CURRENT.store(kind.code(), Ordering::Relaxed);
     IN_FORM.store(true, Ordering::Relaxed);
-    if kind == Kind::Valor {
+    if kind.two_blades() {
         super::valor::started();
     }
-    log(&format!("{} (Lv{LEVEL}): yellow MP drained 1 every {DRAIN_FRAMES} frames of battle (half as fast out of it), {} MAX", kind.name(), if kind == Kind::Valor { "High Jump" } else { "Quick Run" }));
+    let growth = match kind {
+        Kind::Valor => "High Jump",
+        Kind::Wisdom => "Quick Run",
+        Kind::Final => "Glide",
+    };
+    log(&format!("{} (Lv{LEVEL}): yellow MP drained 1 every {DRAIN_FRAMES} frames of battle (half as fast out of it), {growth} MAX", kind.name()));
 }
 
 /// Back to Sora: what played is cut, he is free with his movement (the user: on the ground
@@ -414,7 +498,7 @@ unsafe fn revert(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     let Some(f) = d.form.take() else { return };
     IN_FORM.store(false, Ordering::Relaxed);
     CURRENT.store(0, Ordering::Relaxed);
-    if f.kind == Kind::Valor {
+    if f.kind.two_blades() {
         super::valor::ended();
     }
     swap(ch, anim, &kh2.character, &kh2.rig, f.sora);
@@ -511,7 +595,7 @@ pub fn takes(d: &Drive, e: &EventKind) -> bool {
 pub fn effect(motion: u16, n: i16) {
     if in_wisdom() {
         super::formmagic::effect(n);
-    } else if in_valor() {
+    } else if in_valor() || in_final() {
         super::kh2fx::form_event(motion, n);
     }
 }

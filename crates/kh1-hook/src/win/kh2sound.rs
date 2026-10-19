@@ -104,7 +104,8 @@ pub fn start() {
         // Valor Form's own: its Keyblades' swings (frame trigger 8 on its weapon motion sets) and
         // its voices; its effect elements' sounds come with the forms' below (the user: "make
         // sure also that valor form has its proper sound FX").
-        if let Some(v) = kh2.valor.as_ref() {
+        // (And Final Form's.)
+        for v in [kh2.valor.as_ref(), kh2.final_form.as_ref()].into_iter().flatten() {
             events.extend(v.character.moveset.clips.values().flat_map(|c| c.events.iter().map(|e| e.kind)).filter(|k| matches!(k, character_core::EventKind::Sound(_) | character_core::EventKind::Voice(_))));
         }
         // Reflect (the user: its sounds): its cast voices (MAGC, played by KH2's cast code, not a
@@ -268,7 +269,7 @@ pub fn covers(motion: u16) -> bool {
 pub unsafe fn event(motion: u16, kind: character_core::EventKind) {
     use character_core::EventKind;
     // (Valor's swings and voices are its own, whatever `kh2_sounds` lists: `start`.)
-    let valor = super::form::in_valor() && matches!(kind, EventKind::Sound(_) | EventKind::Voice(_));
+    let valor = (super::form::in_valor() || super::form::in_final()) && matches!(kind, EventKind::Sound(_) | EventKind::Voice(_));
     if !(allowed(motion) || super::form::own_motion(motion) || valor) {
         return;
     }

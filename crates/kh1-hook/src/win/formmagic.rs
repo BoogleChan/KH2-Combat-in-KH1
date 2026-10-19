@@ -105,6 +105,9 @@ pub fn element_sounds(kh2: &pose::Kh2) -> Vec<(u8, u16, i32)> {
     if let Some(a) = kh2.valor.as_ref().and_then(|f| f.archive.as_ref()) {
         add(super::kh2fx::VALOR, a);
     }
+    if let Some(a) = kh2.final_form.as_ref().and_then(|f| f.archive.as_ref()) {
+        add(super::kh2fx::FINAL, a);
+    }
     if super::settings::get().drive {
         for spell in 0..4u8 {
             for level in 1..=3u8 {

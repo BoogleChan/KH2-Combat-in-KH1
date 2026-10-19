@@ -55,12 +55,13 @@ unsafe fn wr<T: Copy>(p: usize, v: T) {
 /// The Valor Keyblade's (item, Strength, max MP) while Sora is Valor: the slot's Keyblade
 /// (`equip::VALOR_OFF`, kept by `valor::keyblade`).
 pub unsafe fn bonus() -> Option<(u8, i32, i32)> {
-    if !super::form::in_valor() {
+    if !super::form::two_blades() {
         return None;
     }
     let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
     let save = super::menu::save_block(base)?;
-    let item = rd::<u8>(save + super::equip::VALOR_OFF);
+    // (Final Form's: the Kingdom Key, `valor::FINAL_KEYBLADE`.)
+    let item = if super::form::in_final() { super::valor::FINAL_KEYBLADE } else { rd::<u8>(save + super::equip::VALOR_OFF) };
     if item == 0 || !super::equip::is_keyblade(base, item) {
         return None;
     }
