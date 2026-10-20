@@ -388,7 +388,6 @@ unsafe extern "system" fn physics(actor: usize) {
 
 /// KH1's ground state's jump press (`0x1402CA3F0`, state 0's `+0x38`: its ground test, then the
 /// jump start `0x1402AD860`, jump or high jump motion, state 1).
-#[allow(dead_code)]
 const JUMP_PRESS_RVA: Rva = Rva(0x2CA3F0);
 /// KH1's Glide and Superglide starts (`0x1402B0BA0` under both: its glide motion 0x71, air speed,
 /// state 0x15; nothing below its height over the floor).
@@ -410,26 +409,25 @@ unsafe fn style_air_start(base: usize, actor: usize, d: &Driver, glide_press: bo
     let n = v[0].hypot(v[1]);
     let k = if n > 30.0 { 30.0 / n } else { 1.0 };
     let set: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(base + SET_STATE_RVA);
-    // (Off for now, s251, the user: KH1's own jump start, its speed and take-off height:)
-    // if !glide_press && super::stylejump::kh1_jump() && d.grounded && !d.character.airborne() && matches!(st, StateName::Idle | StateName::Walk | StateName::Run | StateName::Land) {
-    //     let press: unsafe extern "system" fn(usize) -> usize = std::mem::transmute(base + JUMP_PRESS_RVA);
-    //     let y = rd::<f32>(actor + 0x14);
-    //     press(actor);
-    //     if rd::<i32>(actor + 0x70) != 1 {
-    //         static N: AtomicU32 = AtomicU32::new(0);
-    //         if N.fetch_add(1, Ordering::Relaxed) < 10 {
-    //             log(&format!("KH1's jump didn't start (KH1 state {}): KH2's", rd::<i32>(actor + 0x70)));
-    //         }
-    //         return None;
-    //     }
-    //     // KH2's ground speed carried into KH1's air speed (`+0x3C0`: x, y, z, its length); on
-    //     // KH2's first frame back (out of KH1's own landing) KH1's own is left.
-    //     if d.last_state.is_some() {
-    //         wr(actor + 0x3C0, [v[0] * k, 0.0f32, v[1] * k, n * k]);
-    //     }
-    //     wr(actor + 0x3B4, y);
-    //     return Some("KH1's jump (the Jump style is KH1's)");
-    // }
+    if !glide_press && super::stylejump::kh1_jump() && d.grounded && !d.character.airborne() && matches!(st, StateName::Idle | StateName::Walk | StateName::Run | StateName::Land) {
+        let press: unsafe extern "system" fn(usize) -> usize = std::mem::transmute(base + JUMP_PRESS_RVA);
+        let y = rd::<f32>(actor + 0x14);
+        press(actor);
+        if rd::<i32>(actor + 0x70) != 1 {
+            static N: AtomicU32 = AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 10 {
+                log(&format!("KH1's jump didn't start (KH1 state {}): KH2's", rd::<i32>(actor + 0x70)));
+            }
+            return None;
+        }
+        // KH2's ground speed carried into KH1's air speed (`+0x3C0`: x, y, z, its length); on
+        // KH2's first frame back (out of KH1's own landing) KH1's own is left.
+        if d.last_state.is_some() {
+            wr(actor + 0x3C0, [v[0] * k, 0.0f32, v[1] * k, n * k]);
+        }
+        wr(actor + 0x3B4, y);
+        return Some("KH1's jump (the Jump style is KH1's)");
+    }
     let falling = up <= 0.0;
     // (KH1's glide on Square held while falling, not on the jump button, the user: "rewrite normal
     // glide so that it activates on a square press and not when you press the jump button": the
@@ -595,10 +593,7 @@ unsafe extern "system" fn control(actor: usize, dir: usize) {
         // act again KH1 clears its action flag inside its own step and then read a jump or Square
         // as its own jump, high jump or dodge roll, the user. Those presses are KH2's when it
         // takes him back.)
-        // (Off for now, s251: KH1's own jump's buttons kept from it, `stylejump::JUMP`; KH1's glide
-        // still is, its Square held fed as its jump held.)
-        // && (... || super::stylejump::active())
-        && (!HANDOFF.load(Ordering::Relaxed) || kh1_move_done(base, actor) || kh1_air_free(base, actor) || FROM_COMMAND.load(Ordering::Relaxed) || super::stylejump::mode() == super::stylejump::GLIDE)
+        && (!HANDOFF.load(Ordering::Relaxed) || kh1_move_done(base, actor) || kh1_air_free(base, actor) || FROM_COMMAND.load(Ordering::Relaxed) || super::stylejump::active())
         && kh1_borrows(actor);
     // With L1 down (KH1's shortcuts) or a submenu open, the presses are KH1's (a shortcut, backing
     // out): only the held and repeat bits go then. A jump held while L1 came down was KH1's held
@@ -617,8 +612,7 @@ unsafe extern "system" fn control(actor: usize, dir: usize) {
     // for its height (the user: "I also dont as high of a jump as i should be getting because it
     // cuts off the input to the jump button"); from its top on it isn't, so holding it doesn't
     // glide (KH1's glide is on Square here: "as soon as i jump i go into a glide").
-    // (Off for now, s251: `false &&`.)
-    let kh1_rise = false && super::stylejump::mode() == super::stylejump::JUMP && actor > 0x10000 && rd::<i32>(actor + 0x70) == 1 && {
+    let kh1_rise = super::stylejump::mode() == super::stylejump::JUMP && actor > 0x10000 && rd::<i32>(actor + 0x70) == 1 && {
         let p = rd::<[f32; 3]>(actor + 0x10)[1];
         let rising = RISE_Y.swap(p.to_bits(), Ordering::Relaxed);
         p <= f32::from_bits(rising)
@@ -2642,17 +2636,13 @@ pub fn buttons() -> u16 {
         // on Square, the user: "multiple inputs are being sent ... unable to get the max height on
         // jump, and if glide is equipped you go straight into glide". With the jump held, only
         // the pad's own Square counts.)
-        // (Off for now, s251: s247's filter.)
-        // if held & 0x10_0000 != 0 && held & 6 == 0 && b & jump_button() == 0 {
-        //     b |= SQUARE;
-        // } else if held & 0x10_0000 != 0 && b & SQUARE == 0 {
-        //     static N: AtomicU32 = AtomicU32::new(0);
-        //     if N.fetch_add(1, Ordering::Relaxed) < 10 {
-        //         log(&format!("KH1's action bit with the jump held (KH1 buttons {held:08x}): not taken for Square"));
-        //     }
-        // }
-        if held & 0x10_0000 != 0 {
+        if held & 0x10_0000 != 0 && held & 6 == 0 && b & jump_button() == 0 {
             b |= SQUARE;
+        } else if held & 0x10_0000 != 0 && b & SQUARE == 0 {
+            static N: AtomicU32 = AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 10 {
+                log(&format!("KH1's action bit with the jump held (KH1 buttons {held:08x}): not taken for Square"));
+            }
         }
     }
     b

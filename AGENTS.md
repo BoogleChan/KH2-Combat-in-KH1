@@ -3048,3 +3048,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   take-off then 13 the rise, 10 the fall (looping), 11 the landing (held at its end); timed from
   when KH2's state got there (`takeover::KH1_AIR_SLOT`). KH2's Keyblade turn and wrist aren't
   applied over them (`NATIVE_KH1`). Slots from the play logs (s16x), not checked frame by frame.
+
+### 2026-10-20: Stage 256 (KH1's own jump back on)
+- The user: "can you actually go with the number 2 option" (asked at s255: turn KH1's jump back
+  on). s251 undone: the Jump style's KH1 jump start (KH1's ground jump handler, KH2's speed and
+  the take-off height), its jump held KH1's while rising (s248) and kept from it from the top,
+  KH1's jump / Square kept from it in its jump (s245), and s247's filter on KH1's action bit.
+  s255's KH1 animations over KH2's jump stay for KH2's own falls with Jump at KH1 (after a KH2
+  move in the air).
