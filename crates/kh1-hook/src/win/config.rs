@@ -105,7 +105,7 @@ const STRINGS: [(u32, &str); 26] = [
     (0x7F00_010D, "Dodge Roll"),
     (0x7F00_010E, "Choose KH1's or KH2's dodge roll for Sora.\nDrive Forms keep their own."),
     (0x7F00_0115, "Misc Animations"),
-    (0x7F00_0116, "Choose KH1's or KH2's animations for items and other actions."),
+    (0x7F00_0116, "Choose KH1's or KH2's animations for standing, walking,\nrunning and items."),
     (0x7F00_010F, "Battle Quotes"),
     (0x7F00_0110, "Choose KH1's or KH2's battle quotes for Sora."),
     (0x7F00_0111, "Gummi Routes"),

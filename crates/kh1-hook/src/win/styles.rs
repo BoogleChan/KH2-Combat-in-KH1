@@ -61,7 +61,7 @@ impl Kind {
 }
 
 /// KH2's (true) or KH1's, per `Kind`: combos, jump, glide and dodge roll KH2's, magic KH1's by default (as before).
-static KH2: [AtomicBool; 9] = [AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false), AtomicBool::new(false)];
+static KH2: [AtomicBool; 9] = [AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false)];
 static INIT: Once = Once::new();
 
 fn init() {

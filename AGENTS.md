@@ -3030,3 +3030,12 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   now always logged (at most 4 a second), and while KH1 keeps him outside its own moves for over
   5 s a status line every 10 s: the reason, KH1's state / slot / flags, the event and script
   values, whether his body was seen, takeover on.
+
+### 2026-10-20: Stage 254 (Misc Animations: standing, walking, running too)
+- The user: "misc animations: KH1 — sora doesn't switch to kh1s misc animations when kh1 is
+  selected" (only the item use was mapped, none in the log); asked, "idle walk/run plus items".
+  At KH1, while KH2 stands / walks / runs him on the ground and KH1's slot is one of its own
+  0..7 (KH1's control step picks its idle / walk / run from the stick under KH2 all along), KH1's
+  own animation is drawn (`takeover::MISC_KH1`, `pose::wanted`, blended in from our last pose),
+  KH1's step sounds play and KH2's footsteps don't; KH2 still moves him. The default is now KH2
+  (KH2's walk and run as before; KH2's item motion with it).

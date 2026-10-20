@@ -683,6 +683,8 @@ static JUMP_NOW: AtomicBool = AtomicBool::new(false);
 static RISE_Y: AtomicU32 = AtomicU32::new(0);
 /// KH1's spell could be cut by another now (`combat`: a spell chosen then is taken, else refused).
 pub static SPELL_CUT_OPEN: AtomicBool = AtomicBool::new(false);
+/// KH1's own idle / walk / run drawn under KH2 (Misc Animations at KH1, `pose`).
+pub static MISC_KH1: AtomicBool = AtomicBool::new(false);
 /// KH2's glide level while the Glide style is KH1's (its ability set to 0 meanwhile).
 static KH2_GLIDE_KEPT: AtomicU32 = AtomicU32::new(0);
 /// KH1's glide was tried on this hold of Square (`style_air_start`, KH1's jump).
@@ -2207,7 +2209,18 @@ unsafe fn takeover(actor: usize) -> bool {
     // let soras keyblades disappear in valor form".)
     d.anim.field = !battle && !lingering && !super::form::in_form();
     d.anim.update(&out, &d.character, [q[0], -q[1], q[2]]);
-    kh2_footsteps(actor, &out, &d.anim);
+    // Misc Animations at KH1 (base Sora): standing, walking and running are drawn with KH1's own
+    // animations (KH1's control step picks them from the stick all along under KH2), its own
+    // steps sounding; KH2 still moves him (the user: "idle walk/run plus items").
+    let misc_kh1 = super::styles::kh1_now(super::styles::Kind::MiscAnims)
+        && matches!(out.state, StateName::Idle | StateName::Walk | StateName::Run)
+        && d.grounded
+        && !d.character.airborne()
+        && matches!(pose::sora_slot(), Some(0..=7));
+    MISC_KH1.store(misc_kh1, Ordering::Relaxed);
+    if !misc_kh1 {
+        kh2_footsteps(actor, &out, &d.anim);
+    }
     keyblade(base, actor, d.anim.weapons_out(), &mut d.logged);
     GRIP.store(d.anim.weapons_out(), Ordering::Relaxed);
     GROUNDED.store(d.grounded && !d.character.airborne(), Ordering::Relaxed);
@@ -2349,7 +2362,7 @@ static OUR_STEP: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "system" fn step_sound(actor: usize, kind: i32) {
     let base = BASE.load(Ordering::Relaxed);
-    if !OUR_STEP.load(Ordering::Relaxed) && actor > 0x10000 && actor == rd::<u64>(base + PARTY_RVA) as usize && FRAME_KIND.load(Ordering::Relaxed) == 1 {
+    if !OUR_STEP.load(Ordering::Relaxed) && actor > 0x10000 && actor == rd::<u64>(base + PARTY_RVA) as usize && FRAME_KIND.load(Ordering::Relaxed) == 1 && !MISC_KH1.load(Ordering::Relaxed) {
         static N: AtomicU32 = AtomicU32::new(0);
         if N.fetch_add(1, Ordering::Relaxed) < 10 {
             log(&format!("KH1's step sound (kind {kind}) dropped: KH2 has Sora, KH2's own steps sound"));

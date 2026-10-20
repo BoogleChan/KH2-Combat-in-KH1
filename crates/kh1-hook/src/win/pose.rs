@@ -850,6 +850,12 @@ fn wanted(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
                 s.follow.slot = slot;
                 return None;
             }
+            // Misc Animations at KH1: KH1's own idle / walk / run while KH2 stands, walks or runs
+            // him (`takeover::MISC_KH1`), blended in from our last pose.
+            if super::takeover::MISC_KH1.load(Ordering::Relaxed) && super::takeover::kh2_frame() && matches!(slot, Some(0..=7)) {
+                s.follow.slot = slot;
+                return None;
+            }
             // KH2's last pose: recent, or the last frame of his was KH2's (a pause stops the
             // game's frames, not the clock: after one, the old pose went stale and KH1's slot was
             // drawn until KH2's next frame; the user: paused mid KH2 move, resumed in KH1's).
