@@ -2812,3 +2812,12 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - Command menu (helper, `cmd-menu`): the Drive list's title reads DRIVES and its panels are white
   (list draw `0x140277F40` hooked); Items and Summons refuse a confirm Sora can't take and stay
   open, like Magic; Magic is greyed in Valor. `docs/kh1-drive.md`.
+
+### 2026-10-19: Stage 235 (KH1's air spells land into KH2's landing)
+- The user: "rewrite kh1s magic animations so that if they're used in the air they can call for
+  kh2s landing animation". KH1's state change (`0x1402AF7D0`, Steam `0x2B1960`) is hooked: when
+  KH1 itself puts Sora down out of an air spell (state 1 / 2 to 0 while it has him for the cast)
+  inside his physics step, KH2 takes him at once, after that step on the same frame, into KH2's
+  landing (`TOUCHDOWN`, a second `takeover` that frame). Before, KH2 took him a frame later, so
+  KH1's landing frame showed and ran first. A landing KH1 makes outside the physics step is
+  logged and left to the next frame's hand-off as before.
