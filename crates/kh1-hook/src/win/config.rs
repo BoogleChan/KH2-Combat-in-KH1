@@ -55,6 +55,9 @@ const PAD_PTR_RVA: Rva = Rva(0x2E96320);
 const CONFIRM_MASK_RVA: Rva = Rva(0x546390);
 const LEFT: u32 = 0x8000_0080;
 const RIGHT: u32 = 0x2000_0020;
+/// Up / down (the d-pad's and the stick's bits, as left / right).
+const UP: u32 = 0x1000_0010;
+const DOWN: u32 = 0x4000_0040;
 const FOCUS_RVA: Rva = Rva(0x2E2E40);
 const SOUND_RVA: Rva = Rva(0x177F60);
 const PANEL_RVA: Rva = Rva(0x2D5590);
@@ -105,7 +108,7 @@ const STRINGS: [(u32, &str); 20] = [
 
 /// The move style a row switches (`None`: the camera row).
 fn style(row: i32) -> Option<Kind> {
-    Kind::EVERY.get(usize::try_from(row - FIRST_ROW - 1).ok()?).copied()
+    Kind::EVERY.get(index(row).checked_sub(1)?).copied()
 }
 
 /// A row's value: right (KH2, true) or left (KH1).
@@ -129,15 +132,23 @@ fn toggle(row: i32) {
 }
 
 fn ours(row: i32) -> bool {
-    (FIRST_ROW..FIRST_ROW + ROWS.len() as i32).contains(&row)
+    (FIRST_ROW..FIRST_ROW + (ROWS.len() as i32).min(SLOTS)).contains(&row)
 }
 
-/// Our rows go 8 to a page (KH1's list has places for 8): a row's page and place on it.
-fn page(row: i32) -> i32 {
-    (row - FIRST_ROW) / 8
+/// KH1's list takes 16 rows at most (s242's 17th wrote past the window's row arrays over a
+/// function pointer: the user's crash entering the Config menu). Ours are its rows 8..15, and
+/// when we have more than 8 that page scrolls (`SCROLL`): Down on its last row brings the next
+/// one up, Up on its first takes it back.
+const SLOTS: i32 = 8;
+const MAX_SCROLL: i32 = if ROWS.len() as i32 > SLOTS { ROWS.len() as i32 - SLOTS } else { 0 };
+static SCROLL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+/// Our row (index into `ROWS`) shown on KH1's row `row` (8..15).
+fn index(row: i32) -> usize {
+    (row - FIRST_ROW + SCROLL.load(Ordering::Relaxed)) as usize
 }
 fn place(row: i32) -> i32 {
-    (row - FIRST_ROW) % 8
+    row - FIRST_ROW
 }
 
 static BASE: AtomicUsize = AtomicUsize::new(0);
@@ -195,7 +206,7 @@ pub unsafe fn install() {
     }
     let mut old = 0u32;
     super::sys::VirtualProtect((base + ROWS_RVA) as *mut _, 4, 0x04, &mut old);
-    let n = 8 + ROWS.len() as u16;
+    let n = 8 + (ROWS.len() as i32).min(SLOTS) as u16;
     wr(base + ROWS_RVA, n);
     wr(base + VISIBLE_RVA, n);
     log("Config menu: our rows added (Camera Style and the move styles, on pages of 8 after KH1's)");
@@ -244,16 +255,13 @@ unsafe extern "system" fn help(win: usize) {
     // Rows 8..12 read their help ids from just past the table (the max-value table's entries
     // 0..4, read only by the Config update's left / right, never during this call): ours for the
     // call, put back right after.
-    // (A row past the second page is read as the row in its place on the second page: the
-    // cursor row is that one for the call.)
+    // (The help id of the row scrolled into this place.)
     debug_assert_eq!(base + HELP_IDS_RVA + 8 * 4, base + MAX0_RVA);
-    let slot = FIRST_ROW + place(row);
+    let slot = row;
     let at = base + HELP_IDS_RVA + slot as usize * 4;
     let keep = rd::<u32>(at);
-    wr(at, ROWS[(row - FIRST_ROW) as usize][3]);
-    wr(base + ROW_RVA, slot);
+    wr(at, ROWS[index(row)][3]);
     f(win);
-    wr(base + ROW_RVA, row);
     wr(at, keep);
 }
 
@@ -284,20 +292,33 @@ unsafe extern "system" fn update(win: usize) {
             let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
             sound(1);
         }
+        // Our page scrolls when it has more rows than places: Down on its last place, Up on its
+        // first, move the rows instead of KH1's cursor.
+        let mut swallow = LEFT | RIGHT | confirm;
+        let scroll = SCROLL.load(Ordering::Relaxed);
+        if row == FIRST_ROW + SLOTS - 1 && repeat & DOWN != 0 && scroll < MAX_SCROLL {
+            SCROLL.store(scroll + 1, Ordering::Relaxed);
+            swallow |= DOWN;
+            let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
+            sound(0);
+        } else if row == FIRST_ROW && repeat & UP != 0 && scroll > 0 {
+            SCROLL.store(scroll - 1, Ordering::Relaxed);
+            swallow |= UP;
+            let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
+            sound(0);
+        }
         // KH1's update must not see them on our rows (its left / right would step the difficulty).
         kept = Some((pressed, repeat));
-        wr(pad + 8, pressed & !(LEFT | RIGHT | confirm));
-        wr(pad + 0x10, repeat & !(LEFT | RIGHT | confirm));
+        wr(pad + 8, pressed & !swallow);
+        wr(pad + 0x10, repeat & !swallow);
     }
     let our_page = ours(row);
     HIDE_KH1.store(our_page, Ordering::Relaxed);
     f(win);
     HIDE_KH1.store(false, Ordering::Relaxed);
     if our_page {
-        for k in 0..ROWS.len() as i32 {
-            if page(FIRST_ROW + k) == page(row) {
-                draw(base, win, FIRST_ROW + k);
-            }
+        for k in 0..(ROWS.len() as i32).min(SLOTS) {
+            draw(base, win, FIRST_ROW + k);
         }
     }
     if let Some((p, r)) = kept {
@@ -311,7 +332,7 @@ unsafe extern "system" fn update(win: usize) {
 unsafe fn draw(base: usize, win: usize, row: i32) {
     let panel: unsafe extern "system" fn(usize, i32, i32, i32, i32, i32, i32, i32, u32) = std::mem::transmute(base + PANEL_RVA);
     let decor: unsafe extern "system" fn(usize, i32, i32, i32) = std::mem::transmute(base + DECOR_RVA);
-    let ids = ROWS[(row - FIRST_ROW) as usize];
+    let ids = ROWS[index(row)];
     let h = rd::<i32>(base + ROW_H_RVA);
     let y = 0x47 + place(row) * (h + rd::<i32>(base + ROW_GAP_RVA));
     let selected = rd::<i32>(base + ROW_RVA) == row;

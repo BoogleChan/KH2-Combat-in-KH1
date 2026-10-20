@@ -2922,3 +2922,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   took him rising 25 a frame (`air_free`, its rise carried), or on the stick at state 1 into its
   run with no jump. Now KH1's take-off out of one of its commands (state 1 on the floor, not the
   Jump style's) hands him to KH2 at once with KH2's jump (`kh1_took_off`), KH1's air fields reset.
+
+### 2026-10-20: Stage 244 (Config menu crash)
+- The user's log (s242): a crash entering the Config menu, executing 0x40 from KH1's window list
+  step (Steam `exe+2E3E2B`, a window's function pointer). s242's 17th row: KH1's list takes 16
+  at most, a 17th writes past the window's row arrays. Back to 16 rows (KH1's 8, our 8 places);
+  our page scrolls when it has more (`SCROLL`): Down on its last place / Up on its first moves
+  our rows instead of the cursor (KH1's list masks: up `0x10000010`, down `0x40000040`, set at
+  `0x1402ED1E0`). Battle Quotes is the 9th, scrolled in below Dodge Roll.
