@@ -46,7 +46,8 @@ has him in the air then, else Magic (`formmagic::base_kh2`).
     path Wisdom's spells take): the spell's MAGC row (world 0) gives base Sora's own cast
     motions (ground, air, combo finisher) in his KH2 moveset, cast through the controller (its
     combo slots, its cast windows); KH2's script `magic/<SPELL>_<level>.mag` at base Sora's magic
-    sub (level × 2 − 2, + 1 for the finisher; Wisdom's are + 10, `form::magic_sub`), its effects
+    sub (level × 2 − 2, + 1 for the finisher; Wisdom's are + 10 and Final's + 30,
+    `form::magic_sub`; Final Form's magic: `drive-model.md`), its effects
     and sounds, its attacks through the spell hit records with KH1's own data for the spell at
     its level (element). Level: KH1's spell level; cost: KH1's (1 MP). Cure heals a share of
     KH1's max HP by the ATKP row's power (as Wisdom's did).

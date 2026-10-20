@@ -997,8 +997,10 @@ fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
     // their respected magic"): Gravity Thunder's, Stop and Aero Cure's; the air ones in the air.
     // (And base Sora's KH1 Gravity, Stop and Aero with the Magic style at KH2: his own KH2 cast
     // motions, `formmagic::BASE_KH1_CAST`.)
+    // (Final Form as Wisdom, with Final's own cast motions under the same ids: `form::casting_form`,
+    // the rig below picking the form's clip.)
     let base_look = super::formmagic::BASE_KH1_CAST.load(std::sync::atomic::Ordering::Relaxed) && !super::form::in_form();
-    if super::form::in_wisdom() || base_look {
+    if super::form::casting_form().is_some() || base_look {
         if let Some(spell @ 3..=6) = super::takeover::kh1_spell_now() {
             let air = super::takeover::air_cast().is_some();
             let motion = match (spell, air) {

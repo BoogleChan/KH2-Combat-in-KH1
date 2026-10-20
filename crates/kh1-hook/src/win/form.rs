@@ -29,7 +29,8 @@
 //! two Keyblades floating where KH2's own weapon motions put them (the second always the Kingdom
 //! Key, no menu slot: the user, "don't add the final form keyblade selection into the menu like we
 //! did for valor, just default it to kingdom key"). Not in the Drive list: a secret button
-//! code on the pad (`pad`) asks for it, as the Drive list would.
+//! code on the pad (`pad`) asks for it, as the Drive list would. Its magic is Wisdom's (the user:
+//! "bring it to final form, with final form's animations"): `Kind::magic_sub`, `formmagic`.
 
 use super::{log, pose};
 use character_core::{Abilities, Character, EventKind};
@@ -67,8 +68,6 @@ const LEVEL: u32 = 1;
 const DRAIN_FRAMES: u32 = 3;
 /// Upper Slash's ability (KH2's id): Sora's Square launch, given to Valor (`pose::port_moves`).
 const UPPER_SLASH: u16 = 95;
-/// KH2's magic sub offset in Wisdom Form.
-pub const MAGIC_SUB: i32 = 10;
 
 /// The forms (`drive::FORMS` in the same order).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +105,20 @@ impl Kind {
     /// With a second Keyblade (Valor's slot's).
     pub fn two_blades(self) -> bool {
         matches!(self, Kind::Valor | Kind::Final)
+    }
+    /// KH2's magic sub offset in the form (`docs/drive-model.md`: + 10 in Wisdom, + 30 in Final;
+    /// 03system `magi` and the spells' ATKP rows have subs 30..35 for Final), for a form that casts
+    /// as Wisdom does (`formmagic`); `None` for one that can't cast (Valor).
+    /// (Final: the user, "lets try to incorporate our rules, logic, and process from wisdom forms'
+    /// magic, and bring it to final form, with final form's animations". KH2 has no spell files
+    /// of Final's own: MAGC's rows are the same as Sora's, and the form's moveset gives the
+    /// motions under its ids, `P_EX100_ULTF`'s E36x / E37x.)
+    pub fn magic_sub(self) -> Option<i32> {
+        match self {
+            Kind::Valor => None,
+            Kind::Wisdom => Some(10),
+            Kind::Final => Some(30),
+        }
     }
 }
 
@@ -151,6 +164,13 @@ pub fn in_valor() -> bool {
 /// In Final Form.
 pub fn in_final() -> bool {
     current() == Some(Kind::Final)
+}
+
+/// The form he is in, if it casts as Wisdom does (Wisdom, Final: `Kind::magic_sub`): its Fire,
+/// Blizzard and Thunder KH2's (`formmagic`), its Cure, Gravity, Stop and Aero KH1's on its own
+/// cast motions (`takeover::command_started`, `pose::follow`).
+pub fn casting_form() -> Option<Kind> {
+    current().filter(|k| k.magic_sub().is_some())
 }
 
 /// In a form with a second Keyblade (Valor, Final).
@@ -205,13 +225,9 @@ pub fn busy() -> bool {
     CHANGING.load(Ordering::Relaxed) || REQUEST.load(Ordering::Relaxed) != 0
 }
 
-/// KH2's magic sub offset now (`reflect`).
+/// KH2's magic sub offset now (`reflect`, `formmagic`): the form's (`Kind::magic_sub`), else 0.
 pub fn magic_sub() -> i32 {
-    if in_wisdom() {
-        MAGIC_SUB
-    } else {
-        0
-    }
+    current().and_then(Kind::magic_sub).unwrap_or(0)
 }
 
 unsafe fn rd<T: Copy>(p: usize) -> T {

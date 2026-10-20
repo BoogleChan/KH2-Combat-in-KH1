@@ -790,15 +790,22 @@ pub fn command_started(shots: usize, spell: Option<u8>) {
     // spells").
     // (Base Sora too, with the Magic style at KH2 (`styles`): KH1's Gravity, Stop and Aero on his
     // own KH2 cast motions, the user's choice "KH1 spell, KH2 animation".)
+    // (Final Form as Wisdom, on Final's own cast motions: `form::casting_form`; the user, "bring
+    // it to final form, with final form's animations".)
     let air_now = AIR_CAST.try_lock().ok().is_some_and(|a| a.is_some());
     let base_look = spell.is_some_and(|sp| sp >= 4) && super::formmagic::base_kh2(air_now);
     super::formmagic::BASE_KH1_CAST.store(base_look, Ordering::Relaxed);
-    let fc = spell.filter(|_| super::form::in_wisdom() || base_look).and_then(|sp| {
+    let casting = super::form::casting_form();
+    let fc = spell.filter(|_| casting.is_some() || base_look).and_then(|sp| {
         let air = air_now;
         let level = unsafe { super::reflect::kh1_spell_level(sp) };
         let motion = super::formmagic::kh1_spell_motion(sp, level, air);
         let kh2 = pose::kh2()?;
-        let form = if base_look { &kh2.character } else { &kh2.wisdom.as_ref()?.character };
+        // (Base Sora's only out of a form, `base_kh2`.)
+        let form = match casting {
+            Some(kind) => &kind.data(kh2)?.character,
+            None => &kh2.character,
+        };
         let clip = form.moveset.clips.get(&motion)?;
         let react = clip.first(|k| matches!(k, character_core::WindowKind::AllowReactionCommand)).unwrap_or(clip.length);
         let allow = clip.windows.iter().find(|w| matches!(w.kind, character_core::WindowKind::AllowMovement)).map(|w| (w.start, w.end.unwrap_or(clip.length)));

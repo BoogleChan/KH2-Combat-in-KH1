@@ -16,6 +16,12 @@
 //!   (`kh2fx` packages from 5, `spell_package`) and sounds, its attacks through the spell hit
 //!   records. Cure's heal (a script's direct application to Sora): ours, a share of KH1's max
 //!   HP by the ATKP row's power (`CURE_SHARE`), as KH1 has no KH2 Magic stat to scale it by.
+//! - Final Form casts the same way (the user: "lets try to incorporate our rules, logic, and
+//!   process from wisdom forms' magic, and bring it to final form, with final form's
+//!   animations"): `form::casting_form`. The same MAGC rows and spell files (KH2 has none of
+//!   Final's own), its moveset's motions under their ids (`P_EX100_ULTF`'s E36x / E37x), at its
+//!   magic sub (+ 30, `form::Kind::magic_sub`). No shots: Final's frame triggers 1 are its own
+//!   elements (`kh2fx::form_event`).
 
 use super::reflect::{flip, world_now, KhWorld, SORA};
 use super::{combat, log, pose};
@@ -44,10 +50,10 @@ pub static BASE_KH1_CAST: AtomicBool = AtomicBool::new(false);
 
 /// Whose spells these are, for the log.
 fn who() -> &'static str {
-    if super::form::in_wisdom() {
-        "Wisdom"
-    } else {
-        "KH2 magic"
+    match super::form::casting_form() {
+        Some(super::form::Kind::Wisdom) => "Wisdom",
+        Some(super::form::Kind::Final) => "Final",
+        _ => "KH2 magic",
     }
 }
 const FILE_NAMES: [&str; 4] = ["FIRE", "BLIZZARD", "THUNDER", "CURE"];
@@ -259,12 +265,13 @@ pub unsafe fn spell_chosen(actor: usize, spell: u8) -> bool {
     // (Wisdom: Fire, Blizzard, Thunder; Cure is KH1's own on the form's Cure motion, as Gravity,
     // Stop and Aero are: the user, "wisdom form currently casts kh2 cure, it needs to be kh1 cure
     // with kh2s cures animation". Base Sora's KH2 magic: Cure too, KH2's.)
+    // (Final Form as Wisdom: `form::casting_form`.)
     if !super::takeover::kh2_has() {
         return false;
     }
-    let wisdom = spell <= 2 && super::form::in_wisdom() && super::settings::get().drive;
+    let form = spell <= 2 && super::form::casting_form().is_some() && super::settings::get().drive;
     let base = spell <= 3 && base_kh2(super::takeover::kh2_airborne());
-    if !(wisdom || base) {
+    if !(form || base) {
         return false;
     }
     let level = super::reflect::kh1_spell_level(spell);
@@ -331,6 +338,8 @@ pub unsafe fn before_step(actor: usize, ch: &mut Character) {
 
 /// The form's own cast motion for a KH1 spell it has no KH2 version of (Gravity, Stop, Aero):
 /// Thunder's (MAGC) at that level, ground or air (the user: "the same logic as thunder").
+/// (MAGC gives a motion id; the form's moveset its clip: Wisdom's C36x / C37x, Final's E36x /
+/// E37x, base Sora's A36x / A37x.)
 pub fn kh1_spell_motion(spell: u8, level: u8, air: bool) -> u16 {
     // Gravity on Thunder's motion; Cure, Stop and Aero on Cure's (`pose::follow` shows the same).
     let thunder = spell == 4;
@@ -402,7 +411,7 @@ pub unsafe fn shots_step(actor: usize, out: &Output, airborne: bool, strikes: &m
     // A spell cast this frame (trigger 20), its release (21) at the motion's magic-cast event.
     if let Some(f) = rt.fresh.take() {
         if let Some(file) = spell_index(rt, f.spell, f.level) {
-            // (Wisdom's subs from 10; base Sora's from 0, `form::magic_sub`.)
+            // (Wisdom's subs from 10, Final's from 30; base Sora's from 0, `form::magic_sub`.)
             let sub = f.level as i32 * 2 - 2 + f.finisher as i32 + super::form::magic_sub();
             let magi = pose::kh2().and_then(|k| k.magi.get(sub).map(|r| r.to_vec())).unwrap_or_else(|| vec![0; kh2_formats::pref::MagiTable::RECORD]);
             match rt.magic.cast(file, SORA, f.spell, sub, &magi, &mut world) {
@@ -455,10 +464,10 @@ pub unsafe fn shots_step(actor: usize, out: &Output, airborne: bool, strikes: &m
             Event::Missing(n) => {
                 static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
                 if N.fetch_add(1, Ordering::Relaxed) < 20 {
-                    log(&format!("Wisdom's scripts used {n} (not modelled)"));
+                    log(&format!("{}'s scripts used {n} (not modelled)", who()));
                 }
             }
-            Event::Error(e) => log(&format!("Wisdom's script error: {e}")),
+            Event::Error(e) => log(&format!("{}'s script error: {e}", who())),
             Event::Strike { attack, target } if target == SORA => {
                 let Some(a) = rt.magic.attack_mut(attack) else { continue };
                 let (atk, sub) = (a.atk, a.sub);

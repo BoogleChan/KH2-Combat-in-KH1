@@ -332,7 +332,8 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
         super::drive::chosen(actor, (arg - super::drive::FORM_ARG) as usize);
         return;
     }
-    // Fire, Blizzard, Thunder, Cure in Wisdom Form: KH2's Wisdom versions (`formmagic`).
+    // Fire, Blizzard, Thunder in Wisdom and Final Form: KH2's, on the form's cast motions
+    // (`formmagic`; Cure is KH1's there); base Sora's with the Magic style at KH2.
     if actor == sora && kind == 2 && super::formmagic::spell_chosen(actor, arg) {
         return;
     }

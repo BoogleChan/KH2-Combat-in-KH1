@@ -3132,3 +3132,23 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   These are the command ids KH1's menu fill (`0x140292760`, through `0x140290E70 (slot, id)`)
   puts in its top entries (`0x140529614`, Steam `0x528914`): Talk in Attack's slot, Open /
   Examine in the Triangle slot. KH1 takes him for them as it does in base form.
+
+### 2026-10-20: Stage 264 (Final Form's magic, Wisdom's way)
+- The user: "lets try to incorporate our rules, logic, and process from wisdom forms' magic, and
+  bring it to final form, with final form's animations" (helper, `docs/drive-model.md`).
+- KH2 picks no magic rows per form. Each form's moveset plays its own clip under the same
+  motion id. Final's (60 fps) are, as ground / finisher / air:
+  - Fire 56 / 57 / 58;
+  - Blizzard 59 / 60 / 61;
+  - Thunder 62 / 63 / 64;
+  - Cure 65 / - / 67;
+  - Reflect 71 / 72 / 73.
+- In Final Form:
+  - Fire, Blizzard and Thunder are KH2's spells through Wisdom's path, with base Sora's
+    `.mag` scripts at Final's magic sub (level × 2 − 2, + 1 for the finisher, + 30).
+  - Cure is KH1's own on Final's Cure motion.
+  - Gravity, Stop and Aero are KH1's on Final's Thunder / Cure motions, with the form's cast
+    clock, window and movement.
+- Code: a per-form table (`form::Kind::magic_sub`, `casting_form`) replaces the `in_wisdom()`
+  checks. Final's Reflect now runs at Final's sub too.
+- Not tested in game.

@@ -987,7 +987,7 @@ unsafe fn step(actor: usize, out: &Output, airborne: bool, strikes: &mut combat:
     // motion's magic-cast event (Reflect's: frame 0).
     if let Some((motion, finisher, level)) = rt.fresh.take() {
         // KH2's sub for a spell level: level × 2 − 2, + 1 for the combo finisher's cast.
-        // (In Wisdom Form, + 10: `form`.)
+        // (In Wisdom Form, + 10; in Final Form, + 30: `form::Kind::magic_sub`.)
         let sub = level as i32 * 2 - 2 + finisher as i32 + super::form::magic_sub();
         let magi = pose::kh2().and_then(|k| k.magi.get(sub).map(|r| r.to_vec())).unwrap_or_else(|| vec![0; kh2_formats::pref::MagiTable::RECORD]);
         let spell = rt.spells[(level - 1) as usize].unwrap_or(0);

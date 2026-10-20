@@ -145,6 +145,47 @@ final form glide and in final form jump should do damage".
   contact code with the row's power, as the swings do. The hover's guard is not modelled.
   No other form has attack windows in these motions.
 
+## Final Form's magic (Data; the rules ours, as Wisdom's)
+
+The user: "lets try to incorporate our rules, logic, and process from wisdom forms' magic, and
+bring it to final form, with final form's animations".
+
+- **No spell files of its own.** MAGC has rows for worlds 0 and 10 only (10: the `…lk.mag`
+  variants), none per form. KH2's Final casts Sora's `magic/<SPELL>_<level>.mag` with its sub
+  + 30. 03system `magi` has records 30..35, and the spells' ATKP rows (248..251, 573.., 708..)
+  have subs 30..35, as Wisdom's have 10..15.
+- **Its cast motions.** MAGC's row gives the same motion ids in every form. Each moveset fills
+  them with its own clips. In `P_EX100_ULTF.mset` these are 60 fps clips; their lengths below are
+  in 60 Hz frames.
+
+  | Spell | Ground | Combo finisher | Air |
+  |---|---|---|---|
+  | Fire | 56 `E362` (76) | 57 `E363` (92) | 58 `E372` (68) |
+  | Blizzard | 59 `E360` (50) | 60 `E361` (104) | 61 `E370` (42) |
+  | Thunder | 62 `E364` (50) | 63 `E365` (100) | 64 `E374` (42) |
+  | Cure | 65 `E362`, as Fire's | none | 67 `E372`, as Fire's |
+  | Reflect | 71 `E362` | 72 `E363` | 73 `E372` |
+
+  `E362` carries the magic-cast event for 56, 65 and 71, and `E372` for 58, 67 and 73. So Final's
+  Fire, Cure and Reflect share one cast. Every Final cast has an allow-movement range all through.
+- **How we cast them** (`form::Kind::magic_sub`, `form::casting_form`):
+  - Fire, Blizzard and Thunder are KH2's. They take Wisdom's path through
+    `formmagic::spell_chosen` and `before_step`: the MAGC motions, the controller's combo slots
+    and cast windows, the script at sub level × 2 − 2 (+ 1 for the finisher) + 30, its effects
+    and sounds, and hits with KH1's own data for the spell at its level. Level and cost are
+    KH1's.
+  - Cure is KH1's own, drawn with Final's Cure motion.
+  - Gravity, Stop and Aero are KH1's. Gravity is drawn on Final's Thunder motion; Stop and Aero
+    on its Cure motion. The air ones use the air motions. Each runs on that motion's clock,
+    input window and movement (`takeover::command_started`'s `FormCast`, `pose::follow`).
+  - Reflect runs at Final's sub (+ 30) now, as Wisdom's runs at + 10.
+  - In the air, the controller's casts use KH2's own physics for Final (`takeover`'s
+    `in_final()` air-magic block). KH1's spells in the air are handed off as they are in
+    Wisdom: KH1's air state moves him while Final's air cast motion is drawn.
+  - Final has no shots. Its frame triggers 1 stay its own elements (`kh2fx::form_event`).
+- **Unchecked in game:** all of it. In particular, whether Final's 60 fps cast clips line up
+  with KH1's cast timing for the KH1 spells.
+
 ## Not modelled
 
 - Form keyblade stats (forms deal Sora's base damage).
