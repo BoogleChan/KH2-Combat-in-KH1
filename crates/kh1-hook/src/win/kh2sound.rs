@@ -17,7 +17,7 @@
 //! `kh2_volume`. The default is every KH2 ability move (`DEFAULT_MOTIONS`).
 
 use super::log;
-use super::sys::{waveOutOpen, waveOutPrepareHeader, waveOutWrite, WaveFormatEx, WaveHdr, WAVE_MAPPER, WHDR_DONE};
+use super::sys::{waveOutOpen, waveOutPrepareHeader, waveOutWrite, WaveFormatEx, WaveHdr, CALLBACK_EVENT, WAVE_MAPPER, WHDR_DONE};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -69,10 +69,13 @@ struct Voice {
 static QUEUE: Mutex<Vec<Voice>> = Mutex::new(Vec::new());
 /// The mixer's thread runs (started on the first sound).
 static MIXER: std::sync::Once = std::sync::Once::new();
-/// The mixer's output: 48 kHz stereo, in blocks of 10 ms, four queued (40 ms ahead at most).
+/// The mixer's output: 48 kHz stereo, in blocks of 5 ms, six queued (30 ms ahead at most). The
+/// mixer wakes on Windows' event as each block is done (s274 polled with a 2 ms sleep, which
+/// Windows rounds up to its 15.6 ms tick: sounds started late by a varying amount, the user: "the
+/// sound FX are also kind of jittery").
 const OUT_RATE: u32 = 48_000;
-const BLOCK_FRAMES: usize = 480;
-const BLOCKS: usize = 4;
+const BLOCK_FRAMES: usize = 240;
+const BLOCKS: usize = 6;
 
 /// The mixer (its own thread): one `waveOut` device for every KH2 sound, kept open; each block,
 /// as Windows hands it back, refilled with the sounds playing (resampled to 48 kHz, each at its
@@ -80,12 +83,17 @@ const BLOCKS: usize = 4;
 fn mixer() {
     let fmt = WaveFormatEx { format_tag: 1, channels: 2, samples_per_sec: OUT_RATE, avg_bytes_per_sec: OUT_RATE * 4, block_align: 4, bits_per_sample: 16, cb_size: 0 };
     let mut handle = 0usize;
-    let r = unsafe { waveOutOpen(&mut handle, WAVE_MAPPER, &fmt, 0, 0, 0) };
+    let event = unsafe { super::sys::CreateEventW(std::ptr::null_mut(), 0, 0, std::ptr::null()) };
+    unsafe {
+        // (THREAD_PRIORITY_TIME_CRITICAL: the blocks must not wait on the game's threads.)
+        super::sys::SetThreadPriority(super::sys::GetCurrentThread(), 15);
+    }
+    let r = unsafe { waveOutOpen(&mut handle, WAVE_MAPPER, &fmt, event as usize, 0, if event.is_null() { 0 } else { CALLBACK_EVENT }) };
     if r != 0 {
         log(&format!("KH2 sound: Windows refused to open the sound device (waveOutOpen {r}): no KH2 sounds"));
         return;
     }
-    log("KH2 sound: mixer running (one device, 48 kHz stereo, 10 ms blocks)");
+    log("KH2 sound: mixer running (one device, 48 kHz stereo, 5 ms blocks, woken by its event)");
     let size = std::mem::size_of::<WaveHdr>() as u32;
     let mut bufs: Vec<Vec<i16>> = (0..BLOCKS).map(|_| vec![0i16; BLOCK_FRAMES * 2]).collect();
     let mut hdrs: Vec<Box<WaveHdr>> = bufs
@@ -142,7 +150,13 @@ fn mixer() {
             wrote = true;
         }
         if !wrote {
-            std::thread::sleep(std::time::Duration::from_millis(2));
+            if event.is_null() {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            } else {
+                unsafe {
+                    super::sys::WaitForSingleObject(event, 20);
+                }
+            }
         }
     }
 }

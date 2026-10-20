@@ -383,6 +383,7 @@ unsafe extern "system" fn physics(actor: usize) {
     let t0 = Instant::now();
     let took = ON.load(Ordering::Relaxed) && actor > 0x10000 && takeover(actor);
     if sora {
+        super::prof::add(super::prof::FRAME, t0);
         note_slow(t0, || format!("Sora's frame of ours (KH2 has him: {took}, KH2 motion {})", KH2_MOTION.load(Ordering::Relaxed)));
     }
     if sora {
@@ -1971,7 +1972,9 @@ unsafe fn takeover(actor: usize) -> bool {
     super::form::before_step(&mut d.drive, &mut d.character, &mut d.anim, kh2, actor);
     // A KH2 spell chosen in Wisdom Form: its cast (`formmagic`).
     super::formmagic::before_step(actor, &mut d.character);
+    let tp = Instant::now();
     let mut out = d.character.step(&input, &env);
+    super::prof::add(super::prof::STEP, tp);
     // Out of flight for a combo: he stays up through it (the user: Sora should remain in
     // flight throughout the combo); KH2's aerial attacks sink between hits, so no sinking while
     // attacking (rises, as an upward finisher's, stay). Flight takes him again once it's done.
@@ -2274,7 +2277,9 @@ unsafe fn takeover(actor: usize) -> bool {
     // (In a Drive Form always the battle stance, Keyblades out, as KH2's forms: the user, "dont
     // let soras keyblades disappear in valor form".)
     d.anim.field = !battle && !lingering && !super::form::in_form();
+    let tp = Instant::now();
     d.anim.update(&out, &d.character, [q[0], -q[1], q[2]]);
+    super::prof::add(super::prof::ANIM, tp);
     // Misc Animations at KH1 (base Sora): standing, walking and running are drawn with KH1's own
     // animations (KH1's control step picks them from the stick all along under KH2), its own
     // steps sounding; KH2 still moves him (the user: "idle walk/run plus items").
@@ -2328,13 +2333,16 @@ unsafe fn takeover(actor: usize) -> bool {
             log(&format!("KH2's weapon motion {} attacks as it plays ({:?}): {:?}", out.motion, out.state, carried.iter().map(|h| (h.attack, h.weapon)).collect::<Vec<_>>()));
         }
     }
+    let tp = Instant::now();
     d.strikes.strike(actor, struck.as_ref().unwrap_or(&out), &d.anim, &mut d.character, &battle_rows);
+    super::prof::add(super::prof::STRIKES, tp);
     // Reflect's script: its cast, barrier, counter and effects.
     super::reflect::after_step(actor, &out, d.character.airborne(), &mut d.strikes, &battle_rows, lock);
     // KH2's own sounds for the effect elements this frame starts. In Wisdom Form a frame
     // trigger 1 is a shot from its model's script instead (`form`).
     // (Each event's work timed: one over 4 ms is logged, the user: "the new abilities ... lag when
     // i use them".)
+    let tp = Instant::now();
     for e in &out.events {
         let t0 = Instant::now();
         if super::form::takes(&d.drive, e) {
@@ -2350,10 +2358,15 @@ unsafe fn takeover(actor: usize) -> bool {
         super::kh2fx::event(out.motion, *e);
         note_slow(t1, || format!("KH2 effect for {e:?} of motion {}", out.motion));
     }
+    super::prof::add(super::prof::EVENTS, tp);
+    let tp = Instant::now();
     super::form::shots_step(actor, &out, d.character.airborne(), &mut d.strikes, &battle_rows, lock);
     super::form::after_step(&mut d.drive, actor, rd::<u32>(base + BATTLE_RVA) & 1 != 0);
+    super::prof::add(super::prof::FORM, tp);
     super::kh2sound::tick();
+    let tp = Instant::now();
     super::kh2fx::tick(out.motion);
+    super::prof::add(super::prof::FX_TICK, tp);
     {
         // A KH2 swing starting: a new attack motion, or the same one again from its start.
         let attacking = matches!(out.state, StateName::Attack);

@@ -23,6 +23,10 @@ extern "system" {
     pub fn SetThreadContext(thread: *mut c_void, ctx: *const c_void) -> i32;
     pub fn CloseHandle(h: *mut c_void) -> i32;
     pub fn VirtualQuery(addr: *const c_void, info: *mut c_void, size: usize) -> usize;
+    pub fn CreateEventW(attrs: *mut c_void, manual: i32, initial: i32, name: *const u16) -> *mut c_void;
+    pub fn WaitForSingleObject(h: *mut c_void, ms: u32) -> u32;
+    pub fn SetThreadPriority(thread: *mut c_void, priority: i32) -> i32;
+    pub fn GetCurrentThread() -> *mut c_void;
     pub fn AddVectoredExceptionHandler(first: u32, handler: unsafe extern "system" fn(*mut c_void) -> i32) -> *mut c_void;
 }
 
@@ -58,6 +62,8 @@ pub struct WaveHdr {
 
 pub const WAVE_MAPPER: u32 = 0xFFFF_FFFF;
 pub const WHDR_DONE: u32 = 1;
+/// `waveOutOpen`'s callback kind: an event signalled as each buffer is done.
+pub const CALLBACK_EVENT: u32 = 0x0005_0000;
 
 #[link(name = "winmm")]
 extern "system" {

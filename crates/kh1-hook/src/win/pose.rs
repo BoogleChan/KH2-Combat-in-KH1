@@ -1521,14 +1521,15 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
             let kh1_mid = (inv * h[0]).w_axis.truncate().lerp((inv * h[1]).w_axis.truncate(), 0.5);
             let ours = pose[HANDS[0].0].w_axis.truncate().lerp(pose[HANDS[1].0].w_axis.truncate(), 0.5);
             let d = kh1_mid - ours;
-            if d.is_finite() && d.length() < 300.0 {
+            static N: AtomicU32 = AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 30 {
+                log(&format!("Anti Form's ledge pose: hands {ours:.0?}, KH1's {kh1_mid:.0?}: moved {d:.0?}"));
+            }
+            // (s274 kept the move under 300 and so never made it: the hang's hands sit further.)
+            if d.is_finite() && d.length() < 3000.0 {
                 let t = Mat4::from_translation(d);
                 for m in pose.iter_mut() {
                     *m = t * *m;
-                }
-                static N: AtomicU32 = AtomicU32::new(0);
-                if N.fetch_add(1, Ordering::Relaxed) < 10 {
-                    log(&format!("Anti Form's ledge pose moved {:.0?} to put its hands on KH1's", d));
                 }
             }
         }
@@ -1708,7 +1709,11 @@ unsafe extern "system" fn pose(world: usize, instance: usize, t: f32, motion: us
         note_small(instance, world);
     }
     if instance != 0 {
+        let tp = Instant::now();
         check(instance, false, world);
+        if instance == SORA_INSTANCE.load(Ordering::Relaxed) {
+            super::prof::add(super::prof::POSE, tp);
+        }
     }
 }
 
@@ -1727,7 +1732,11 @@ unsafe extern "system" fn pose_ik(world: usize, instance: usize, flags: f32) {
         note_small(instance, world);
     }
     if instance != 0 {
+        let tp = Instant::now();
         check(instance, true, world);
+        if instance == SORA_INSTANCE.load(Ordering::Relaxed) {
+            super::prof::add(super::prof::POSE, tp);
+        }
     }
 }
 

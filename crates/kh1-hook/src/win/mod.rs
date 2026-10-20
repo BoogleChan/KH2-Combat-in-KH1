@@ -31,6 +31,7 @@ mod stylecombo;
 mod stylejump;
 mod styleroll;
 mod probe;
+mod prof;
 mod reflect;
 mod takeover;
 mod tint;

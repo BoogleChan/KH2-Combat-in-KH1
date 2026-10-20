@@ -3262,3 +3262,19 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - The user: "when leaving a world in a drive form, wherever world sora lands, he should be
   automatically reverted". A form records KH1's world as it starts (`0x142340E5C`). On KH2's
   first step in another world, `form::before_step` reverts him (Anti Form too).
+
+### 2026-10-20: Stage 276 (sounds on time, a time profile, Anti's ledge hands again)
+- The user's recording: "any of the new KH2 combo modifiers play, there is a slight jitter in
+  the VFX, the tiniest bit of lag, and the sound FX are also kind of jittery". The recording's
+  audio shows no dropouts or clicks.
+  - The mixer polled with a 2 ms sleep, which Windows rounds up to its 15.6 ms tick, so sounds
+    started a varying 0..55 ms late.
+  - Now `waveOut` signals an event as each block is done, and the mixer (time-critical
+    priority) refills at once. Blocks are 5 ms, six queued (30 ms ahead at most).
+- `prof.rs`: our sections on the game's thread are timed every 5 s (KH2's step, animation,
+  hits, sound/effect events, effects step, form, Sora's whole frame, the pose pass). They are
+  logged ("time (ms, last 5 s)") when one took over 2 ms. The s275 log had Sora's frame at
+  ~5 ms through combos.
+- Anti's ledge hang ("even crazier now"). s274's hand alignment never ran: it was kept under
+  300 units, and the hang's hands sit further off. The cap is now 3000, and each alignment is
+  logged (30).
