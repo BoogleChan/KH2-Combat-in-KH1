@@ -97,7 +97,9 @@ magic = kh1\r\n\
 air_magic = kh1\r\n\
 ; jump_style / glide_style: kh1 or kh2, KH1's or KH2's jump and glide for base Sora\r\n\
 jump_style = kh2\r\n\
-glide_style = kh2\r\n";
+glide_style = kh2\r\n\
+; roll_style: kh1 or kh2, KH1's or KH2's dodge roll for base Sora\r\n\
+roll_style = kh2\r\n";
 
 #[derive(Debug)]
 pub struct Settings {
@@ -148,8 +150,8 @@ pub struct Settings {
     pub drive: bool,
     /// Valor's Keyblade drawn in his left hand (`valor_left_blade = on`, `leftblade`).
     pub valor_left_blade: bool,
-    /// KH2's (true) or KH1's moves per `styles::Kind` (ground combo, air combo, magic, air magic, jump, glide).
-    pub styles: [bool; 6],
+    /// KH2's (true) or KH1's moves per `styles::Kind` (ground combo, air combo, magic, air magic, jump, glide, dodge roll).
+    pub styles: [bool; 7],
 }
 
 static SETTINGS: OnceLock<Settings> = OnceLock::new();
@@ -225,7 +227,7 @@ pub fn get() -> &'static Settings {
             kh2_hair: on(&text, "kh2_hair", "on", true),
             drive: on(&text, "drive", "on", true),
             valor_left_blade: on(&text, "valor_left_blade", "on", true),
-            styles: [on(&text, "ground_combo", "kh2", true), on(&text, "air_combo", "kh2", true), on(&text, "magic", "kh2", false), on(&text, "air_magic", "kh2", false), on(&text, "jump_style", "kh2", true), on(&text, "glide_style", "kh2", true)],
+            styles: [on(&text, "ground_combo", "kh2", true), on(&text, "air_combo", "kh2", true), on(&text, "magic", "kh2", false), on(&text, "air_magic", "kh2", false), on(&text, "jump_style", "kh2", true), on(&text, "glide_style", "kh2", true), on(&text, "roll_style", "kh2", true)],
         };
         log(&format!("settings ({path}): {s:?}"));
         s

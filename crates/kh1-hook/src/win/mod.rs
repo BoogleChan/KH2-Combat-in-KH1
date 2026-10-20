@@ -27,6 +27,7 @@ mod shortcuts;
 mod styles;
 mod stylecombo;
 mod stylejump;
+mod styleroll;
 mod probe;
 mod reflect;
 mod takeover;

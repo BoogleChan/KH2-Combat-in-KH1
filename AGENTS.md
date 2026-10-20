@@ -2869,3 +2869,14 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - Glide at KH1: KH2's glide off; a fresh jump press falling in KH2's air puts him in KH1's air
   state 2 and starts KH1's Superglide (`0x1402B05C0`) or Glide (`0x1402B0530`) by its abilities
   (`0x140282A70 (4 / 3, 0xB)`); KH2 takes him back into its fall or landing when it ends.
+
+### 2026-10-19: Stage 240 (move style: Dodge Roll)
+- The user: "add an option for switching between dodge roll". `styles::Kind::DodgeRoll` (ini
+  `roll_style`, default kh2), Config row 15 (the second page now holds 8 rows).
+- KH1 roll (helper, `style-roll`, `styleroll.rs`): KH1 rolls from its button handler
+  `0x1402A59A0` (Square in ground state 0, not in deep water `0x1402BF530`, the Dodge Roll ability
+  bit `0x20` of `0x142F5F610`; Guard `0x10`), turning him (`0x140295E20` / `0x140295C80`) and
+  starting motion `0xDC` (`0x1402C7CB0`). At KH1: a fresh Square with the stick while KH2 has him
+  free on the ground runs that, KH1 keeping him while `0xDC` plays; Square standing still stays
+  KH2's guard; no ability or deep water, KH2's. Quick Run stays KH2's roll's. Steam map override
+  `0x2F5F610:0x2F5EC10` (data).

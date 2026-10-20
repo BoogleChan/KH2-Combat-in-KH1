@@ -460,6 +460,43 @@ unsafe fn style_air_start(base: usize, actor: usize, d: &Driver) -> Option<&'sta
     None
 }
 
+/// KH1's roll (`styleroll`): its start, the stick's angle, the facing setter, its deep-water
+/// test, and its ability bits (`0x20` Dodge Roll).
+const ROLL_START_RVA: Rva = Rva(0x2C7CB0);
+const DIR_ANGLE_RVA: Rva = Rva(0x295E20);
+const SET_FACING_RVA: Rva = Rva(0x295C80);
+const DEEP_WATER_RVA: Rva = Rva(0x2BF530);
+const ROLL_ABILITY_RVA: Rva = Rva(0x2F5F610);
+const ROLL_ABILITY: u32 = 0x20;
+
+/// KH1's dodge roll instead of KH2's, on a fresh Square with the stick (`styleroll`): whether it
+/// started. KH1 has him from this frame.
+unsafe fn style_roll_start(base: usize, actor: usize, d: &Driver, dir: glam::Vec2, tilt: f32) -> bool {
+    if !super::styleroll::kh1_roll() || tilt <= 0.15 || !d.grounded || d.character.airborne() || rd::<i32>(actor + 0x70) != 0 {
+        return false;
+    }
+    if !matches!(d.character.state_name(), StateName::Idle | StateName::Walk | StateName::Run | StateName::Land) {
+        return false;
+    }
+    let deep: unsafe extern "system" fn(usize) -> i32 = std::mem::transmute(base + DEEP_WATER_RVA);
+    if rd::<u32>(base + ROLL_ABILITY_RVA) & ROLL_ABILITY == 0 || deep(actor) != 0 {
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 10 {
+            log(&format!("KH1's roll not open (ability bits {:#x}): KH2's Square", rd::<u32>(base + ROLL_ABILITY_RVA)));
+        }
+        return false;
+    }
+    let v = [dir.x, 0.0f32, dir.y, tilt];
+    let angle: unsafe extern "system" fn(usize, *const f32) -> f32 = std::mem::transmute(base + DIR_ANGLE_RVA);
+    let face: unsafe extern "system" fn(usize, f32) = std::mem::transmute(base + SET_FACING_RVA);
+    let start: unsafe extern "system" fn(usize) = std::mem::transmute(base + ROLL_START_RVA);
+    let a = angle(actor, v.as_ptr());
+    // (The angle is its second argument: the second float register, as KH1's handler passes it.)
+    face(actor, a);
+    start(actor);
+    true
+}
+
 /// KH1's player step (`0x1402A75B0`, Sora's per-frame step, from the actor kinds' switch at
 /// `0x14029593C`). On a frame his state changed (flag `0x400`, set by its state change
 /// `0x1402AF7D0`) it picks the motion for the new state: down from the air (state 2 to 0, the old
@@ -1154,7 +1191,17 @@ unsafe fn takeover(actor: usize) -> bool {
                 log(&format!("KH1's jump: KH2's move asked, but KH1 doesn't let him act yet (state {state}, {above:.0} above the floor)"));
             }
         }
-        if frames >= 1 && cast_landed || frames >= 2 && air_free || frames >= 10 && (falling || jump || cancel || magic_waits || ground_states && (kh1_moving() || free || square || attack || in_jump && super::stylejump::wanted() && can_act(actor) != 0)) {
+        // KH1's roll (`styleroll`): KH1 keeps him while its motion plays (its request still
+        // pending on the first frames); an Attack KH1 took in it for KH2's combo hands him over at
+        // once with the press.
+        let in_roll = super::styleroll::active();
+        let roll_attack = in_roll && super::styleroll::take_attack();
+        let rolling = in_roll && state == 0 && (rd::<u32>(actor + 0x164) == super::styleroll::ROLL_MOTION || frames < 3 && rd::<u32>(actor + 0x178) != 0);
+        if in_roll && frames < 4 {
+            log(&format!("KH1's roll: frame {frames}, motion {:#x}, flags {:08x}", rd::<u32>(actor + 0x164), rd::<u32>(actor)));
+        }
+        let hold_roll = rolling && !roll_attack;
+        if !hold_roll && (frames >= 1 && (cast_landed || roll_attack) || frames >= 2 && air_free || frames >= 10 && (falling || jump || cancel || magic_waits || ground_states && (kh1_moving() || free || square || attack || in_jump && super::stylejump::wanted() && can_act(actor) != 0 || in_roll && super::styleroll::wanted() && can_act(actor) != 0))) {
             let falling = falling || air_free;
             JUMP_NOW.store(jump, Ordering::Relaxed);
             // The spell's combo goes on only with an Attack or a spell that cut it or was chosen
@@ -1560,6 +1607,16 @@ unsafe fn takeover(actor: usize) -> bool {
             drop_pose();
             return false;
         }
+    }
+    // Dodge Roll at KH1 (`styleroll`): KH1's own roll, on the fresh Square with the stick.
+    if input.action.pressed && !frozen && !shortcut && style_roll_start(base, actor, d, dir, tilt) {
+        hand_to_kh1("KH1's dodge roll (the Dodge Roll style is KH1's)");
+        FROM_COMMAND.store(false, Ordering::Relaxed);
+        super::styleroll::started();
+        d.last_state = None;
+        d.held = (true, true);
+        drop_pose();
+        return false;
     }
 
     // Where he is, KH2's way up (KH1's world is y-down).
@@ -2425,6 +2482,7 @@ pub fn air_cast() -> Option<(u8, f32)> {
 pub fn hand_to_kh1(why: &str) {
     super::stylecombo::clear();
     super::stylejump::clear();
+    super::styleroll::clear();
     AIR_SPELL_LANDED.store(false, Ordering::Relaxed);
     CUT_LEFT.store(false, Ordering::Relaxed);
     ATTACK_AFTER.store(false, Ordering::Relaxed);

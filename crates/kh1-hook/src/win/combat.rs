@@ -109,6 +109,22 @@ unsafe extern "system" fn exec(actor: usize, row: i32, dir: usize) {
         let f: ExecFn = std::mem::transmute(ORIG_EXEC.load(Ordering::Acquire));
         return f(actor, row, dir);
     }
+    // KH1's roll (`styleroll`) takes an Attack (KH1's own window for it): by the Base Combo
+    // style, KH1's combo from there, or KH2 takes him with the press for its combo.
+    if actor == sora && command == 1 && takeover::ON.load(Ordering::Relaxed) && super::styleroll::active() {
+        if super::stylecombo::kh1_here(false) {
+            super::styleroll::clear();
+            super::stylecombo::started();
+            takeover::FROM_COMMAND.store(true, Ordering::Relaxed);
+            note(format!("Attack command in KH1's roll (KH1 row {row}): KH1's combo"));
+            let f: ExecFn = std::mem::transmute(ORIG_EXEC.load(Ordering::Acquire));
+            return f(actor, row, dir);
+        }
+        super::styleroll::attack();
+        takeover::ATTACK_AFTER.store(true, Ordering::Relaxed);
+        note(format!("Attack command in KH1's roll (KH1 row {row}): KH2's combo, KH2 takes him"));
+        return;
+    }
     // KH1 still has him for one of its own moves (a spell's cast, an item): the press is KH2's
     // once that ends, not KH1's own combo (the user: KH1's Ripple Drive came out after a spell,
     // twice, finishing Riku).
@@ -207,7 +223,7 @@ pub unsafe fn resume_command() {
         return;
     }
     // (Chosen in KH1's jump or glide, `stylejump`: KH2 is taking him for it.)
-    if super::stylejump::active() {
+    if super::stylejump::active() || super::styleroll::active() {
         if t.elapsed().as_secs_f32() > 3.0 {
             *p = None;
             cmd_log(format!("command {kind:#x} dropped: KH1's jump or glide never let him go"));
@@ -271,11 +287,16 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     let arg = ((full >> 8) & 0xFF) as u8;
     // KH1 has him for its jump or glide (`stylejump`): a command (magic, an item, a Drive) is
     // KH2's, after KH2 takes him back (it waits for that, `resume_command`).
-    if actor == sora && !matches!(kind, 0 | 1) && super::settings::get().commands && takeover::ON.load(Ordering::Relaxed) && super::stylejump::active() {
+    // (KH1's roll, `styleroll`, too: KH2's once the roll is over.)
+    if actor == sora && !matches!(kind, 0 | 1) && super::settings::get().commands && takeover::ON.load(Ordering::Relaxed) && (super::stylejump::active() || super::styleroll::active()) {
         if let Ok(mut p) = PENDING_COMMAND.lock() {
             *p = Some((rd::<[u8; 16]>(base + COMMAND_RVA), std::time::Instant::now(), u32::MAX));
         }
-        super::stylejump::want_kh2();
+        if super::styleroll::active() {
+            super::styleroll::want_kh2();
+        } else {
+            super::stylejump::want_kh2();
+        }
         cmd_log(format!("command {kind:#x} ({full:08x}) waits: KH1's jump or glide has him, KH2 takes him for it"));
         return;
     }

@@ -64,10 +64,10 @@ const PANEL_PROLOGUE: [u8; 6] = [0x40, 0x53, 0x48, 0x83, 0xEC, 0x50];
 const CURSOR_ROW_RVA: Rva = Rva(0x2ED030);
 const DECOR_RVA: Rva = Rva(0x2F0740);
 
-/// Our rows: 8 the camera, 9..14 the move styles (`styles::Kind::EVERY` in order). Each:
+/// Our rows: 8 the camera, 9..15 the move styles (`styles::Kind::EVERY` in order). Each:
 /// label, left value, right value, help.
 const FIRST_ROW: i32 = 8;
-const ROWS: [[u32; 4]; 7] = [
+const ROWS: [[u32; 4]; 8] = [
     [0x7F00_0001, 0x7F00_0002, 0x7F00_0003, 0x7F00_0004],
     [0x7F00_0101, 0x7F00_0002, 0x7F00_0003, 0x7F00_0102],
     [0x7F00_0103, 0x7F00_0002, 0x7F00_0003, 0x7F00_0104],
@@ -75,10 +75,11 @@ const ROWS: [[u32; 4]; 7] = [
     [0x7F00_0107, 0x7F00_0002, 0x7F00_0003, 0x7F00_0108],
     [0x7F00_0109, 0x7F00_0002, 0x7F00_0003, 0x7F00_010A],
     [0x7F00_010B, 0x7F00_0002, 0x7F00_0003, 0x7F00_010C],
+    [0x7F00_010D, 0x7F00_0002, 0x7F00_0003, 0x7F00_010E],
 ];
 /// The camera row's help line (with the version under it).
 const HELP_ID: u32 = 0x7F00_0004;
-const STRINGS: [(u32, &str); 16] = [
+const STRINGS: [(u32, &str); 18] = [
     (0x7F00_0001, "Camera Style"),
     (0x7F00_0002, "KH1"),
     (0x7F00_0003, "KH2"),
@@ -95,6 +96,8 @@ const STRINGS: [(u32, &str); 16] = [
     (0x7F00_010A, "Choose KH1's or KH2's jump for Sora.\nDrive Forms keep their own."),
     (0x7F00_010B, "Glide"),
     (0x7F00_010C, "Choose KH1's or KH2's glide for Sora.\nDrive Forms keep their own."),
+    (0x7F00_010D, "Dodge Roll"),
+    (0x7F00_010E, "Choose KH1's or KH2's dodge roll for Sora.\nDrive Forms keep their own."),
 ];
 
 /// The move style a row switches (`None`: the camera row).

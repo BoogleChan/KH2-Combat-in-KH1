@@ -90,3 +90,33 @@ KH1's air speed from KH2's ground speed; that a fresh jump press while falling m
 starts its own glide (KH1's state 2 takes the press, its state 1 doesn't); Superglide's own input
 (KH1's other glide path, `0x1401CD926`, prefers Superglide when he has it, as here); hits taken
 during KH1's jump or glide (KH1's reactions; KH2's Aerial Recovery doesn't come out of them).
+
+## Dodge Roll
+
+`styleroll.rs`. With Dodge Roll at KH1 (base Sora; Drive Forms keep KH2's):
+
+- **KH1's roll.** KH1's per-frame button handler (`0x1402A59A0`) rolls on Square in its ground
+  state 0, out of deep water (`0x1402BF530`), with the Dodge Roll ability (bit `0x20` of
+  `0x142F5F610`, Steam `0x142F5EC10`; `0x10` is Guard, and with both the stick's tilt against
+  the stats' `+8` picks): it faces him along the stick (`0x140295E20 (actor, dir)` the angle,
+  `0x140295C80 (actor, angle)` sets it) and starts the roll `0x1402C7CB0` (rolling flag
+  `0x100000`, motion `0xDC`, `0x14029D8A0 (0x40000000)`). Its untouchable frames are its
+  motion's events (flag `0x40`).
+- **Start.** A fresh Square with the stick on the ground, KH2 having him free (idle, walk, run,
+  landing), runs that roll (`takeover::style_roll_start`) and hands him to KH1. Without KH1's
+  Dodge Roll ability (or in deep water) the press stays KH2's (its roll by its own abilities, or
+  Quick Run). Square standing still is KH2's guard as before.
+- **During.** KH1 keeps him while motion `0xDC` plays (its request pending on the first frames):
+  no hand-back on the stick. An Attack KH1's command step takes meanwhile (KH1's own window) goes
+  by the Base Combo style: KH1's combo from there, or KH2 takes him at once with the press for
+  its combo. A command (magic, an item, a Drive) waits for the roll's end, then is KH2's (by the
+  Magic styles).
+- **End.** As after KH1's other moves: the stick, a jump, Square or an Attack hand him back.
+- Quick Run: KH2's roll turns into it with Square held through the roll; KH1's roll doesn't (no
+  such thing in KH1). Quick Run itself is untouched.
+- KH1's own roll sound / voice play from its motion; `kh1voice::dodge_roll` is on KH2's roll only,
+  so they don't double.
+
+Unverified in game: the facing call's angle argument; that motion `0xDC` shows in `+0x164` from
+the roll's second frame (logged for its first four frames); that KH1's command step takes Attack
+during its roll at all (else an Attack comes after it, by the hand-back's rules).

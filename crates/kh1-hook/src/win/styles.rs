@@ -15,10 +15,11 @@ pub enum Kind {
     AirMagic,
     Jump,
     Glide,
+    DodgeRoll,
 }
 
 impl Kind {
-    pub const EVERY: [Kind; 6] = [Kind::GroundCombo, Kind::AirCombo, Kind::Magic, Kind::AirMagic, Kind::Jump, Kind::Glide];
+    pub const EVERY: [Kind; 7] = [Kind::GroundCombo, Kind::AirCombo, Kind::Magic, Kind::AirMagic, Kind::Jump, Kind::Glide, Kind::DodgeRoll];
 
     /// Its ini key.
     pub fn key(self) -> &'static str {
@@ -29,6 +30,7 @@ impl Kind {
             Kind::AirMagic => "air_magic",
             Kind::Jump => "jump_style",
             Kind::Glide => "glide_style",
+            Kind::DodgeRoll => "roll_style",
         }
     }
 
@@ -41,6 +43,7 @@ impl Kind {
             Kind::AirMagic => "Aerial Magic",
             Kind::Jump => "Jump",
             Kind::Glide => "Glide",
+            Kind::DodgeRoll => "Dodge Roll",
         }
     }
 
@@ -49,8 +52,8 @@ impl Kind {
     }
 }
 
-/// KH2's (true) or KH1's, per `Kind`: combos, jump and glide KH2's, magic KH1's by default (as before).
-static KH2: [AtomicBool; 6] = [AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(true), AtomicBool::new(true)];
+/// KH2's (true) or KH1's, per `Kind`: combos, jump, glide and dodge roll KH2's, magic KH1's by default (as before).
+static KH2: [AtomicBool; 7] = [AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true)];
 static INIT: Once = Once::new();
 
 fn init() {
