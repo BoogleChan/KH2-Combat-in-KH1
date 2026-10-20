@@ -502,14 +502,18 @@ unsafe fn style_roll_start(base: usize, actor: usize, d: &Driver, dir: glam::Vec
 /// `0x1402AF7D0`) it picks the motion for the new state: down from the air (state 2 to 0, the old
 /// state at `+0x378`) KH1's landing (`(+0x3D0) + 7 | 0x1000000`, then `0x14029D8A0 (0x40000000)`),
 /// into the air its fall (6). That is where KH1's air spell is hard-wired to KH1's landing.
+#[allow(dead_code)]
 const PLAYER_STEP_RVA: Rva = Rva(0x2A75B0);
 /// `push rbx; sub rsp, 0x50` (the next instruction is rip-relative, not moved).
+#[allow(dead_code)]
 const PLAYER_STEP_PROLOGUE: [u8; 6] = [0x40, 0x53, 0x48, 0x83, 0xEC, 0x50];
+#[allow(dead_code)]
 static ORIG_PLAYER_STEP: AtomicUsize = AtomicUsize::new(0);
 /// KH1 set Sora down out of an air spell, and its landing motion wasn't asked for: KH2 takes him
 /// into KH2's landing (`takeover`'s hand-off, its next frame).
 static AIR_SPELL_LANDED: AtomicBool = AtomicBool::new(false);
 
+#[allow(dead_code)]
 unsafe extern "system" fn player_step(actor: usize) {
     let base = BASE.load(Ordering::Relaxed);
     let f: unsafe extern "system" fn(usize) = std::mem::transmute(ORIG_PLAYER_STEP.load(Ordering::Acquire));
@@ -628,6 +632,16 @@ unsafe fn kh1_move_done(base: usize, actor: usize) -> bool {
 
 /// KH1's move ended on a jump press: KH2 jumps at once (the press isn't taken as held over).
 static JUMP_NOW: AtomicBool = AtomicBool::new(false);
+/// A fresh jump press while KH1 has him on the ground in one of its moves (`takeover`).
+static GROUND_JUMP: AtomicBool = AtomicBool::new(false);
+static JUMP_PREV: AtomicBool = AtomicBool::new(false);
+/// KH2 jumps on its first frame with input (frames left to wait for one).
+static PENDING_JUMP: AtomicU32 = AtomicU32::new(0);
+const PENDING_JUMP_FRAMES: u32 = 30;
+/// The jump button for KH2 out of KH1's move: 1 held over (no jump), 2 not held, 0 nothing to set.
+static JUMP_HELD_OVER: AtomicU8 = AtomicU8::new(0);
+/// KH2's frames after KH1's move still logged in the air.
+static JUMP_WATCH: AtomicU32 = AtomicU32::new(0);
 /// KH1 landed him out of an air cast: KH2 starts in its landing.
 static LAND_NOW: AtomicBool = AtomicBool::new(false);
 
@@ -1059,7 +1073,23 @@ unsafe fn takeover(actor: usize) -> bool {
         // then 2 only some 35 above the floor.)
         let fall_state = if command { matches!(state, 1 | 2) && done } else { matches!(state, 2 | LEAP_OFF_STATE) || state == 1 && done };
         let falling = fall_state && above > STEP_DOWN && vel.is_some_and(|(_, up)| up < 0.0);
-        let jump = buttons() & jump_button() != 0 && kh1_move_done(base, actor);
+        // A jump out of KH1's move is a fresh press made while KH1 has him on the ground (its
+        // landing, a ground move), not the button held from before (the user: "if you do kh1 air
+        // attack then hold jump before you land you'll buffer a jump, this is unintended"): a
+        // press in the air doesn't count, and once on the ground only a new press does.
+        let jump_raw = buttons() & jump_button() != 0;
+        if frames == 0 {
+            GROUND_JUMP.store(false, Ordering::Relaxed);
+            JUMP_PREV.store(jump_raw, Ordering::Relaxed);
+        }
+        let jump_fresh = jump_raw && !JUMP_PREV.swap(jump_raw, Ordering::Relaxed);
+        if state != 0 {
+            GROUND_JUMP.store(false, Ordering::Relaxed);
+        } else if jump_fresh {
+            GROUND_JUMP.store(true, Ordering::Relaxed);
+        }
+        let ground_jump = GROUND_JUMP.load(Ordering::Relaxed);
+        let jump = ground_jump && kh1_move_done(base, actor);
         // Free in KH1's jump or fall (state 1 / 2, KH1 lets him act, not a spell's air cast): its
         // jump or high jump off a frame KH2 should have had (the first frame after an air cast's
         // landing or an item, the user), or the fall after a ledge, a ladder or a pole. KH2 takes
@@ -1067,21 +1097,26 @@ unsafe fn takeover(actor: usize) -> bool {
         // glide and Superglide never come out of it (its jump / Square are KH2's meanwhile,
         // `kh1_air_free`).
         let air_free = kh1_air_free(base, actor) && above > STEP_DOWN && vel.is_some();
-        // A spell cast in the air (KH1's animation all through): when KH1 sets him down, its
-        // player step asks for KH2's landing instead of KH1's (`player_step`), and KH2 takes him
-        // here into it, its short hold and a jump out of it.
-        // (Should that step not have seen it, KH1's ground state on a later frame with the spell
-        // still KH1's does the same, logged: KH1's landing must not hold him.)
-        static GROUND: AtomicU32 = AtomicU32::new(0);
-        if frames == 0 || state != 0 {
-            GROUND.store(0, Ordering::Relaxed);
-        }
-        let seen = AIR_SPELL_LANDED.swap(false, Ordering::Relaxed);
-        let late = air_cast().is_some() && state == 0 && !seen && GROUND.fetch_add(1, Ordering::Relaxed) >= 1;
-        if late {
-            log("KH1's air spell on the ground without its landing seen: KH2's landing");
-        }
-        let cast_landed = air_cast().is_some() && (seen || late);
+        // (Off, s241, the user: "comment out anything related to having kh1 magic animations
+        // transition into kh2 landing animation, its unneeded at the moment and causes more bugs
+        // then fixes anything". KH1's air spell lands in KH1's own landing, and KH2 takes him
+        // after it as after KH1's other moves. s238's way, kept for later:)
+        // // A spell cast in the air (KH1's animation all through): when KH1 sets him down, its
+        // // player step asks for KH2's landing instead of KH1's (`player_step`), and KH2 takes him
+        // // here into it, its short hold and a jump out of it.
+        // // (Should that step not have seen it, KH1's ground state on a later frame with the spell
+        // // still KH1's does the same, logged: KH1's landing must not hold him.)
+        // static GROUND: AtomicU32 = AtomicU32::new(0);
+        // if frames == 0 || state != 0 {
+        //     GROUND.store(0, Ordering::Relaxed);
+        // }
+        // let seen = AIR_SPELL_LANDED.swap(false, Ordering::Relaxed);
+        // let late = air_cast().is_some() && state == 0 && !seen && GROUND.fetch_add(1, Ordering::Relaxed) >= 1;
+        // if late {
+        //     log("KH1's air spell on the ground without its landing seen: KH2's landing");
+        // }
+        // let cast_landed = air_cast().is_some() && (seen || late);
+        let cast_landed = false;
         // KH1's jump or glide (`stylejump`, the Jump / Glide styles at KH1): which, if any.
         let style_air = super::stylejump::mode();
         // KH1's glide out of KH2's jump, down on the ground: KH2's landing, as an air spell's.
@@ -1131,7 +1166,7 @@ unsafe fn takeover(actor: usize) -> bool {
         let kh1_combo = super::stylecombo::active();
         let out_any = command && !done && !kh1_combo && (spell_out(actor) || in_cut);
         let out = out_any && air_cast().is_none();
-        let jump_pressed = buttons() & jump_button() != 0;
+        let jump_pressed = ground_jump;
         let magic_after = MAGIC_AFTER.load(Ordering::Relaxed);
         // In a Drive Form: the form's cast motion's clock (its input window, then its end).
         let form_cast = if command && !done { form_cast_frame(actor, frames) } else { None };
@@ -1203,7 +1238,15 @@ unsafe fn takeover(actor: usize) -> bool {
         let hold_roll = rolling && !roll_attack;
         if !hold_roll && (frames >= 1 && (cast_landed || roll_attack) || frames >= 2 && air_free || frames >= 10 && (falling || jump || cancel || magic_waits || ground_states && (kh1_moving() || free || square || attack || in_jump && super::stylejump::wanted() && can_act(actor) != 0 || in_roll && super::styleroll::wanted() && can_act(actor) != 0))) {
             let falling = falling || air_free;
-            JUMP_NOW.store(jump, Ordering::Relaxed);
+            JUMP_NOW.store(jump || ground_jump, Ordering::Relaxed);
+            // The press is KH2's jump on its first frame that takes input, however long KH1 holds
+            // him still first (the user: "hold a direction + jump the jump will be overwritten by
+            // the running animation": a stick hand-back in KH1's landing, then frozen frames
+            // dropped the press). A button held from before KH1's move stays held for KH2 (its
+            // last frame's press was the jump KH1's air attack came out of).
+            PENDING_JUMP.store(if jump || ground_jump { PENDING_JUMP_FRAMES } else { 0 }, Ordering::Relaxed);
+            JUMP_HELD_OVER.store(if jump_raw && !(jump || ground_jump) { 1 } else { 2 }, Ordering::Relaxed);
+            JUMP_WATCH.store(40, Ordering::Relaxed);
             // The spell's combo goes on only with an Attack or a spell that cut it or was chosen
             // during it (else he is back in idle: the combo is over, the user).
             SPELL_CUT.store(command && (attack_cut || magic_cut || magic_after || ATTACK_AFTER.load(Ordering::Relaxed)), Ordering::Relaxed);
@@ -1393,6 +1436,12 @@ unsafe fn takeover(actor: usize) -> bool {
         Driver { character, anim, held: (true, true), grounded: true, last_state: None, logged: 0, strikes: combat::Strikes::default(), fought: None, last_out: None, growth: menu::Growth::new(), swing: None, swing_frame: 0, on_top: None, drive: Default::default() }
     });
     if FRESH.swap(false, Ordering::Relaxed) {
+        // Out of KH1's move: the jump button as held now, not as KH2 last saw it (`JUMP_HELD_OVER`).
+        match JUMP_HELD_OVER.swap(0, Ordering::Relaxed) {
+            1 => d.held.0 = true,
+            2 => d.held.0 = false,
+            _ => {}
+        }
         // (KH1's own move left its speed in his push (`+0x120`): not carried into KH2's first
         // frames, the user: "it teleports sora forward at the start of the attack" after a KH1
         // spell.)
@@ -1581,6 +1630,17 @@ unsafe fn takeover(actor: usize) -> bool {
     } else {
         false
     };
+    // A jump pressed in KH1's move (`PENDING_JUMP`): KH2's first frame with input jumps, held or
+    // tapped; dropped if KH1 holds him still for longer.
+    let forced_jump = if frozen {
+        let _ = PENDING_JUMP.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
+        false
+    } else {
+        PENDING_JUMP.swap(0, Ordering::Relaxed) > 0
+    };
+    if forced_jump {
+        log("a jump pressed in KH1's move: KH2's jump now");
+    }
     let (stick, jump, action, attack) = if frozen { ([0.0, 0.0], false, false, false) } else { (stick, jump, action, attack || carried_attack) };
     if carried_attack {
         static N: AtomicU32 = AtomicU32::new(0);
@@ -1590,7 +1650,7 @@ unsafe fn takeover(actor: usize) -> bool {
     }
     let input = Input {
         stick,
-        jump: Button { pressed: jump && !d.held.0, held: jump },
+        jump: Button { pressed: jump && !d.held.0 || forced_jump, held: jump },
         attack: Button { pressed: attack, held: attack },
         action: Button { pressed: action && !d.held.1, held: action },
         lock: Button::default(),
@@ -1736,7 +1796,22 @@ unsafe fn takeover(actor: usize) -> bool {
             log(&format!("KH2's first frames after KH1's move: {:?} (motion {}, frame {}), move {:.1?}, KH1's push {:.1?} not carried", out.state, out.motion, out.clip_frame, out.displacement, rd::<[f32; 3]>(actor + 0x120)));
         }
     }
-    let carry = if settings.carry && !fresh_frame { carried(actor, &mut d.logged) } else { [0.0; 3] };
+    let mut carry = if settings.carry && !fresh_frame { carried(actor, &mut d.logged) } else { [0.0; 3] };
+    // (In the air just after one of KH1's moves, KH1's push doesn't lift him: a push KH1's move or
+    // landing left is no platform's, and a jump then went far too high, the user.)
+    if JUMP_WATCH.load(Ordering::Relaxed) > 0 && d.character.airborne() && rd::<u32>(actor + 0x160) & 4 == 0 {
+        carry[1] = 0.0;
+    }
+    // (The first KH2 frames after one of KH1's moves, in the air, logged: the user, KH2's high jump
+    // out of KH1's landing after a KH1 air attack went "way higher than it should".)
+    if JUMP_WATCH.load(Ordering::Relaxed) > 0 {
+        if JUMP_WATCH.fetch_sub(1, Ordering::Relaxed) > 0 && d.character.airborne() {
+            log(&format!(
+                "after KH1's move: {:?} up {:.2} carried {:.2?} push {:.2?} above floor {:.1} y {:.1}",
+                out.state, out.displacement[1], carry, rd::<[f32; 3]>(actor + 0x120), rd::<f32>(actor + 0x3D4), -rd::<f32>(actor + 0x14)
+            ));
+        }
+    }
     if settings.carry {
         wr(actor + 0x90, 0u64);
     }
@@ -2569,7 +2644,8 @@ pub unsafe fn install() {
     // (KH2's footsteps, KH1's dropped while KH2 has him: s229 had them off, the user then:
     // "revert the changes on footsteps".)
     let _ = hook::install(base + STEP_SOUND_RVA, &STEP_SOUND_PROLOGUE, step_sound as *const () as usize, &ORIG_STEP_SOUND, "step sound (KH2's footsteps)");
-    let _ = hook::install(base + PLAYER_STEP_RVA, &PLAYER_STEP_PROLOGUE, player_step as *const () as usize, &ORIG_PLAYER_STEP, "player step (an air spell's landing: KH2's)");
+    // (Off, s241: the air spell's landing is KH1's again, see `takeover`'s hand-off.)
+    // let _ = hook::install(base + PLAYER_STEP_RVA, &PLAYER_STEP_PROLOGUE, player_step as *const () as usize, &ORIG_PLAYER_STEP, "player step (an air spell's landing: KH2's)");
     if hook::install(base + CONTROL_RVA, &CONTROL_PROLOGUE, control as *const () as usize, &ORIG_CONTROL, "player control step").is_some() {
         CONTROL_HOOKED.store(true, Ordering::Relaxed);
     }

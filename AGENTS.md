@@ -2880,3 +2880,21 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   free on the ground runs that, KH1 keeping him while `0xDC` plays; Square standing still stays
   KH2's guard; no ability or deep water, KH2's. Quick Run stays KH2's roll's. Steam map override
   `0x2F5F610:0x2F5EC10` (data).
+
+### 2026-10-19: Stage 241 (air spells' KH2 landing off; jumps out of KH1's moves)
+- The user: "comment out anything related to having kh1 magic animations transition into kh2
+  landing animation ... causes more bugs then fixes anything". s238's player-step hook is no
+  longer installed and the air spell's hand-off at landing is commented out (`cast_landed`
+  false): KH1's air spell lands in KH1's landing, KH2 takes him after it as after KH1's other
+  moves. The code stays for later.
+- After a KH1 air attack (Aerial Base Combo KH1), the user: holding jump through the landing
+  jumped on the first free frame ("buffer a jump, this is unintended"); a direction + jump in
+  KH1's landing gave KH2's run, not a jump; KH2's high jump out of it went "way higher than it
+  should". A jump out of a KH1 move is now only a fresh press made while KH1 has him on the
+  ground (`GROUND_JUMP`; a press in the air, or the button held from it, doesn't count). It is
+  KH2's jump on KH2's first frame that takes input, frozen frames between (`PENDING_JUMP`, up to
+  30): KH2's own "held" memory was stale (the jump KH1's air attack came out of), so a press in
+  the landing read as held. KH2's held state is set from the button at the hand-off
+  (`JUMP_HELD_OVER`). For 40 frames after a KH1 move KH1's push doesn't lift him in the air (not
+  on a platform), and those frames are logged ("after KH1's move: ...") for the high jump, whose
+  cause isn't confirmed.
