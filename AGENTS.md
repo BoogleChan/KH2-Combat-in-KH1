@@ -3316,3 +3316,8 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
     fingers over the edge). It is kept for frames whose bones are ours.
   - Anti's gripping ankle goes `ANKLE_UNDER_EDGE` (6) under it, at the hands' place sideways.
   - Logged with whether KH1's hands came from its pass this frame.
+
+### 2026-10-20: Stage 281 (the Gummi route skip commented out)
+- The user: "comment it out" (the Gummi route skip). `gummi::install` is no longer called, so
+  routes are flown whatever the ini says. The Config menu's Gummi Routes row is commented out
+  (10 rows; `gummi_row` matches none). The code stays.

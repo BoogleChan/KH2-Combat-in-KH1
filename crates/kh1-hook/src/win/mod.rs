@@ -25,6 +25,8 @@ mod model;
 mod pose;
 mod settings;
 mod shortcuts;
+// (The Gummi route skip is commented out for now: its code kept.)
+#[allow(dead_code)]
 mod gummi;
 mod styles;
 mod stylecombo;
@@ -223,7 +225,8 @@ pub unsafe extern "system" fn DllMain(_inst: *mut c_void, reason: u32, _reserved
         camera::install();
         config::install();
         shortcuts::install();
-        gummi::install();
+        // (The Gummi route skip, off for now, the user: "comment it out".)
+        // gummi::install();
         equipmenu::install();
         reflect::install();
         drive::install();

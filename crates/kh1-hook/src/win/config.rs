@@ -70,7 +70,7 @@ const DECOR_RVA: Rva = Rva(0x2F0740);
 /// Our rows: 8 the camera, 9..16 the move styles (8 a page: rows 8..15, 16..) (`styles::Kind::EVERY` in order). Each:
 /// label, left value, right value, help.
 const FIRST_ROW: i32 = 8;
-const ROWS: [[u32; 4]; 11] = [
+const ROWS: [[u32; 4]; 10] = [
     [0x7F00_0001, 0x7F00_0002, 0x7F00_0003, 0x7F00_0004],
     [0x7F00_0101, 0x7F00_0002, 0x7F00_0003, 0x7F00_0102],
     [0x7F00_0103, 0x7F00_0002, 0x7F00_0003, 0x7F00_0104],
@@ -83,7 +83,8 @@ const ROWS: [[u32; 4]; 11] = [
     // (Player Model, off for now, s259, the user: "comment it out for now":)
     // [0x7F00_0117, 0x7F00_0002, 0x7F00_0003, 0x7F00_0118],
     [0x7F00_010F, 0x7F00_0002, 0x7F00_0003, 0x7F00_0110],
-    [0x7F00_0111, 0x7F00_0113, 0x7F00_0114, 0x7F00_0112],
+    // (Gummi Routes, off for now, the user: "comment it out" (the skip):)
+    // [0x7F00_0111, 0x7F00_0113, 0x7F00_0114, 0x7F00_0112],
 ];
 /// The camera row's help line (with the version under it).
 const HELP_ID: u32 = 0x7F00_0004;
@@ -121,7 +122,9 @@ const STRINGS: [(u32, &str); 28] = [
 /// The move style a row switches (`None`: the camera row).
 /// The Gummi Routes row (our last; Vanilla | Skip).
 fn gummi_row(row: i32) -> bool {
-    index(row) == ROWS.len() - 1
+    // (Its row is commented out for now: none is the Gummi row.)
+    let _ = row;
+    false
 }
 
 fn style(row: i32) -> Option<Kind> {
@@ -129,7 +132,7 @@ fn style(row: i32) -> Option<Kind> {
 }
 
 /// Each row's move style (`ROWS` in order; `None`: the camera and Gummi rows).
-const ROW_KINDS: [Option<Kind>; 11] = [
+const ROW_KINDS: [Option<Kind>; 10] = [
     None,
     Some(Kind::GroundCombo),
     Some(Kind::AirCombo),
@@ -141,7 +144,7 @@ const ROW_KINDS: [Option<Kind>; 11] = [
     Some(Kind::MiscAnims),
     // Some(Kind::PlayerModel),
     Some(Kind::BattleQuotes),
-    None,
+    // None, (Gummi Routes, commented out)
 ];
 
 /// A row's value: right (KH2, true) or left (KH1).

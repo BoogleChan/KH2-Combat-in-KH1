@@ -167,7 +167,8 @@ pub struct Settings {
     pub valor_left_blade: bool,
     /// KH2's (true) or KH1's moves per `styles::Kind` (ground combo, air combo, magic, air magic, jump, glide, dodge roll, misc animations, player model, battle quotes).
     pub styles: [bool; 10],
-    /// Skip the Gummi Ship's flights (`gummi = skip`, `gummi.rs`).
+    /// Skip the Gummi Ship's flights (`gummi = skip`, `gummi.rs`; commented out for now).
+    #[allow(dead_code)]
     pub gummi_skip: bool,
 }
 
