@@ -2913,3 +2913,12 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   (ini `battle_quotes`, default from `kh2_voice`, so KH1's), every form; KH2's motion voices all
   load and play by it (`kh2sound::kh2_voice`). Config rows go 8 to a page now: Battle Quotes is
   on a third page (the help line reads it as the second page's row in its place).
+
+### 2026-10-19: Stage 243 (KH1's own jump out of its air attack's landing)
+- The user (s241): after a KH1 air attack, a high jump in its landing still launched him, and with
+  the stick tilted KH2's run took the jump; not after KH1 magic. The log: KH1's state 0 (can't
+  act), then state 1 "can act" on the floor: KH1 jumped him itself (its air attack's landing reads
+  the jump press outside its control step, where it is kept from KH1), KH1's high jump; KH2 then
+  took him rising 25 a frame (`air_free`, its rise carried), or on the stick at state 1 into its
+  run with no jump. Now KH1's take-off out of one of its commands (state 1 on the floor, not the
+  Jump style's) hands him to KH2 at once with KH2's jump (`kh1_took_off`), KH1's air fields reset.

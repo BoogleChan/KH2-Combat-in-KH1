@@ -1123,7 +1123,19 @@ unsafe fn takeover(actor: usize) -> bool {
             GROUND_JUMP.store(true, Ordering::Relaxed);
         }
         let ground_jump = GROUND_JUMP.load(Ordering::Relaxed);
-        let jump = ground_jump && kh1_move_done(base, actor);
+        // KH1 jumped him itself out of its move (its air attack's landing reads the jump press
+        // outside its control step, where the press is kept from it; the user's log: state 0, then
+        // state 1 "can act" on the floor, KH1's high jump, and KH2 took him rising 25 a frame: "sora
+        // still gets launched into the air", or on the stick KH2's run: "overwrites high jump with
+        // KH2 run"). Caught on its first frame, still on the floor: KH1's jump undone, KH2's jump.
+        let kh1_took_off = command && state == 1 && super::stylejump::mode() != super::stylejump::JUMP && above < STEP_DOWN && vel.map_or(true, |(_, up)| up >= -0.5);
+        if kh1_took_off {
+            static N: AtomicU32 = AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 20 {
+                log(&format!("KH1 jumped him out of its move ({above:.1} above the floor): KH2's jump instead"));
+            }
+        }
+        let jump = ground_jump && kh1_move_done(base, actor) || kh1_took_off;
         // Free in KH1's jump or fall (state 1 / 2, KH1 lets him act, not a spell's air cast): its
         // jump or high jump off a frame KH2 should have had (the first frame after an air cast's
         // landing or an item, the user), or the fall after a ledge, a ladder or a pole. KH2 takes
@@ -1283,9 +1295,15 @@ unsafe fn takeover(actor: usize) -> bool {
             log(&format!("KH1's roll: frame {frames}, motion {:#x}, flags {:08x}", rd::<u32>(actor + 0x164), rd::<u32>(actor)));
         }
         let hold_roll = rolling && !roll_attack;
-        if !hold_roll && (frames >= 1 && (cast_landed || roll_attack) || frames >= 2 && air_free || frames >= 10 && (falling || jump || cancel || magic_waits || ground_states && (kh1_moving() || free || square || attack || in_jump && super::stylejump::wanted() && can_act(actor) != 0 || in_roll && super::styleroll::wanted() && can_act(actor) != 0))) {
+        if !hold_roll && (frames >= 1 && (cast_landed || roll_attack || kh1_took_off) || frames >= 2 && air_free || frames >= 10 && (falling || jump || cancel || magic_waits || ground_states && (kh1_moving() || free || square || attack || in_jump && super::stylejump::wanted() && can_act(actor) != 0 || in_roll && super::styleroll::wanted() && can_act(actor) != 0))) {
             let falling = falling || air_free;
             JUMP_NOW.store(jump || ground_jump, Ordering::Relaxed);
+            if kh1_took_off {
+                // (KH1's take-off undone: on the floor, no rise.)
+                wr(actor + 0x3B0, 0.0f32);
+                wr(actor + 0x3B8, 0.0f32);
+                wr(actor + 0x3BC, 0.0f32);
+            }
             // The press is KH2's jump on its first frame that takes input, however long KH1 holds
             // him still first (the user: "hold a direction + jump the jump will be overwritten by
             // the running animation": a stick hand-back in KH1's landing, then frozen frames
