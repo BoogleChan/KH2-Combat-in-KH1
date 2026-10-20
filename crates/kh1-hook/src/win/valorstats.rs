@@ -18,7 +18,10 @@
 //!   back to KH1's own figures, his MP kept within the max.
 //! - **The menus**: KH1's stats function for Sora (the pause menu's copy the Status and
 //!   Equipment pages show, and the party refresh) adds the same while he is Valor
-//!   (`menu::stats` calls `add`).
+//!   (`menu::stats` calls `add`). While Valor's Keyblade is being chosen, KH1's compare box shows
+//!   Valor's figures (his own Keyblade and the slot's -> his own and the hovered one,
+//!   `equipmenu::box_update`, `with_second`), and every other call counts his own Keyblade in
+//!   place of the one KH1's preview put in his weapon byte.
 //!
 //! KH2's hits land through KH1's own contact code, which reads Sora's live Strength, so they
 //! deal the boosted damage too.
@@ -37,6 +40,8 @@ const GAUGE: usize = 0xBE;
 const STRENGTH_CAP: i32 = 100;
 /// The stats block's size (its last field read here is `+0xE4`).
 const STATS_SIZE: usize = 0x200;
+/// Sora's weapon (his save record's `+0x36`).
+const WEAPON: usize = 0x36;
 
 /// Sora's live stats hold a Valor bonus (they're put back once out of Valor).
 static DIRTY: AtomicBool = AtomicBool::new(false);
@@ -76,34 +81,66 @@ pub unsafe fn add(member: i32, out: usize) {
     if member != 0 || out < 0x10000 {
         return;
     }
-    // Choosing Valor's Keyblade: KH1's preview has the hovered one as his weapon, so its stats
-    // came out as that Keyblade's alone in his hand; he keeps his own, so it is added (the stats
-    // shown are Valor's: both). (The user: "when hovering over keyblades in the valor form slots,
-    // it'll cap strength at 70".)
-    if let Some((own, in_byte, hovered)) = super::equipmenu::valor_preview() {
+    // Choosing Valor's Keyblade (the user: "in the main menu, when selecting a secondary keyblade
+    // it doesnt accurately display its stats"). KH1's compare box shows Strength now -> with the
+    // hovered weapon from a what-if (`0x1402E69A0`: the hovered one written in his weapon byte
+    // for one call of this function), and MP now -> now + the hovered one's - the current one's.
+    // s223 / s258 added his own Keyblade and the one under the cursor less the one in his byte to
+    // every call, the byte read as the preview's (it is the what-if's there), and the figures
+    // "now" were his without a second Keyblade out of Valor (the MP's subtracting Valor's). Now
+    // (`equipmenu::box_update`): the box's "now" is Valor's with the slot's Keyblade, its what-if
+    // Valor's with the hovered one; any other call during the pick (the menu's own copy, KH1's
+    // refresh as the list closes) has his own Keyblade in place of the preview's, as he holds it.
+    if let Some(own) = super::equipmenu::pick_own() {
         let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
-        let st = |w: u8| super::equip::weapon_strength(base, w).unwrap_or(0) as i32;
-        let mp = |w: u8| super::equip::weapon_mp(base, w).unwrap_or(0) as i32;
-        // KH1 counted the Keyblade in his byte; the stats shown are Valor's: his own and the
-        // hovered one.
-        let s = st(own) + st(hovered) - st(in_byte);
-        let m = mp(own) + mp(hovered) - mp(in_byte);
-        let before = rd::<i32>(out + STRENGTH);
-        wr(out + STRENGTH, (before + s).clamp(0, STRENGTH_CAP));
-        let max = (rd::<i32>(out + MAX_MP) + m).max(0);
-        wr(out + MAX_MP, max);
-        clamp_mp(out, max);
-        static P: AtomicU32 = AtomicU32::new(0);
-        if P.fetch_add(1, Ordering::Relaxed) < 30 {
-            log(&format!("Valor pick: stats shown with {hovered:#x} in the left hand and his own {own:#x}: Strength {before} + {s} = {}, max MP {max}", rd::<i32>(out + STRENGTH)));
+        let Some(save) = super::menu::save_block(base) else { return };
+        let byte = rd::<u8>(save + WEAPON);
+        if byte != own {
+            wr(save + WEAPON, own);
+            super::menu::kh1_stats(0, out);
+            wr(save + WEAPON, byte);
         }
-        return;
+        if super::equipmenu::comparing() {
+            let before = rd::<i32>(out + STRENGTH);
+            let (s, m) = (super::equip::weapon_strength(base, byte).unwrap_or(0) as i32, super::equip::weapon_mp(base, byte).unwrap_or(0) as i32);
+            wr(out + STRENGTH, (before + s).clamp(0, STRENGTH_CAP));
+            let max = (rd::<i32>(out + MAX_MP) + m).max(0);
+            wr(out + MAX_MP, max);
+            clamp_mp(out, max);
+            static P: AtomicU32 = AtomicU32::new(0);
+            if P.fetch_add(1, Ordering::Relaxed) < 30 {
+                log(&format!("Valor pick: compare box with {byte:#x} in the left hand and his own {own:#x}: Strength {before} {s:+} = {}, max MP {max}", rd::<i32>(out + STRENGTH)));
+            }
+            return;
+        }
     }
     let Some((_, s, m)) = bonus() else { return };
     wr(out + STRENGTH, (rd::<i32>(out + STRENGTH) + s).clamp(0, STRENGTH_CAP));
     let max = (rd::<i32>(out + MAX_MP) + m).max(0);
     wr(out + MAX_MP, max);
     clamp_mp(out, max);
+}
+
+/// Sora's Strength and max MP in Valor with `own` as his weapon and `second` in his left hand,
+/// as `step` makes them: KH1's own figures with `own` in his weapon byte (its stats function,
+/// unhooked, into a block of ours; the byte put back after), plus `second`'s (none: 0).
+pub unsafe fn with_second(own: u8, second: u8) -> Option<(i32, i32)> {
+    let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
+    let save = super::menu::save_block(base)?;
+    #[repr(C, align(16))]
+    struct Block([u8; STATS_SIZE]);
+    let mut b = Block([0; STATS_SIZE]);
+    let at = b.0.as_mut_ptr() as usize;
+    let byte = rd::<u8>(save + WEAPON);
+    wr(save + WEAPON, own);
+    let ok = super::menu::kh1_stats(0, at);
+    wr(save + WEAPON, byte);
+    if !ok {
+        return None;
+    }
+    let s = super::equip::weapon_strength(base, second).unwrap_or(0) as i32;
+    let m = super::equip::weapon_mp(base, second).unwrap_or(0) as i32;
+    Some(((rd::<i32>(at + STRENGTH) + s).clamp(0, STRENGTH_CAP), (rd::<i32>(at + MAX_MP) + m).max(0)))
 }
 
 /// MP and its gauge within `max`, as KH1's stats function keeps them.

@@ -1230,7 +1230,22 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
     }
     let header = rd::<u64>(rd::<u64>(instance) as usize) as usize;
     let Ok(mut g) = SORA.try_lock() else { return };
-    if g.as_ref().map_or(true, |s| s.instance != instance) && !at_sora(instance, param_world) {
+    // Another Sora model while KH1's pause machine is up is the pause menu's copy, wherever it
+    // stands. The menu draws it about the world's origin, so with Sora himself near there it
+    // passed `at_sora`, was taken for him and given KH2's last pose, frozen with the game paused
+    // (the user: "pausing in final form plays sora's Final form idle ... right now its freeze
+    // framed"; the log: the menu's model taken as "Sora's instance", his own taken back on
+    // resume). Left to KH1, as asked: "make sora do his normal KH1 walk in the menu like
+    // vanilla". (His own model, kept, stays ours: nothing of his is reset by the pause.)
+    let other = g.as_ref().map_or(true, |s| s.instance != instance);
+    let in_menu = other && g.is_some() && super::kh2fx::pause_menu_up(BASE.load(Ordering::Relaxed));
+    if in_menu {
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 3 {
+            log(&format!("Sora's model {instance:#x} drawn while KH1's pause machine is up: the pause menu's copy, left to KH1"));
+        }
+    }
+    if in_menu || (other && !at_sora(instance, param_world)) {
         // Another copy of Sora's model away from his actor: the pause menu's (the user: it
         // walked slowly in KH2's walk and showed a frame of KH2's pose). KH1's own animation.
         MENU_SORA.lock().map(|mut m| *m = Some(Instant::now())).ok();

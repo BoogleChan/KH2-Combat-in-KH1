@@ -440,6 +440,12 @@ fn with_spell<R>(h: u32, f: impl FnOnce(&mut Effects, EffectHandle) -> R) -> Opt
 /// models it shows there: our pass, drawn after the world's, landed on top of the menu.
 const PAUSE_STATE_RVA: Rva = Rva(0x232E9B4);
 
+/// KH1's pause machine is up (the pause menu, or a menu opened the same way), read at once: no
+/// wait for Sora's physics frames to stop, as `takeover::paused` has.
+pub(super) fn pause_menu_up(base: usize) -> bool {
+    base != 0 && unsafe { std::ptr::read_unaligned((base + PAUSE_STATE_RVA) as *const i32) } != 0
+}
+
 /// The game is paused or a full-screen menu holds it: KH1's pause machine is up, or Sora has had
 /// no physics frame for a while (`takeover::paused`: any other menu that stops the field).
 pub(super) fn paused(base: usize) -> Option<String> {

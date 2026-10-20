@@ -55,6 +55,11 @@ const SAT_FROM: f32 = 0.55;
 const SAT_SOFT: f32 = 0.15;
 const BLUE: f32 = 225.0;
 const RED: f32 = 0.0;
+/// Final's white (a colour's brightness 0..1 to this range, so its folds still show) and black.
+const WHITE_LO: f32 = 0.5;
+const WHITE_HI: f32 = 0.97;
+const BLACK_LO: f32 = 0.04;
+const BLACK_HI: f32 = 0.2;
 
 /// Regions of `-1c1` (u0, v0, u1, v1; texture fractions), found by plotting the remastered mesh
 /// 1's vertices by bone on the texture (`docs/kh1-tint.md`): the jacket's sleeves (the cream
@@ -64,11 +69,12 @@ const SLEEVES: [[f32; 4]; 2] = [[0.035, 0.415, 0.236, 0.85], [0.236, 0.415, 0.21
 const BELT: [f32; 4] = [0.035, 0.07, 0.57, 0.14];
 const HOOD_LINING: [f32; 4] = [0.755, 0.72, 1.0, 1.0];
 
-/// A form's look (`form`): Wisdom's blue, Valor's red.
+/// A form's look (`form`): Wisdom's blue, Valor's red, Final's white.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Look {
     Wisdom,
     Valor,
+    Final,
 }
 
 /// One recolouring.
@@ -80,12 +86,16 @@ enum Op {
     /// Light, unsaturated texels (white, cream, grey) given hue `to` at saturation `sat`, their
     /// brightness kept; within `rect`.
     Colourize { to: f32, sat: f32, rect: [f32; 4] },
+    /// Saturated texels near hue `from` (as `Shift`) made grey: brightness `lo + (hi - lo) × v`
+    /// (white with its shading kept, or black); within `rect` if given.
+    Grey { from: f32, width: f32, min_v: f32, lo: f32, hi: f32, rect: Option<[f32; 4]> },
 }
 
 /// What each look does to each slot (`SLOTS` order); none: that slot isn't swapped.
 fn ops(look: Look, k: usize) -> Vec<Op> {
     let shift = |from, width, to| Op::Shift { from, width, to, min_v: 0.0, rect: None };
     let shoes = |to| Op::Shift { from: YELLOW_HUE, width: YELLOW_WIDTH, to, min_v: YELLOW_MIN_V, rect: None };
+    let white = |from, width, min_v| Op::Grey { from, width, min_v, lo: WHITE_LO, hi: WHITE_HI, rect: None };
     match (look, k) {
         // Wisdom (the user: "recolor KH1 Sora blue"): the reds and the shoes' yellow blue, and
         // the sleeves blue (the user, s232: "can you make his sleeves blue when in wisdom?").
@@ -105,6 +115,17 @@ fn ops(look: Look, k: usize) -> Vec<Op> {
             v
         }
         (Look::Valor, 2) => vec![shoes(RED)],
+        // Final (the user: "make sora's outfit White, including his shoes. turn his belt black
+        // though"): the reds (jumpsuit, collar), the blues (hood lining, trim) and the shoes'
+        // yellow white, shaded as before; the belt's blue black first (so the white pass leaves
+        // it). The jacket's black trim stays black.
+        (Look::Final, 0) => vec![white(RED, RED_WIDTH, 0.0)],
+        (Look::Final, 1) => vec![
+            Op::Grey { from: BLUE_HUE, width: BLUE_WIDTH, min_v: 0.0, lo: BLACK_LO, hi: BLACK_HI, rect: Some(BELT) },
+            white(RED, RED_WIDTH, 0.0),
+            white(BLUE_HUE, BLUE_WIDTH, 0.0),
+        ],
+        (Look::Final, 2) => vec![white(YELLOW_HUE, YELLOW_WIDTH, YELLOW_MIN_V), white(RED, RED_WIDTH, 0.0), white(BLUE_HUE, BLUE_WIDTH, 0.0)],
         _ => Vec::new(),
     }
 }
@@ -178,6 +199,7 @@ fn apply(p: &mut Pixels, op: Op) -> usize {
     let rect = match op {
         Op::Shift { rect, .. } => rect,
         Op::Colourize { rect, .. } => Some(rect),
+        Op::Grey { rect, .. } => rect,
     };
     let [u0, v0, u1, v1] = rect.unwrap_or([0.0, 0.0, 1.0, 1.0]);
     let (x0, x1) = ((u0 * w as f32) as usize, ((u1 * w as f32).ceil() as usize).min(w));
@@ -195,6 +217,13 @@ fn apply(p: &mut Pixels, op: Op) -> usize {
                     let d = dh.min(360.0 - dh);
                     let k = ((width - d) / RED_SOFT).clamp(0.0, 1.0) * ((s - SAT_FROM) / SAT_SOFT).clamp(0.0, 1.0) * if min_v > 0.0 { ((v - min_v) / 0.08 + 0.5).clamp(0.0, 1.0) } else { 1.0 };
                     (k, rgb(to, s, v))
+                }
+                Op::Grey { from, width, min_v, lo, hi, .. } => {
+                    let dh = (hue - from).rem_euclid(360.0);
+                    let d = dh.min(360.0 - dh);
+                    let k = ((width - d) / RED_SOFT).clamp(0.0, 1.0) * ((s - SAT_FROM) / SAT_SOFT).clamp(0.0, 1.0) * if min_v > 0.0 { ((v - min_v) / 0.08 + 0.5).clamp(0.0, 1.0) } else { 1.0 };
+                    let l = lo + (hi - lo) * v;
+                    (k, (l, l, l))
                 }
                 Op::Colourize { to, sat, .. } => {
                     // Light and grey: not the black trim, not already coloured.
@@ -382,6 +411,7 @@ unsafe fn ours_for(s: &mut Swap, k: usize, src: usize, look: Look) -> Option<u64
     let label: &[u8] = match look {
         Look::Wisdom => b"kh2combat_wisdom_blue\0",
         Look::Valor => b"kh2combat_valor_red\0",
+        Look::Final => b"kh2combat_final_white\0",
     };
     let t = create(r, &desc, p.bgra.as_ptr(), label.as_ptr(), 0);
     if t < 0x10000 {

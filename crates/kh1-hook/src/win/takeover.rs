@@ -337,6 +337,9 @@ struct Driver {
     on_top: Option<f32>,
     /// A Drive Form (`form`): the change, the form, its gauge.
     drive: super::form::Drive,
+    /// The attack windows of the weapon motions shown while jumping, falling and gliding (Final
+    /// Form's Keyblades).
+    motion_hits: kh2_rig::MotionHits,
 }
 
 static DRIVER: Mutex<Option<Driver>> = Mutex::new(None);
@@ -1569,7 +1572,7 @@ unsafe fn takeover(actor: usize) -> bool {
         // KH2 snaps a finished action straight into idle; softened (the user: smoother out of
         // a combo).
         anim.queued_blend = 14.0;
-        Driver { character, anim, held: (true, true), grounded: true, last_state: None, logged: 0, strikes: combat::Strikes::default(), fought: None, last_out: None, growth: menu::Growth::new(), swing: None, swing_frame: 0, on_top: None, drive: Default::default() }
+        Driver { character, anim, held: (true, true), grounded: true, last_state: None, logged: 0, strikes: combat::Strikes::default(), fought: None, last_out: None, growth: menu::Growth::new(), swing: None, swing_frame: 0, on_top: None, drive: Default::default(), motion_hits: Default::default() }
     });
     if FRESH.swap(false, Ordering::Relaxed) {
         // Out of KH1's move: the jump button as held now, not as KH2 last saw it (`JUMP_HELD_OVER`).
@@ -2239,7 +2242,27 @@ unsafe fn takeover(actor: usize) -> bool {
         FLEW.store(false, Ordering::Relaxed);
     }
     let battle_rows = super::form::battle(&d.drive, kh2).clone();
-    d.strikes.strike(actor, &out, &d.anim, &mut d.character, &battle_rows);
+    // KH2's weapon motions hurt as they play, whatever Sora's action: Final Form's Keyblades in its
+    // jump, its fall and its glide (the user: "his keyblades in final form glide and in final form
+    // jump should do damage"; `kh2_rig::MotionHits`: their ATKP rows, powers and re-hit
+    // intervals). The controller runs the jump's push as an action with the same windows: those
+    // are replaced by ours, so a window carried on into the rise stays one swing.
+    let free_hits = matches!(out.state, StateName::Jump | StateName::Air | StateName::Glide);
+    let carried = d.motion_hits.step(&d.anim, &d.character, free_hits);
+    let struck = (!carried.is_empty()).then(|| {
+        let mut o = out.clone();
+        o.hitboxes.retain(|h| !carried.iter().any(|c| c.attack == h.attack && c.weapon == h.weapon));
+        o.hitboxes.extend(carried.iter().copied());
+        o
+    });
+    if !carried.is_empty() {
+        static N: AtomicU32 = AtomicU32::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        if n % 120 == 0 && n < 120 * 20 {
+            log(&format!("KH2's weapon motion {} attacks as it plays ({:?}): {:?}", out.motion, out.state, carried.iter().map(|h| (h.attack, h.weapon)).collect::<Vec<_>>()));
+        }
+    }
+    d.strikes.strike(actor, struck.as_ref().unwrap_or(&out), &d.anim, &mut d.character, &battle_rows);
     // Reflect's script: its cast, barrier, counter and effects.
     super::reflect::after_step(actor, &out, d.character.airborne(), &mut d.strikes, &battle_rows, lock);
     // KH2's own sounds for the effect elements this frame starts. In Wisdom Form a frame

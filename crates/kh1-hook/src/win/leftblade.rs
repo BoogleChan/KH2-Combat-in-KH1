@@ -126,6 +126,16 @@ const SORA_BONES: usize = 293;
 /// KH1 Sora's hands (`pose::HANDS`).
 const RIGHT_HAND: usize = 101;
 const LEFT_HAND: usize = 206;
+/// KH2's Keyblade bone the blade is on (`W_EX010.mdlx`: its mesh and its hit shapes are on bone 2;
+/// bones 0 and 1 place it, 3.. are the keychain). Final Form's weapon motions turn the blade on
+/// this bone, not on the root: the glide's (205..207) spins it six times a loop about its z, the
+/// idle rolls it once a loop (the user: "sora's keyblades dont spin properly during final form
+/// glide"; we followed the root, which the glide holds still beside him).
+const KH2_BLADE: usize = 2;
+/// A KH2 weapon's blade bone (its root if the pose is short).
+fn kh2_blade(weapon: &[Mat4]) -> Option<Mat4> {
+    weapon.get(KH2_BLADE).or(weapon.first()).copied()
+}
 /// Our load buffer (Sora's own weapon slot is 0x40000; twice that to be safe).
 const BUF_SIZE: usize = 0x80000;
 const MENV: u32 = u32::from_le_bytes(*b"MENV");
@@ -560,10 +570,11 @@ static HELD: std::sync::OnceLock<Option<Mat4>> = std::sync::OnceLock::new();
 
 /// Final Form's right Keyblade (`pose`, before the weapon bones are drawn): KH1's weapon bones
 /// (`kh1`, model space) moved from his hand to where KH2's own weapon motion floats it (the
-/// user: Final Form, its Keyblades floating as KH2's). The turn from KH2's held Keyblade root
-/// (base Sora's idle, at his hand) to KH1's grip as drawn is kept, and put on Final's root now;
-/// the left one then follows by the same turn (`note_pose`). `kh2_body`, `kh2_right`: KH2's body
-/// and right Keyblade of the drawn frame (model space); `ratio`: KH1's size against KH2's.
+/// user: Final Form, its Keyblades floating as KH2's). The turn from KH2's held blade (base
+/// Sora's idle, at his hand; its blade bone, `KH2_BLADE`) to KH1's grip as drawn is kept, and put
+/// on Final's blade now, its spin included; the left one then follows by the same turn
+/// (`note_pose`). `kh2_body`, `kh2_right`: KH2's body and right Keyblade of the drawn frame (model
+/// space); `ratio`: KH1's size against KH2's.
 pub fn final_float(kh1: &mut [Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: &[Mat4], ratio: f32) {
     static N: AtomicU32 = AtomicU32::new(0);
     if !super::form::in_final() || kh1.len() < SORA_BONES || kh1_bind.len() < SORA_BONES || kh2_right.is_empty() {
@@ -575,9 +586,9 @@ pub fn final_float(kh1: &mut [Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_r
     let held = *HELD.get_or_init(|| {
         let w = kh2.rig.weapons.first()?;
         let m = w.motions.get(&character_core::motion::IDLE).or_else(|| w.motions.get(&0))?;
-        let root = kh2_anim::evaluate(&w.skeleton, m, 0.0, kh2_anim::Options::default()).bones.first().copied()?;
-        log(&format!("Final Form: base Sora's held Keyblade root at {:.1?} from his hand bone", root.w_axis.truncate()));
-        Some(root)
+        let blade = kh2_blade(&kh2_anim::evaluate(&w.skeleton, m, 0.0, kh2_anim::Options::default()).bones)?;
+        log(&format!("Final Form: base Sora's held Keyblade blade at {:.1?} from his hand bone", blade.w_axis.truncate()));
+        Some(blade)
     });
     let Some(held) = held else { return };
     if kh2_body.len() <= sr {
@@ -591,7 +602,8 @@ pub fn final_float(kh1: &mut [Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_r
     let offset = kh1_bind[RIGHT_HAND].inverse() * scaled(b2[sr], k);
     let held_root = kh1[RIGHT_HAND] * offset * scaled(held, k);
     let turn = held_root.inverse() * kh1[GRIP];
-    let now_root = kh1[RIGHT_HAND] * offset * scaled(kh2_body[sr].inverse() * kh2_right[0], k);
+    let Some(right) = kh2_blade(kh2_right) else { return };
+    let now_root = kh1[RIGHT_HAND] * offset * scaled(kh2_body[sr].inverse() * right, k);
     let grip = now_root * turn;
     if !grip.is_finite() {
         return;
@@ -627,12 +639,16 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
     if let Ok(mut w) = TO_WORLD.try_lock() {
         *w = Some(*to_world);
     }
+    // Which KH2 weapon bone the two are matched by: the root (Valor's, held), or in Final Form the
+    // blade, whose spin its weapon motions carry (the right one was floated by it, `final_float`).
+    let pick = |w: &[Mat4]| if super::form::in_final() { kh2_blade(w) } else { w.first().copied() };
     // KH2's left Keyblade of the step whose body this is (else the latest).
     let Some(left) = KH2_LEFT.try_lock().ok().and_then(|g| {
         let fresh = |t: &Instant| t.elapsed().as_secs_f32() < 0.15;
         let sig = body_sig(kh2_body);
-        g.iter().rev().find(|(r, _, t)| *r == sig && fresh(t)).or_else(|| g.back().filter(|(_, _, t)| fresh(t))).map(|(_, b, _)| b[0])
+        g.iter().rev().find(|(r, _, t)| *r == sig && fresh(t)).or_else(|| g.back().filter(|(_, _, t)| fresh(t))).and_then(|(_, b, _)| pick(b))
     }) else { return };
+    let Some(right) = pick(kh2_right) else { return };
     let Some(rig) = super::pose::kh2().and_then(|k| k.valor.as_ref()).map(|f| f.rig.clone()) else { return };
     let (Some(sr), Some(sl)) = (rig.weapons.first().and_then(|w| w.bone), rig.weapons.get(1).and_then(|w| w.bone)) else {
         log_n(&N, 5, || "the Valor rig has no second weapon bone".into());
@@ -651,7 +667,7 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
     let offset = |kh1_hand: usize, kh2_hand: usize| kh1_bind[kh1_hand].inverse() * scaled(b2[kh2_hand], k);
     // Weapon root relative to its KH2 hand bone now.
     let rel = |kh2_hand: usize, root: Mat4| scaled(kh2_body[kh2_hand].inverse() * root, k);
-    let right_root = kh1[RIGHT_HAND] * offset(RIGHT_HAND, sr) * rel(sr, kh2_right[0]);
+    let right_root = kh1[RIGHT_HAND] * offset(RIGHT_HAND, sr) * rel(sr, right);
     let turn = right_root.inverse() * kh1[GRIP];
     let grip = kh1[LEFT_HAND] * offset(LEFT_HAND, sl) * rel(sl, left) * turn;
     let from_hand = (grip.w_axis - kh1[LEFT_HAND].w_axis).truncate().length();

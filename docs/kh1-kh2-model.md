@@ -82,6 +82,14 @@ reading code, checked against the user's files).
   by KH1's menu animation, `pose`'s `MENU_SORA`). `pose` carries that pose onto KH2's skeleton
   as it stands in KH1's world (no placement of ours), the queue masks the copy's meshes, and the
   world pass draws ours with the camera KH1 has repointed for the menu. Its Keyblade stays KH1's.
+  How the copy is told from Sora: a Sora model other than the field one while KH1's pause
+  machine is up (`0x14232E9B4` non-zero, `kh2fx::pause_menu_up`), or one drawn more than 150
+  units from his actor. The distance alone failed: the menu draws its copy about the world's
+  origin, so with Sora standing within 150 units of it (the user's log, in Final Form) the copy
+  was taken for him, rebuilt as "Sora's instance", given KH2's last pose (frozen: the game is
+  paused) and his own model rebuilt again on resume (the user: "pausing in final form plays
+  sora's Final form idle ... freeze framed"). (high: the log; the origin from the distances
+  logged against his position, medium.)
 - **The draw**: each time KH1's Sora is held back, the draw is prepared there and then (models,
   pose, placement), and the world-model pass (`kh2fx`'s hook, before the effects) mirrors the
   latest queue: ours is drawn on every pass whose last queue of that Sora was held back (a pass

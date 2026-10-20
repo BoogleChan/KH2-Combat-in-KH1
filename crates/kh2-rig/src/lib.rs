@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use character_core::npc::{NpcOutput, NpcState};
-use character_core::{motion, Character, Clip, Output, StateName};
+use character_core::{motion, ActiveHitbox, Character, Clip, Output, StateName};
 use combat_core::{Shape as CShape, ShapeKind};
 use glam::{Mat4, Quat, Vec3};
 use kh2_anim::{evaluate, key_time, Options};
@@ -472,6 +472,94 @@ impl RigAnim {
             Anchor::Offset(i, v) => bones.get(i)?.transform_point3(v),
         };
         Some(self.to_world.transform_point3(p))
+    }
+}
+
+/// Marks the swing ids [`MotionHits`] hands out (the controller's are small counters).
+pub const MOTION_SWING: u64 = 1 << 62;
+
+/// The weapons' attack windows of the motion a rig shows, for moves the controller doesn't run as
+/// actions (jumping on after the jump's push, falling, gliding). KH2's weapon motions carry their
+/// own attack triggers, live whatever the player's action: Final Form's Keyblades hurt through
+/// its jump (`W_EX010_ULTF_R/_L` motion 3: ATKP 1273/1274 frames 2..12, then 1286/1287), fall
+/// (4: 1275/1276, frames 2..20) and glide (205..207: 1281/1282 all through, re-hitting every 30
+/// frames). Guard windows (the glide's hover, 208) are left out.
+#[derive(Clone, Debug, Default)]
+pub struct MotionHits {
+    /// Windows open last frame: (attack, group, weapon) and their swing id.
+    open: Vec<((u16, u8, u8), u64)>,
+    runs: u64,
+}
+
+impl MotionHits {
+    /// This frame's, from the clip `anim` shows at its frame (its field variant has none of its
+    /// own). `on`: the host's say whether the controller leaves the motion's windows to us (else
+    /// everything closes).
+    pub fn step(&mut self, anim: &RigAnim, character: &Character, on: bool) -> Vec<ActiveHitbox> {
+        let playing = anim.playing().filter(|p| on && !p.1);
+        let clip = playing.and_then(|p| character.moveset.clips.get(&p.0));
+        self.step_at(clip, playing.map_or(0.0, |p| p.2))
+    }
+
+    /// As [`MotionHits::step`], from a clip and its frame (`None`: nothing open). A window open
+    /// from one frame to the next keeps its swing id, the same attack across motions too (the
+    /// glide and its banked turns share 1281/1282), so a foe is hit once a window, or again
+    /// after its row's re-hit interval; one that closes and opens again is a new swing.
+    pub fn step_at(&mut self, clip: Option<&Clip>, frame: f32) -> Vec<ActiveHitbox> {
+        let f = frame.max(0.0) as u32;
+        let mut now: Vec<((u16, u8, u8), u64)> = Vec::new();
+        for w in clip.map_or(&[][..], |c| c.windows.as_slice()).iter().filter(|w| w.contains(f)) {
+            let character_core::WindowKind::Hitbox { attack, group, weapon, .. } = w.kind else { continue };
+            let key = (attack, group, weapon);
+            if weapon == 0 || now.iter().any(|(k, _)| *k == key) {
+                continue;
+            }
+            let id = match self.open.iter().find(|(k, _)| *k == key) {
+                Some(&(_, id)) => id,
+                None => {
+                    self.runs += 1;
+                    MOTION_SWING | self.runs
+                }
+            };
+            now.push((key, id));
+        }
+        self.open = now;
+        self.open.iter().map(|&((attack, group, weapon), swing)| ActiveHitbox { swing, attack, group, weapon }).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use character_core::{Window, WindowKind};
+
+    fn clip(motion: u16, windows: &[(u32, Option<u32>, u16, u8)]) -> Clip {
+        let windows = windows.iter().map(|&(start, end, attack, weapon)| Window { start, end, kind: WindowKind::Hitbox { attack, group: 2, combo: None, weapon } }).collect();
+        Clip { motion, length: 60, root: Vec::new(), windows, events: Vec::new() }
+    }
+
+    #[test]
+    fn motion_hits_keep_their_swing_while_open() {
+        let glide = clip(205, &[(0, None, 1281, 1), (0, None, 1282, 2)]);
+        let turn = clip(206, &[(0, None, 1281, 1), (0, None, 1282, 2)]);
+        let jump = clip(3, &[(2, Some(12), 1273, 1), (12, None, 1286, 1), (0, None, 9, 0)]);
+        let mut h = MotionHits::default();
+        let a = h.step_at(Some(&glide), 0.0);
+        assert_eq!(a.len(), 2);
+        assert!(a.iter().all(|x| x.swing & MOTION_SWING != 0));
+        // The banked turn: the same attacks, the same swings.
+        let b = h.step_at(Some(&turn), 0.0);
+        assert_eq!(a, b);
+        // Closed, then open again: new swings.
+        assert!(h.step_at(None, 0.0).is_empty());
+        let c = h.step_at(Some(&glide), 5.0);
+        assert!(c.iter().all(|x| !a.iter().any(|y| y.swing == x.swing)));
+        // The jump: its first window, then the next; the body's own (weapon 0) left out.
+        assert!(h.step_at(Some(&jump), 1.0).is_empty());
+        let j = h.step_at(Some(&jump), 2.0);
+        assert_eq!(j.iter().map(|x| x.attack).collect::<Vec<_>>(), vec![1273]);
+        assert_eq!(h.step_at(Some(&jump), 11.0), j);
+        assert_eq!(h.step_at(Some(&jump), 12.0).iter().map(|x| x.attack).collect::<Vec<_>>(), vec![1286]);
     }
 }
 

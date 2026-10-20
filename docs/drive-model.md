@@ -108,6 +108,43 @@ Wisdom's attacks have no hitbox windows. Their motions fire frame trigger 1 with
 - **How we run it.** `kh2-magic` runs this script like a spell (`Magic::object_effect`). One
   trap was added for it: `obj_effect_start`.
 
+## Final Form's floating Keyblades (Checked, Data)
+
+The user: "sora's keyblades dont spin properly during final form glide. also his keyblades in
+final form glide and in final form jump should do damage".
+
+- **Where the spin is.** KH2's Keyblade model (`W_EX010.mdlx`) has its blade on bone 2: the mesh
+  and every hit shape are there. Bones 0 and 1 place it; 3 and on are the keychain. Final's
+  weapon motions spin bone 2, not the root:
+  - glide (205..207): bone 2 turns about its z by −12π over the 60-frame loop (6 turns), while
+    the root holds the Keyblade still beside him;
+  - idle (0): bone 2 rolls once about its x over 160 frames.
+- **Why ours didn't spin.** `leftblade::final_float` and `note_pose` moved KH1's Keyblades by
+  KH2's weapon root only, so the blade's own turn was lost. They now follow bone 2
+  (`KH2_BLADE`), matched against bone 2 of base Sora's held idle. Bone 2 is not animated in the
+  other motions, so those look as before. Valor still follows the root.
+- **The attacks.** Final's weapon motions carry their own attack triggers (range trigger 10,
+  group 2 on bone 2, three spheres of radius 60):
+
+  | Motion | Right / left ATKP | Frames | Power | Re-hit interval |
+  |---|---|---|---|---|
+  | Jump (3) | 1273 / 1274 | 2..12 | 20 | none (once) |
+  | Jump (3) | 1286 / 1287 | 12..end | 10 | 10 |
+  | Fall (4) | 1275 / 1276 | 2..20 | 20 | none |
+  | Land (5) | 1277 / 1278 | 0..20 | 20 | none |
+  | Glide (205..207) | 1281 / 1282 | all | 100 | 30 |
+  | Hover (208) | 162 (a guard, kind 2) | 1..end | 0 | — |
+
+  KH2's weapon object plays its motion whatever Sora's action, so these hurt in the jump's rise,
+  the fall and the glide. Our controller runs windows only for actions (the jump's push, the
+  landing). `kh2_rig::MotionHits` reads the windows of the clip the rig shows at its frame
+  (weapons only, attacks only) while KH2 has him jumping, in the air or gliding. `takeover`
+  hands them to `combat::Strikes` with the controller's own, replacing the jump action's copies.
+  A window open from frame to frame keeps its swing id, across the glide's banked turns too. So
+  a foe is hit once per window, or again after the row's interval. They land through KH1's
+  contact code with the row's power, as the swings do. The hover's guard is not modelled.
+  No other form has attack windows in these motions.
+
 ## Not modelled
 
 - Form keyblade stats (forms deal Sora's base damage).

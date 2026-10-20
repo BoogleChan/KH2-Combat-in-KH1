@@ -278,6 +278,31 @@ The plan above, with these changes once the code was read closer:
     with the list closed, two things use it instead of the preview's byte: the Valor slot
     isn't re-decided (`valor::keyblade` would see the previewed Keyblade as equipped), and
     the fill counts free Keyblades with his own weapon.
+- **The compare box during a Valor pick** (the user: "when selecting a secondary keyblade it
+  doesnt accurately display its stats"; high, read in `0x140302C90` / `0x140303DEB`). KH1's
+  box (def `0x140548FC0`, update `0x140302C90`; Steam `0x1405482E0` / `0x1403050D0`) shows:
+  the current item (`0x142E9AA5C`) and the hovered one (the box's `+0x48`, set by the list's
+  update each frame) with their weapon Strength; **Strength** "now" = the box's `+0x4C` ->
+  `0x1402E69A0 (member, hovered)` (the what-if, the box's only stats call); **MP** "now" = the
+  box's `+0x50` -> `+0x50` + the hovered weapon's MP − the current one's, at least 0. `+0x4C`
+  and `+0x50` are copied from the menu's stats copy (`0x142E94BC0 + member × 0x100`, `+0x4C`
+  and `+0x48`) once, as the list opens. The preview's load (and so Sora's weapon byte) plays no
+  part in these figures; it only changes what a refresh (`0x1402E5A80`: the confirm, the list's
+  close) puts in the menu's copy.
+  - s223 / s258 added "his own + the hovered − the byte's" to every stats call during the pick:
+    right for the what-if (the byte is the hovered one there) as long as the hover noted
+    matched the box's, but the "now" figures stayed Sora's stats as they are (no second
+    Keyblade out of Valor, Final Form's Kingdom Key in Final), so the slot's own Keyblade showed
+    a gain and the MP row took off a Keyblade the "now" figure never had; a refresh during the
+    pick (the confirm, the close) put his own + the last hovered in the menu's copy out of
+    Valor too.
+  - Now (`equipmenu::box_update`, `valorstats::add` / `with_second`): the box's update is ours
+    during a Valor pick: `+0x4C` / `+0x50` are Valor's figures with his own Keyblade and the
+    slot's (KH1's stats for his own equipment + the slot Keyblade's row, Strength ≤ 100, max MP
+    ≥ 0, as `valorstats::step`), and while KH1's update runs the what-if comes out as his own
+    Keyblade + the hovered one. Any other stats call while the pick's guard holds is KH1's with
+    his own weapon in the byte (then Valor's or Final's bonus as usual). The pick is stored
+    before the confirm's refresh.
 - **Label**: "V: " + KH1's name codes for the item (short, to fit the `0xA6` px row), only while
   our slots / page wrappers run, only for the Valor Keyblade's id on Sora's page.
 - **Help**: for Sora in state 1 KH1's help runs with the scroll at 0 and the cursor at the row

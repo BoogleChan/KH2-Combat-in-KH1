@@ -559,7 +559,7 @@ pub unsafe fn after_step(d: &mut Drive, actor: usize, battle: bool) {
         d.form.as_ref().and_then(|f| match f.kind {
             Kind::Wisdom => Some(super::tint::Look::Wisdom),
             Kind::Valor => Some(super::tint::Look::Valor),
-            Kind::Final => None,
+            Kind::Final => Some(super::tint::Look::Final),
         }),
     );
     // Valor's second Keyblade's Strength and MP (and back to Sora's own after).

@@ -28,7 +28,7 @@
 
 use super::addr::Rva;
 use super::{equip, hook, log};
-use std::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 
 // Window definitions (their first qword is the update function).
 const SLOTS_DEF: Rva = Rva(0x5491A0);
@@ -41,6 +41,13 @@ const LIST_DEF: Rva = Rva(0x549140);
 const LIST_UPDATE: Rva = Rva(0x303090);
 const PAGE_DEF: Rva = Rva(0x549200);
 const PAGE_UPDATE: Rva = Rva(0x304360);
+/// The weapon compare box (Strength and MP, now -> with the hovered weapon).
+const BOX_DEF: Rva = Rva(0x548FC0);
+const BOX_UPDATE: Rva = Rva(0x302C90);
+/// The compare box's figures "now": Strength and max MP (ints, from the menu's stats copy as
+/// the list opens, `0x140303DFD`).
+const BOX_STRENGTH: usize = 0x4C;
+const BOX_MAX_MP: usize = 0x50;
 
 /// `imul r12, rsi, 0x74; add r12, rdx` in the slots update, and where it goes on.
 const R12_SITE: Rva = Rva(0x303C15);
@@ -97,6 +104,9 @@ static ORIG_MEMBERS: AtomicUsize = AtomicUsize::new(0);
 static ORIG_HELP: AtomicUsize = AtomicUsize::new(0);
 static ORIG_LIST: AtomicUsize = AtomicUsize::new(0);
 static ORIG_PAGE: AtomicUsize = AtomicUsize::new(0);
+static ORIG_BOX: AtomicUsize = AtomicUsize::new(0);
+/// While KH1's compare box update runs during a Valor pick (its stats call is the what-if).
+static COMPARING: AtomicBool = AtomicBool::new(false);
 static ORIG_FILL: AtomicUsize = AtomicUsize::new(0);
 /// Our memory near the game: the stubs, their cells and the shadow record.
 static MEM: AtomicUsize = AtomicUsize::new(0);
@@ -204,7 +214,7 @@ pub unsafe fn install() {
     let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
     BASE.store(base, Ordering::Relaxed);
     // Everything checked before anything changes.
-    let defs = [(SLOTS_DEF, SLOTS_UPDATE), (MEMBERS_DEF, MEMBERS_UPDATE), (HELP_DEF, HELP_UPDATE), (LIST_DEF, LIST_UPDATE), (PAGE_DEF, PAGE_UPDATE)];
+    let defs = [(SLOTS_DEF, SLOTS_UPDATE), (MEMBERS_DEF, MEMBERS_UPDATE), (HELP_DEF, HELP_UPDATE), (LIST_DEF, LIST_UPDATE), (PAGE_DEF, PAGE_UPDATE), (BOX_DEF, BOX_UPDATE)];
     for (def, f) in defs {
         let have = rd::<u64>(base + def) as usize;
         if have != base + f {
@@ -251,15 +261,17 @@ pub unsafe fn install() {
     ORIG_HELP.store(base + HELP_UPDATE, Ordering::Release);
     ORIG_LIST.store(base + LIST_UPDATE, Ordering::Release);
     ORIG_PAGE.store(base + PAGE_UPDATE, Ordering::Release);
+    ORIG_BOX.store(base + BOX_UPDATE, Ordering::Release);
     if hook::install(base + FILL_FN, &FILL_PROLOGUE, fill as *const () as usize, &ORIG_FILL, "Equipment weapon list fill").is_none() {
         return;
     }
-    let ours: [(Rva, Rva, usize); 5] = [
+    let ours: [(Rva, Rva, usize); 6] = [
         (SLOTS_DEF, SLOTS_UPDATE, slots_update as *const () as usize),
         (MEMBERS_DEF, MEMBERS_UPDATE, members_update as *const () as usize),
         (HELP_DEF, HELP_UPDATE, help_update as *const () as usize),
         (LIST_DEF, LIST_UPDATE, list_update as *const () as usize),
         (PAGE_DEF, PAGE_UPDATE, page_update as *const () as usize),
+        (BOX_DEF, BOX_UPDATE, box_update as *const () as usize),
     ];
     let mut ok = true;
     for (def, f, w) in ours {
@@ -288,23 +300,18 @@ unsafe fn sora_in(save: usize, slot: i32) -> bool {
     (0..4).contains(&slot) && rd::<u8>(save + SAVE_PARTY + slot as usize) == 0
 }
 
-/// During a Valor pick whose preview has put another Keyblade in Sora's weapon byte: (his own
-/// weapon, the hovered one). For the stats shown then (`valorstats::add`).
-pub unsafe fn valor_preview() -> Option<(u8, u8, u8)> {
+/// Sora's own weapon while a Valor pick's preview may hold another in his weapon byte (from the
+/// list's opening until his byte is his own again with the list closed), for the stats
+/// (`valorstats::add`).
+pub fn pick_own() -> Option<u8> {
     let own = PICK_WEAPON.load(Ordering::Relaxed) as u8;
-    if own == 0 {
-        return None;
-    }
-    let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
-    let save = super::menu::save_block(base)?;
-    let now = rd::<u8>(save + WEAPON);
-    // (Sora's own, the one KH1's preview has in his byte (a hover behind, or still his own), and
-    // the one under the cursor: s223 took the byte for the hovered one and did nothing when it
-    // was his own, the stats then his with his own Keyblade alone, the user: "the strength cap
-    // is at 70 again".)
-    let hovered = LOGGED_HOVER.load(Ordering::Relaxed);
-    let hovered = if (1..=255).contains(&hovered) { hovered as u8 } else { now };
-    (now != 0).then_some((own, now, hovered))
+    (own != 0).then_some(own)
+}
+
+/// KH1's compare box is working out its figures for a Valor pick: a stats call now is its
+/// what-if, the weapon in Sora's byte the hovered one (`0x1402E69A0`).
+pub fn comparing() -> bool {
+    COMPARING.load(Ordering::Relaxed)
 }
 
 /// Sora's own weapon while a Valor pick's preview may hold another in his weapon byte; the
@@ -575,8 +582,6 @@ unsafe extern "system" fn list_update(win: usize) {
         // preview's) is left for KH1's restore to swap back as the list closes.
         wr(chosen_at, chosen);
         wr(save + WEAPON, weapon);
-        let refresh: unsafe extern "system" fn() = std::mem::transmute(base() + REFRESH_FN);
-        refresh();
         wr(m + CELL_PICK, 0u8);
         if (1..=255).contains(&picked) && equip::valor_candidates(base()).contains(&(picked as u8)) {
             wr(save + equip::VALOR_OFF, picked as u8);
@@ -588,8 +593,42 @@ unsafe extern "system" fn list_update(win: usize) {
         } else {
             log(&format!("Equipment: Valor pick {picked:#x} isn't a free Keyblade: not stored (Sora keeps {weapon:#04x})"));
         }
+        // (The stats refreshed once the pick is stored: in Valor they count the new one.)
+        let refresh: unsafe extern "system" fn() = std::mem::transmute(base() + REFRESH_FN);
+        refresh();
         pick_guard(save);
     }
+}
+
+/// The weapon compare box (`0x140302C90`) during a Valor pick. KH1 draws Strength "now" ->
+/// with the hovered weapon (a what-if, `0x1402E69A0`) and MP "now" -> "now" + the hovered
+/// weapon's - the current one's (`0x142E9AA5C`, the Valor Keyblade here), its "now" figures
+/// taken from the menu's stats copy as the list opens: Sora's stats as they are, without a
+/// second Keyblade out of Valor (or with Final Form's Kingdom Key). For the pick they are Valor's:
+/// "now" his own Keyblade and the slot's, the what-if his own and the hovered one
+/// (`valorstats::add` while `COMPARING`), so the slot's own Keyblade shows no change and the
+/// figures follow the cursor however fast it moves (the preview's load, a hover behind, plays
+/// no part).
+unsafe extern "system" fn box_update(win: usize) {
+    let f: unsafe extern "system" fn(usize) = std::mem::transmute(ORIG_BOX.load(Ordering::Acquire));
+    let m = mem();
+    let own = PICK_WEAPON.load(Ordering::Relaxed) as u8;
+    if m == 0 || rd::<u8>(m + CELL_PICK) == 0 || own == 0 || win < 0x10000 || !super::crash::readable(win + BOX_MAX_MP + 4) {
+        return f(win);
+    }
+    let current = g::<i32>(CURRENT);
+    let second = if (1..=255).contains(&current) { current as u8 } else { 0 };
+    if let Some((s, mp)) = super::valorstats::with_second(own, second) {
+        let was = (rd::<i32>(win + BOX_STRENGTH), rd::<i32>(win + BOX_MAX_MP));
+        wr(win + BOX_STRENGTH, s);
+        wr(win + BOX_MAX_MP, mp);
+        if was != (s, mp) {
+            log(&format!("Equipment: Valor pick's compare box: now Strength {s}, max MP {mp} (his own {own:#04x}, Valor's {second:#04x}; KH1's {} / {})", was.0, was.1));
+        }
+    }
+    COMPARING.store(true, Ordering::Relaxed);
+    f(win);
+    COMPARING.store(false, Ordering::Relaxed);
 }
 
 /// The name of a row's item (`0x140304F30`): "V: " and the Keyblade's name on the Valor row

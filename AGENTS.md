@@ -3096,3 +3096,30 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   rebuilt on the forward retarget's body parts (limb directions and knee / elbow roll from KH1's
   joint positions, torso turns blended, KH2's own rest for hair / face / hood / cloth). The
   option stays commented out (s259) until the user turns it back on.
+
+### 2026-10-20: Stage 262 (Final Form's look and Keyblades, pause menu, the second Keyblade's stats)
+- Stage 261 is the testing branch's (shared states); main goes on from 260.
+- Final Form's look (`tint::Look::Final`). The user: "make sora's outfit White, including his
+  shoes. turn his belt black though". The jumpsuit and collar reds, the blue trim and hood
+  lining, and the shoes' yellow are now white with their shading kept. The belt's blue is black.
+  The jacket's black trim is unchanged.
+- Final Form's Keyblades (helper). The user: "dont spin properly during final form glide ...
+  in final form glide and in final form jump should do damage".
+  - KH2's blade is bone 2 of its weapon model. Final's glide spins that bone while the root
+    holds still, and the floating blades now follow it (`leftblade::kh2_blade`).
+  - The weapon motions' own attack windows are now read while he jumps, falls and glides
+    (`kh2_rig::MotionHits`), and they hit enemies with their ATKP rows. Glide is power 100,
+    re-hitting every 30 frames; jump and fall are 10..20. Details in `docs/drive-model.md`.
+- The pause menu's Sora (helper). The user: "pausing in final form plays sora's Final form idle
+  ... freeze framed". Any Sora model other than the field one, drawn while KH1's pause machine
+  is up, is now the menu's copy and is left to KH1's own menu animation
+  (`kh2fx::pause_menu_up`). Before, a copy drawn within 150 units of him was taken for him and
+  given KH2's frozen pose.
+- The second Keyblade's stats (helper). The user: "when selecting a secondary keyblade it doesnt
+  accurately display its stats". KH1's weapon compare box (`0x140302C90`, hooked) now shows,
+  during a Valor pick:
+  - his Valor figures with the slot's Keyblade as "now";
+  - his own Keyblade plus the hovered one as "new".
+
+  The pick is now stored before the confirm's stats refresh (`docs/kh1-equipment.md`).
+- Nothing tested in game.
