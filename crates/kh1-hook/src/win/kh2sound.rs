@@ -101,6 +101,10 @@ pub fn start() {
             .filter(|(m, _)| moves && allowed(**m) || super::form::own_motion(**m))
             .flat_map(|(_, c)| c.events.iter().map(|e| e.kind))
             .collect();
+        // Every move's battle voice (the Battle Quotes row switches them in game, on every move:
+        // the user, "when switching to KH2 battle quotes, there are no KH2 battle quotes": only
+        // the `kh2_sounds` list's moves had any).
+        events.extend(kh2.character.moveset.clips.values().flat_map(|c| c.events.iter().map(|e| e.kind)).filter(|k| matches!(k, character_core::EventKind::Voice(_))));
         // Valor Form's own: its Keyblades' swings (frame trigger 8 on its weapon motion sets) and
         // its voices; its effect elements' sounds come with the forms' below (the user: "make
         // sure also that valor form has its proper sound FX").
@@ -264,7 +268,9 @@ fn vtbl(bar: &[u8]) -> Vec<(u8, u8, Vec<i8>)> {
 
 /// Whether KH2's own sounds stand in for KH1's (its swing voice) on `motion`.
 pub fn covers(motion: u16) -> bool {
-    kh2_voice() && allowed(motion) && LOADED.try_lock().map_or(false, |g| g.is_some())
+    // (Every move with KH2's quotes on: KH1's swing grunts don't mix with KH2's lines.)
+    let _ = motion;
+    kh2_voice() && LOADED.try_lock().map_or(false, |g| g.is_some())
 }
 
 /// Sora's `motion` reached a KH2 event: its sound, if it has one.
@@ -272,7 +278,9 @@ pub unsafe fn event(motion: u16, kind: character_core::EventKind) {
     use character_core::EventKind;
     // (Valor's swings and voices are its own, whatever `kh2_sounds` lists: `start`.)
     let valor = (super::form::in_valor() || super::form::in_final()) && matches!(kind, EventKind::Sound(_) | EventKind::Voice(_));
-    if !(allowed(motion) || super::form::own_motion(motion) || valor) {
+    // (Battle quotes on every move, `kh2_voice`.)
+    let quote = matches!(kind, EventKind::Voice(_)) && kh2_voice();
+    if !(allowed(motion) || super::form::own_motion(motion) || valor || quote) {
         return;
     }
     let Ok(g) = LOADED.try_lock() else { return };
@@ -446,3 +454,4 @@ pub unsafe fn tick() {
 pub fn kh2_voice() -> bool {
     super::styles::kh2(super::styles::Kind::BattleQuotes)
 }
+

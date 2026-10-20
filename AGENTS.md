@@ -2945,3 +2945,15 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - Drive in KH1's own combo: "unable to select drive (it is blacked out)". The cut window
   (`KH1_WINDOW`) is open all through a KH1 combo for a Drive (KH2 takes him to change); its Attack
   stays KH1's (`combat::run_entry`).
+
+### 2026-10-20: Stage 246 (KH2 Thunder's sounds; KH2 battle quotes on every move)
+- "KH2 thunder doesnt have any sound FX": the PC log, "KH2 sound 126: scd: no stream for sound
+  205". se000's stream table holds 215 streams (`0x34`); the reader took `0x32` (152), so
+  Thunder's (126 / 127 / 128 / 148 on entries 205..208) had none. `kh2_formats::scd` reads the
+  larger. (Seen meanwhile: the "entries" table read with `0x30`'s 314 runs into the stream table
+  past 152, so Reflect's 138 / 139 / 176 (entries 180..184) play streams 28..32 through it, not
+  streams 180..184; left as is, the user has heard them since s178.)
+- "when switching to KH2 battle quotes, there are no KH2 battle quotes": only the `kh2_sounds`
+  list's moves (ability moves by default) had voices loaded and played. Every move's voices load,
+  and play on any move with Battle Quotes at KH2; KH1's swing voice stands down for every move
+  then.

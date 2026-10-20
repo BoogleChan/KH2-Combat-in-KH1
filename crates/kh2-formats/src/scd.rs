@@ -86,7 +86,11 @@ impl<'a> Scd<'a> {
         let (o_entries, o_streams) = (u32_at(data, 0x38)? as usize, u32_at(data, 0x3C)? as usize);
         let table = |o: usize, n: usize| -> Result<Vec<usize>> { (0..n).map(|i| Ok(u32_at(data, o + i * 4)? as usize)).collect() };
         let entries = table(o_entries, n_entries)?;
-        let streams = table(o_streams, n_streams)?;
+        // (The stream table's own count is `0x34`: se000 has 152 at `0x32` and 215 streams, and
+        // Thunder's sounds, entries 205..208, were past the 152 read: "no stream for sound 205",
+        // the user, "KH2 thunder doesnt have any sound FX".)
+        let n_streams = n_streams.max(u16_at(data, 0x34).unwrap_or(0) as usize);
+        let streams = table(o_streams, n_streams).or_else(|_| table(o_streams, u16_at(data, 0x32)? as usize))?;
         // The id records (see the module notes).
         let n_ids = n_entries;
         let mut ids = Vec::new();
