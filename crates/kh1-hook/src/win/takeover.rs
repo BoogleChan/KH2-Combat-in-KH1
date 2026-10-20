@@ -931,9 +931,15 @@ fn release(why: &str) {
         if let Some(dr) = d.as_mut() {
             // Also a new reason while KH1 already has him (the user, s155: after a spell's
             // handoff KH1's fall played on and the log never said why KH2 didn't take him).
-            if dr.logged < 400 && (dr.last_state.is_some() || changed) {
-                dr.logged += 1;
-                log(&format!("KH1 has Sora ({why})"));
+            // (A new reason always (at most 4 a second): past the 400 lines the log never said why
+            // KH1 kept him, the user: KH1's animations from a boss's end on.)
+            if dr.last_state.is_some() || changed {
+                static LAST_MS: AtomicU64 = AtomicU64::new(0);
+                let now = now_ms();
+                if changed && now.saturating_sub(LAST_MS.swap(now, Ordering::Relaxed)) >= 250 || dr.logged < 400 {
+                    dr.logged = dr.logged.saturating_add(1);
+                    log(&format!("KH1 has Sora ({why})"));
+                }
             }
             if dr.last_state.is_some() {
                 // When KH2 has him again, its controller starts over (standing): whatever KH1
@@ -969,6 +975,33 @@ static ROOM: Mutex<Option<RoomSeen>> = Mutex::new(None);
 /// a room; a friend's rooms "broke the mod"), and 3 s later who had Sora meanwhile: KH2 for how
 /// much of it, and if KH1 has him, why.
 unsafe fn room_watch(actor: usize, kh2: bool) {
+    // KH1 keeping him a long while (not in one of its moves for us): every 10 s, why, and his
+    // state (the user: KH1's animations from a boss's end on, no reason in the log).
+    {
+        static SINCE: AtomicU64 = AtomicU64::new(0);
+        static LAST: AtomicU64 = AtomicU64::new(0);
+        let now = now_ms();
+        if kh2 || HANDOFF.load(Ordering::Relaxed) {
+            SINCE.store(0, Ordering::Relaxed);
+        } else if SINCE.load(Ordering::Relaxed) == 0 {
+            SINCE.store(now, Ordering::Relaxed);
+        } else if now.saturating_sub(SINCE.load(Ordering::Relaxed)) > 5000 && now.saturating_sub(LAST.load(Ordering::Relaxed)) > 10000 {
+            LAST.store(now, Ordering::Relaxed);
+            let base = BASE.load(Ordering::Relaxed);
+            let why = LAST_WHY.try_lock().map(|w| w.clone()).unwrap_or_default();
+            log(&format!(
+                "KH1 has had Sora {:.0} s: {why}; KH1 state {}, slot {:?}, flags {:08x}, event {:#x}, script {:#x}, body seen {}, ON {}",
+                now.saturating_sub(SINCE.load(Ordering::Relaxed)) as f32 / 1000.0,
+                rd::<i32>(actor + 0x70),
+                pose::sora_slot(),
+                rd::<u32>(actor),
+                rd::<u32>(base + EVENT_RVA),
+                rd::<u32>(actor + 0x440),
+                pose::sora_body_seen(500),
+                ON.load(Ordering::Relaxed)
+            ));
+        }
+    }
     let base = BASE.load(Ordering::Relaxed);
     let (world, room) = (rd::<u32>(base + WORLD_RVA), rd::<u32>(base + ROOM_RVA));
     let Ok(mut seen) = ROOM.try_lock() else { return };

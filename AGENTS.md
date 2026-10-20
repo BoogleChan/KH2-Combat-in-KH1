@@ -3022,3 +3022,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   before Battle Quotes. At KH2, KH1's item use is drawn with KH2's motion 9 (P_EX100 A110, picked
   by its shape: the hand overhead at 20-30, a voice at 0; unconfirmed it is KH2's item use);
   KH1 still runs the item. Not mapped: summons, examining, picking up.
+
+### 2026-10-20: Stage 253 (why KH1 keeps him: logged)
+- The user: "it reverted me to KH1 Animations right after i defeated the card tower" (Wonderland,
+  the PC's s249 log). After the boss's scene the log says nothing of who had Sora: "KH1 has
+  Sora (why)" stopped at 400 lines (shared with the status lines) long before. A new reason is
+  now always logged (at most 4 a second), and while KH1 keeps him outside its own moves for over
+  5 s a status line every 10 s: the reason, KH1's state / slot / flags, the event and script
+  values, whether his body was seen, takeover on.
