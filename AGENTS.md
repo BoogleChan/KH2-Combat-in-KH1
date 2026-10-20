@@ -2974,3 +2974,18 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   KH1's jump rises (its state 1, his height going up) its jump held is KH1's (held only, not the
   presses); from the top on it isn't, so holding it doesn't glide (the glide, Glide at KH1, is on
   Square). The glide right after the jump in s246 was also s247's Square bit.
+
+### 2026-10-20: Stage 249 (no input buffers or queues)
+- The user: "comment out any code that is related to queueing/buffering moves? its currently
+  breaking a lot of situations". Commented out / switched off, a press counting only on its own
+  frame:
+  - s241's jump latch (`GROUND_JUMP`: a press in KH1's move kept for its end) and its forced jump
+    on KH2's first frame with input (`PENDING_JUMP`); KH2's held state at the hand-off
+    (`JUMP_HELD_OVER`) and KH1's own take-off turned into KH2's (`kh1_took_off`) stay.
+  - s234's Attack carried through frozen frames (`CARRY_MAX`): dropped at once.
+  - `combat::PENDING_COMMAND` waits: a command KH2's move can't take now is refused (the
+    menu's "can't"), not kept for its next window; one chosen in KH1's jump / glide / roll is
+    taken only if KH1 lets him act on that frame; a spell during KH1's cast only while it could
+    cut it now (`takeover::SPELL_CUT_OPEN`), else refused / dropped; what's stored is dropped
+    after 0.2 s.
+  - KH2 spells' and Reflect's `WAITING` (up to 5 s for the move's next window): dropped at once.

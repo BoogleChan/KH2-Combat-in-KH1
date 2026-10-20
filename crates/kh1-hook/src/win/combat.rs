@@ -54,6 +54,8 @@ static ORIG_COMMAND: AtomicUsize = AtomicUsize::new(0);
 const COMMAND_STEP_RVA: Rva = Rva(0x2A5380);
 const COMMAND_STEP_PROLOGUE: [u8; 11] = [0x40, 0x55, 0x56, 0x57, 0x48, 0x81, 0xEC, 0x60, 0x01, 0x00, 0x00];
 const STATE_RVA: Rva = Rva(0x2AF7D0);
+/// KH1's can-act test (`takeover`'s too).
+const CAN_ACT_RVA: Rva = Rva(0x2956E0);
 /// The Attack command was given since KH2's last frame.
 static PRESSED: AtomicBool = AtomicBool::new(false);
 /// While KH2's hit is landed: its power in percent (0 otherwise).
@@ -210,9 +212,10 @@ pub unsafe fn resume_command() {
     // (Chosen during KH1's cast: it waits for that to be cut or to end, as the combo's next
     // step.)
     if takeover::kh1_casting() {
-        if t.elapsed().as_secs_f32() > 5.0 {
+        // (A frame or two at most now: it is only stored while the cut is open, s249.)
+        if t.elapsed().as_secs_f32() > 0.2 {
             *p = None;
-            cmd_log(format!("command {kind:#x} dropped: KH1's cast never ended"));
+            cmd_log(format!("command {kind:#x} dropped: KH1's cast wasn't cut"));
         }
         return;
     }
@@ -224,9 +227,9 @@ pub unsafe fn resume_command() {
     }
     // (Chosen in KH1's jump or glide, `stylejump`: KH2 is taking him for it.)
     if super::stylejump::active() || super::styleroll::active() {
-        if t.elapsed().as_secs_f32() > 3.0 {
+        if t.elapsed().as_secs_f32() > 0.2 {
             *p = None;
-            cmd_log(format!("command {kind:#x} dropped: KH1's jump or glide never let him go"));
+            cmd_log(format!("command {kind:#x} dropped: KH1's jump, glide or roll didn't let him go"));
         }
         return;
     }
@@ -289,6 +292,15 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     // KH2's, after KH2 takes him back (it waits for that, `resume_command`).
     // (KH1's roll, `styleroll`, too: KH2's once the roll is over.)
     if actor == sora && !matches!(kind, 0 | 1) && super::settings::get().commands && takeover::ON.load(Ordering::Relaxed) && (super::stylejump::active() || super::styleroll::active()) {
+        // (No queue, s249: only when KH1 lets him act on this frame, KH2 taking him now; else
+        // refused, the menu's "can't".)
+        let can: unsafe extern "system" fn(usize) -> i32 = std::mem::transmute(base + CAN_ACT_RVA);
+        if can(actor) == 0 {
+            let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
+            sound(4);
+            cmd_log(format!("command {kind:#x} ({full:08x}) refused: KH1's jump, glide or roll has him and he can't act now (no queue)"));
+            return;
+        }
         if let Ok(mut p) = PENDING_COMMAND.lock() {
             *p = Some((rd::<[u8; 16]>(base + COMMAND_RVA), std::time::Instant::now(), u32::MAX));
         }
@@ -315,6 +327,13 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     // A spell chosen while KH1 casts one: it waits for the cast to be cut (once out) or to end,
     // then runs as the combo's next step (`takeover`'s MAGIC_AFTER; spec: magic into magic).
     if actor == sora && kind == 2 && super::settings::get().commands && takeover::ON.load(Ordering::Relaxed) && takeover::kh1_casting() {
+        // (No queue, s249: taken only while KH1's spell can be cut now; else refused.)
+        if !takeover::SPELL_CUT_OPEN.load(Ordering::Relaxed) {
+            let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
+            sound(4);
+            cmd_log(format!("command {kind:#x} ({full:08x}) refused: KH1's spell can't be cut yet (no queue)"));
+            return;
+        }
         if let Ok(mut p) = PENDING_COMMAND.lock() {
             *p = Some((rd::<[u8; 16]>(base + COMMAND_RVA), std::time::Instant::now(), u32::MAX));
         }
@@ -371,10 +390,14 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     }
     if !ready {
         let motion = takeover::KH2_MOTION.load(Ordering::Relaxed);
-        if let Ok(mut p) = PENDING_COMMAND.lock() {
-            *p = Some((rd::<[u8; 16]>(base + COMMAND_RVA), std::time::Instant::now(), motion));
-        }
-        cmd_log(format!("command {kind:#x} ({full:08x}) waits: KH2's move (motion {motion}) can't be cancelled yet; it goes at its next window, or not at all"));
+        // (No queue, s249, the user: "comment out any code that is related to queueing/buffering
+        // moves". It waited for the move's next window:)
+        // if let Ok(mut p) = PENDING_COMMAND.lock() {
+        //     *p = Some((rd::<[u8; 16]>(base + COMMAND_RVA), std::time::Instant::now(), motion));
+        // }
+        let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
+        sound(4);
+        cmd_log(format!("command {kind:#x} ({full:08x}) refused: KH2's move (motion {motion}) can't be cancelled now (no queue)"));
         return;
     }
     static AIR_LOG: AtomicU32 = AtomicU32::new(0);
@@ -473,13 +496,19 @@ pub unsafe fn take_chosen_command() -> Option<u8> {
             cmd_log("Drive chosen during KH1's move".to_string());
             None
         }
-        2 => {
+        2 if takeover::SPELL_CUT_OPEN.load(Ordering::Relaxed) => {
             if let Ok(mut p) = PENDING_COMMAND.lock() {
                 *p = Some((rd::<[u8; 16]>(base + COMMAND_RVA), std::time::Instant::now(), u32::MAX));
             }
             wr(base + COMMAND_RVA, 0u8);
-            cmd_log("spell chosen during KH1's cast: waits to cut it once the spell is out".to_string());
+            cmd_log("spell chosen during KH1's cast while it can be cut: cuts it now".to_string());
             Some(2)
+        }
+        // (No queue, s249: before KH1's spell can be cut, dropped.)
+        2 => {
+            wr(base + COMMAND_RVA, 0u8);
+            cmd_log("spell chosen during KH1's cast before it can be cut: dropped (no queue)".to_string());
+            None
         }
         _ => None,
     }

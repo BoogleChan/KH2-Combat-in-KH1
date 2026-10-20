@@ -738,7 +738,10 @@ pub unsafe fn before_step(actor: usize, ch: &mut Character) {
     if !ch.can_cast() {
         // Only while the move it was chosen in plays and has a window for it (KH2's buffer, not
         // a queue of its own; none through a finisher, the user).
-        if !takeover::same_move(motion) || !ch.magic_later() || t.elapsed().as_secs_f32() > WAIT_S {
+        // (No buffer, s249: dropped at once; it waited for the move's next window:)
+        // if !takeover::same_move(motion) || !ch.magic_later() || t.elapsed().as_secs_f32() > WAIT_S {
+        let _ = (t, WAIT_S, takeover::same_move(motion) && ch.magic_later());
+        {
             *w = None;
             note(format!("Reflect dropped: the move it was chosen in (motion {motion}) ended without a window for it"));
         }

@@ -294,7 +294,10 @@ pub unsafe fn before_step(actor: usize, ch: &mut Character) {
     let Ok(mut w) = WAITING.try_lock() else { return };
     let Some((spell, when, motion)) = *w else { return };
     if !ch.can_cast() {
-        if !super::takeover::same_move(motion) || !ch.magic_later() || when.elapsed().as_secs_f32() > WAIT_S {
+        // (No buffer, s249: dropped at once; it waited for the move's next window:)
+        // if !super::takeover::same_move(motion) || !ch.magic_later() || when.elapsed().as_secs_f32() > WAIT_S {
+        let _ = (when, WAIT_S, super::takeover::same_move(motion) && ch.magic_later());
+        {
             *w = None;
             log(&format!("{} {}: dropped, the move it was chosen in (motion {motion}) ended without a window for it", who(), SPELL_NAMES[spell as usize]));
         }

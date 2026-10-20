@@ -675,6 +675,8 @@ unsafe fn kh1_move_done(base: usize, actor: usize) -> bool {
 static JUMP_NOW: AtomicBool = AtomicBool::new(false);
 /// Sora's height (KH1's y, down positive) on the last control step, to tell KH1's jump rising.
 static RISE_Y: AtomicU32 = AtomicU32::new(0);
+/// KH1's spell could be cut by another now (`combat`: a spell chosen then is taken, else refused).
+pub static SPELL_CUT_OPEN: AtomicBool = AtomicBool::new(false);
 /// KH2's glide level while the Glide style is KH1's (its ability set to 0 meanwhile).
 static KH2_GLIDE_KEPT: AtomicU32 = AtomicU32::new(0);
 /// KH1's glide was tried on this hold of Square (`style_air_start`, KH1's jump).
@@ -1130,12 +1132,17 @@ unsafe fn takeover(actor: usize) -> bool {
             JUMP_PREV.store(jump_raw, Ordering::Relaxed);
         }
         let jump_fresh = jump_raw && !JUMP_PREV.swap(jump_raw, Ordering::Relaxed);
-        if state != 0 {
-            GROUND_JUMP.store(false, Ordering::Relaxed);
-        } else if jump_fresh {
-            GROUND_JUMP.store(true, Ordering::Relaxed);
-        }
-        let ground_jump = GROUND_JUMP.load(Ordering::Relaxed);
+        // (No buffer, s249, the user: "comment out any code that is related to queueing/buffering
+        // moves": only this frame's fresh press on the ground counts; s241 kept a press made
+        // earlier in KH1's move for its end:)
+        // if state != 0 {
+        //     GROUND_JUMP.store(false, Ordering::Relaxed);
+        // } else if jump_fresh {
+        //     GROUND_JUMP.store(true, Ordering::Relaxed);
+        // }
+        // let ground_jump = GROUND_JUMP.load(Ordering::Relaxed);
+        let _ = &GROUND_JUMP;
+        let ground_jump = jump_fresh && state == 0;
         // KH1 jumped him itself out of its move (its air attack's landing reads the jump press
         // outside its control step, where the press is kept from it; the user's log: state 0, then
         // state 1 "can act" on the floor, KH1's high jump, and KH2 took him rising 25 a frame: "sora
@@ -1252,6 +1259,8 @@ unsafe fn takeover(actor: usize) -> bool {
         let form_attack = form_cast.is_some() && command && !done;
         let attack_cut = attack && (out_any || form_attack) && !last && window;
         let magic_cut = magic_after && out_any && !last && window;
+        // (A spell is taken during KH1's cast only while it could cut it now, `combat`: no queue.)
+        SPELL_CUT_OPEN.store(out_any && !last && window, Ordering::Relaxed);
         let other_cut = out && (slot <= 1 || form_cast.is_some()) && window && (jump_pressed || square);
         let cancel = attack_cut || magic_cut || other_cut || form_end || drive_cut || item_end;
         let attack = attack && (!command || done || attack_cut);
@@ -1326,7 +1335,9 @@ unsafe fn takeover(actor: usize) -> bool {
             // the running animation": a stick hand-back in KH1's landing, then frozen frames
             // dropped the press). A button held from before KH1's move stays held for KH2 (its
             // last frame's press was the jump KH1's air attack came out of).
-            PENDING_JUMP.store(if jump || ground_jump { PENDING_JUMP_FRAMES } else { 0 }, Ordering::Relaxed);
+            // (No buffer, s249: the jump isn't kept for KH2's first frame with input.)
+            // PENDING_JUMP.store(if jump || ground_jump { PENDING_JUMP_FRAMES } else { 0 }, Ordering::Relaxed);
+            let _ = (&PENDING_JUMP, PENDING_JUMP_FRAMES);
             JUMP_HELD_OVER.store(if jump_raw && !(jump || ground_jump) { 1 } else { 2 }, Ordering::Relaxed);
             JUMP_WATCH.store(40, Ordering::Relaxed);
             // The spell's combo goes on only with an Attack or a spell that cut it or was chosen
@@ -1711,10 +1722,12 @@ unsafe fn takeover(actor: usize) -> bool {
     // dropped after `CARRY_MAX`), whatever waits (it was the cut's own press).
     let carried_attack = if FLY_PRESS_GROUND.load(Ordering::Relaxed) {
         if frozen {
-            if CARRY_FRAMES.fetch_sub(1, Ordering::Relaxed) <= 1 {
-                FLY_PRESS_GROUND.store(false, Ordering::Relaxed);
-                log("an Attack carried out of KH1's move: dropped (KH1 held him too long)");
-            }
+            // (No buffer, s249: dropped at once when KH1 holds him still; s234 kept it up to
+            // `CARRY_MAX` frames:)
+            // if CARRY_FRAMES.fetch_sub(1, Ordering::Relaxed) <= 1 {
+            FLY_PRESS_GROUND.store(false, Ordering::Relaxed);
+            log("an Attack carried out of KH1's move: dropped (KH1 holds him still, no buffer)");
+            // }
             false
         } else {
             FLY_PRESS_GROUND.store(false, Ordering::Relaxed);
@@ -1725,12 +1738,14 @@ unsafe fn takeover(actor: usize) -> bool {
     };
     // A jump pressed in KH1's move (`PENDING_JUMP`): KH2's first frame with input jumps, held or
     // tapped; dropped if KH1 holds him still for longer.
-    let forced_jump = if frozen {
-        let _ = PENDING_JUMP.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
-        false
-    } else {
-        PENDING_JUMP.swap(0, Ordering::Relaxed) > 0
-    };
+    // (Off, s249: no buffer.)
+    // let forced_jump = if frozen {
+    //     let _ = PENDING_JUMP.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| Some(n.saturating_sub(1)));
+    //     false
+    // } else {
+    //     PENDING_JUMP.swap(0, Ordering::Relaxed) > 0
+    // };
+    let forced_jump = false;
     if forced_jump {
         log("a jump pressed in KH1's move: KH2's jump now");
     }
@@ -2667,6 +2682,7 @@ pub fn hand_to_kh1(why: &str) {
     super::stylejump::clear();
     super::styleroll::clear();
     AIR_SPELL_LANDED.store(false, Ordering::Relaxed);
+    SPELL_CUT_OPEN.store(false, Ordering::Relaxed);
     CUT_LEFT.store(false, Ordering::Relaxed);
     ATTACK_AFTER.store(false, Ordering::Relaxed);
     HANDOFF_FRAMES.store(0, Ordering::Relaxed);
