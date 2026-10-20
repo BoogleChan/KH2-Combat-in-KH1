@@ -123,6 +123,48 @@ static REST: OnceLock<Option<kh1_data::mset::Motion>> = OnceLock::new();
 const REST_SLOT: usize = 1;
 /// KH1's field idle (slot 0): the thumbs' open-handed pose while no Keyblade is held.
 static REST_OPEN: OnceLock<Option<kh1_data::mset::Motion>> = OnceLock::new();
+/// KH1 Sora's whole motion table (`xa_ex_0010.mset`), for drawing his own jump under KH2
+/// (`kh1_air_pose`).
+static KH1_MOTIONS: OnceLock<Vec<Option<kh1_data::mset::Motion>>> = OnceLock::new();
+/// The pose drawn this frame is one of KH1's own motions (`kh1_air_pose`): not turned as KH2's
+/// Keyblade hold is.
+static NATIVE_KH1: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Jump at KH1 (`takeover::KH1_AIR_SLOT`): KH1's own jump (12, then 13 once it has played), its
+/// fall (10, looping) or its landing (11, then held), from KH1's motion table on his own
+/// skeleton, timed from when KH2's state got there.
+fn kh1_air_pose() -> Option<Vec<Mat4>> {
+    let want = super::takeover::KH1_AIR_SLOT.load(Ordering::Relaxed) as usize;
+    if want == 0 {
+        return None;
+    }
+    let motions = KH1_MOTIONS.get()?;
+    static CUR: Mutex<Option<(usize, Instant)>> = Mutex::new(None);
+    let mut cur = CUR.lock().ok()?;
+    // (The jump's take-off goes on into its rise; a new state starts its motion over.)
+    let keep = matches!((cur.map(|c| c.0), want), (Some(12 | 13), 13) | (Some(12), 12));
+    if !keep && cur.map(|c| c.0) != Some(want) {
+        *cur = Some((want, Instant::now()));
+    }
+    let (mut slot, mut t0) = (*cur)?;
+    let mut m = motions.get(slot)?.as_ref()?;
+    let mut frame = t0.elapsed().as_secs_f32() * m.fps.max(1.0);
+    if slot == 12 && frame >= m.frames as f32 {
+        slot = 13;
+        t0 = Instant::now();
+        *cur = Some((slot, t0));
+        m = motions.get(slot)?.as_ref()?;
+        frame = 0.0;
+    }
+    let len = m.frames.max(1) as f32;
+    let frame = if slot == 10 { frame % len } else { frame.min(len - 1.0) };
+    let bones = KH1_BONES.lock().ok()?;
+    if bones.is_empty() {
+        return None;
+    }
+    let local = m.apply(&bones, frame);
+    Some(kh2_anim::Pose::bind(&local).bones)
+}
 
 /// KH2 Sora: skeleton and motions, and each action clip's root travel per frame (KH1 moves
 /// him itself, so a swing's lunge is taken out of the pose).
@@ -607,6 +649,7 @@ pub fn load_kh2() {
             }
             log(&format!("KH1 Sora's motion table: {} slots", motions.len()));
             let _ = REST.set(motions.get(REST_SLOT).cloned().flatten());
+            let _ = KH1_MOTIONS.set(motions.clone());
             let _ = REST_OPEN.set(motions.first().cloned().flatten());
             Ok((map, lengths))
         })();
@@ -849,6 +892,16 @@ fn wanted(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
             if super::takeover::SCRIPTED.load(Ordering::Relaxed) {
                 s.follow.slot = slot;
                 return None;
+            }
+            // Jump at KH1: KH1's own jump, fall and landing over KH2's (the user: "turning jump to
+            // kh1 doesn't change soras jump animation back to kh1"; asked: KH1 animations only,
+            // KH2's physics).
+            if super::takeover::kh2_frame() {
+                if let Some(p) = kh1_air_pose() {
+                    s.follow.slot = slot;
+                    NATIVE_KH1.store(true, Ordering::Relaxed);
+                    return Some(p);
+                }
             }
             // Misc Animations at KH1: KH1's own idle / walk / run while KH2 stands, walks or runs
             // him (`takeover::MISC_KH1`), blended in from our last pose.
@@ -1341,8 +1394,11 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
     };
     let kh2_feet = MODE.load(Ordering::Relaxed) == 0 && super::takeover::active() && super::takeover::GROUNDED.load(Ordering::Relaxed);
     super::feet::place(BASE.load(Ordering::Relaxed), &mut pose, &s.parents, &to_world, kh2_feet);
-    kh1_wrist(&mut pose, &s.parents, (!ours).then_some(world));
-    keyblade_teeth_up(&mut pose, &s.parents);
+    // (KH1's own motion, `kh1_air_pose`: its hold is KH1's already.)
+    if !NATIVE_KH1.swap(false, Ordering::Relaxed) {
+        kh1_wrist(&mut pose, &s.parents, (!ours).then_some(world));
+        keyblade_teeth_up(&mut pose, &s.parents);
+    }
     let set = super::settings::get();
     if set.physics {
         // KH2's own animation of the hair, hood and keychain (the user: "add the animations for

@@ -683,6 +683,9 @@ static JUMP_NOW: AtomicBool = AtomicBool::new(false);
 static RISE_Y: AtomicU32 = AtomicU32::new(0);
 /// KH1's spell could be cut by another now (`combat`: a spell chosen then is taken, else refused).
 pub static SPELL_CUT_OPEN: AtomicBool = AtomicBool::new(false);
+/// Jump at KH1: KH1's motion slot drawn over KH2's jump (12 jump, 13 rise, 10 fall, 11 land),
+/// 0 none (`pose::kh1_air_pose`).
+pub static KH1_AIR_SLOT: AtomicU32 = AtomicU32::new(0);
 /// KH1's own idle / walk / run drawn under KH2 (Misc Animations at KH1, `pose`).
 pub static MISC_KH1: AtomicBool = AtomicBool::new(false);
 /// KH2's glide level while the Glide style is KH1's (its ability set to 0 meanwhile).
@@ -2218,6 +2221,20 @@ unsafe fn takeover(actor: usize) -> bool {
         && !d.character.airborne()
         && matches!(pose::sora_slot(), Some(0..=7));
     MISC_KH1.store(misc_kh1, Ordering::Relaxed);
+    // Jump at KH1 (base Sora): KH1's own jump / fall / landing drawn over KH2's (`pose`), KH2
+    // still jumping him.
+    let air_slot = if super::styles::kh1_now(super::styles::Kind::Jump) {
+        match out.state {
+            StateName::Jump => 12,
+            StateName::Air if out.displacement[1] > 0.0 => 13,
+            StateName::Air => 10,
+            StateName::Land => 11,
+            _ => 0,
+        }
+    } else {
+        0
+    };
+    KH1_AIR_SLOT.store(air_slot, Ordering::Relaxed);
     if !misc_kh1 {
         kh2_footsteps(actor, &out, &d.anim);
     }

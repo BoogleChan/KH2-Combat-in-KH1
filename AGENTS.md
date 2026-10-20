@@ -3039,3 +3039,12 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   own animation is drawn (`takeover::MISC_KH1`, `pose::wanted`, blended in from our last pose),
   KH1's step sounds play and KH2's footsteps don't; KH2 still moves him. The default is now KH2
   (KH2's walk and run as before; KH2's item motion with it).
+
+### 2026-10-20: Stage 255 (Jump at KH1: KH1's jump animations)
+- The user: "turning jump to kh1 doesn't change soras jump animation back to kh1" (s251 took
+  KH1's own jump out); asked: KH1 animations only, KH2's physics. With Jump at KH1 (base Sora),
+  KH2's Jump / Air / Land are drawn with KH1's own motions, evaluated from KH1 Sora's motion
+  table (`xa_ex_0010.mset`, `kh1_data::mset`) on his skeleton (`pose::kh1_air_pose`): 12 the
+  take-off then 13 the rise, 10 the fall (looping), 11 the landing (held at its end); timed from
+  when KH2's state got there (`takeover::KH1_AIR_SLOT`). KH2's Keyblade turn and wrist aren't
+  applied over them (`NATIVE_KH1`). Slots from the play logs (s16x), not checked frame by frame.
