@@ -57,29 +57,54 @@ reading code, checked against the user's files).
   KH1's placement of the model and KH1's size against KH2's (`Retarget::hip_ratio`). Valor's
   and Final's left Keyblade comes from `leftblade::kh2_left`.
 - **KH1 animating him** (its own moves, a KH1 move style, scripted walks): KH1's pose is carried
-  onto KH2's skeleton (`kh1_data::inverse`): each KH2 bone is paired with the KH1 bone that
-  starts at the same joint and points the same way in the two bind poses (KH2's scaled by the
-  hip ratio), among the KH1 bones a single body part turns in `retarget`. A paired bone turns as
-  its KH1 bone turned from the bind, an unpaired one with its parent; joints are placed along
-  KH2's own bind offsets, the hips where KH1's are. A KH2 motion taken to KH1's skeleton and
-  back lands its main joints within ~6 units (knees and ankles exactly; KH2 Sora is ~155 tall).
+  onto KH2's skeleton (`kh1_data::inverse`) through the same body parts `retarget` measures, in
+  reverse. Each limb part's frame (its direction, the knee or elbow for its roll, the knuckle
+  line for the hand) is measured on KH1's *joint positions*, taken at the KH1 joints nearest the
+  KH2 joints that define the part (the binds, KH2's scaled by the hip ratio), and the part turns
+  by its frame now against its frame in KH1's bind. The torso parts (pelvis, chest, head) take
+  the turn of a KH1 bone that part alone turns; the spine and neck between them blend the two by
+  their place on the chain. Every other KH2 bone (twist joints, hair, face, hood, cloth) keeps
+  KH2's bind relation to its parent; joints are placed along KH2's own bind offsets, the hips
+  where KH1's are. KH1's bone rotations are never copied for the limbs: KH1's own rolls, twist
+  helpers and ground IK twisted the mesh when they were (the s257 version paired bones and
+  copied their turns; the user: "super contorted"). A KH2 motion taken to KH1's skeleton and
+  back lands its main joints within ~7 units (knees and ankles exactly; KH2 Sora is ~155 tall).
   KH1's own Keyblade is drawn in his hand then.
 - **Hiding KH1's Sora**: KH1's model queue (`0x1401D1F10`, hooked by `leftblade`) gets, for
-  Sora's draw, a copy of its draw params with every body mesh masked off (`+0x38` = all ones),
-  and the weapon model (`+0x18`) cleared when KH2's Keyblade replaces it. KH1 still poses his
-  skeleton every frame, so hitboxes, effects, the Keyblade trail and clanks are unchanged. The
-  Drive Form tint (`tint`) works on KH1's textures and so shows only where KH1's model does.
-- **The draw**: in the world-model pass (`kh2fx`'s hook, before the effects), the triangles are
-  skinned on the CPU (`kh2_anim::skin`: KH1's placement × the size ratio × the bone's pose) and
-  drawn by `fx12::draw_mesh`: KH1's camera and clip transform, depth-tested and depth-writing,
-  cut out below half alpha, translucent groups blended after. Model textures go to their own
-  upload buffer (24 MB, appended to, keyed per model and texture).
-- **When KH1's model is drawn instead**: no pose this frame (100 ms), the game paused or a
-  full-screen menu up, the pause menu's own Sora, the models not loaded, or the renderer off
-  after a failure.
+  Sora's draw, a copy of its draw params with every body mesh masked off (`+0x38` = all ones:
+  each mesh's group id is a bit there, read modulo 32). When KH2's Keyblade replaces his, KH1's
+  stays queued but its 13 bones are shrunk to a thousandth about the grip for that one call
+  (put back right after): clearing the weapon model (`+0x18`, s257) took his swing trail and
+  effects with it (the user: no VFX for his combos). KH1 still poses his skeleton every frame,
+  so hitboxes, effects, the Keyblade trail and clanks are unchanged. The Drive Form tint
+  (`tint`) works on KH1's textures and so shows only where KH1's model does.
+- **The pause menu's Sora**: the menu draws its own copy of his model (another instance, posed
+  by KH1's menu animation, `pose`'s `MENU_SORA`). `pose` carries that pose onto KH2's skeleton
+  as it stands in KH1's world (no placement of ours), the queue masks the copy's meshes, and the
+  world pass draws ours with the camera KH1 has repointed for the menu. Its Keyblade stays KH1's.
+- **The draw**: each time KH1's Sora is held back, the draw is prepared there and then (models,
+  pose, placement), and the world-model pass (`kh2fx`'s hook, before the effects) mirrors the
+  latest queue: ours is drawn on every pass whose last queue of that Sora was held back (a pass
+  with no new queue repeats the last within 50 ms), and never otherwise. The triangles are
+  skinned on the CPU (`kh2_anim::skin`: placement × the size ratio × the bone's pose) and drawn by
+  `fx12::draw_mesh`: KH1's camera and clip transform, depth-tested and depth-writing, cut out
+  below half alpha, translucent groups blended after. Model textures go to their own upload
+  buffer (24 MB, appended to, keyed per model and texture).
+- **Interpolated frames**: KH1 can replay a recorded frame with an interpolated camera
+  (`0x140102740`, `docs/kh1-render.md` §3.2). Our commands go straight into KH1's list, so a
+  replayed frame would lack them with his meshes still masked: while KH1 replays (within the
+  last second), KH1's model is drawn instead and the log says so once.
+- **When KH1's model is drawn instead**: no pose this frame (100 ms), the game paused (for the
+  field's Sora), interpolated frames, the models not loaded, or the renderer off after a
+  failure.
+- **Counters**: every 20 s while the model is on, the log has Sora's queues, how many were held
+  back or refused (by reason), world passes, ours drawn, any held back but not drawn, the pause
+  menu copy's, the frame buffers drawn into and KH1's replays.
 
 ## Limits
 
 - No lighting: the textures are drawn as they are (KH2 bakes most shading into them).
 - Cut scenes are untested: if KH1 draws Sora there through another instance or actor, KH1's
   model shows.
+- Fingers on KH1's own animations are measured at the KH1 finger joints nearest KH2's: hands of
+  other proportions can curl them a little differently.

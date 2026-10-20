@@ -25,13 +25,10 @@ fn kh2_motions_survive_the_round_trip() {
     let rig = sora.rig.expect("KH2 rig");
     let r = kh1_data::retarget::Retarget::new(&kh1, &rig.skeleton);
     let weapon = kh1_data::retarget::GRIP_BONE;
-    let inv = kh1_data::inverse::Inverse::new(&kh1, &rig.skeleton, r.hip_ratio(), |i| i < weapon && r.follows_one_part(i));
-    eprintln!("{} of {} KH2 bones follow a KH1 bone (ratio {:.3})", inv.mapped(), rig.skeleton.len(), r.hip_ratio());
+    let inv = kh1_data::inverse::Inverse::new(&kh1, &rig.skeleton, &r, |i| i < weapon && r.follows_one_part(i));
+    eprintln!("{} of {} KH2 bones turn with a measured part (ratio {:.3})", inv.mapped(), rig.skeleton.len(), r.hip_ratio());
     // Hips, knees, ankles, shoulders, elbows, wrists (both sides), the head.
     let joints = [11usize, 12, 13, 40, 41, 42, 76, 79, 80, 168, 171, 172, 141];
-    for (j, name) in joints.iter().zip(["hip+", "knee+", "ankle+", "hip-", "knee-", "ankle-", "shoulder+", "elbow+", "wrist+", "shoulder-", "elbow-", "wrist-", "head"]) {
-        eprintln!("KH2 {name} {j} <- KH1 {:?}", inv.kh1_of(*j));
-    }
     let mut worst: f32 = 0.0;
     for motion in [0u16, 2, 151, 181] {
         let m = &rig.motions[&motion];
@@ -46,7 +43,7 @@ fn kh2_motions_survive_the_round_trip() {
             assert!(back.iter().all(|m| m.is_finite()));
         }
     }
-    // KH2 Sora is ~155 units tall: within ~10 of KH2's own places reads as the same pose (the
+    // KH2 Sora is ~155 units tall: within ~8 of KH2's own places reads as the same pose (the
     // spine's middle follows the pelvis or the chest, not a blend).
-    assert!(worst < 10.0, "worst joint {worst:.1} units off");
+    assert!(worst < 8.0, "worst joint {worst:.1} units off");
 }

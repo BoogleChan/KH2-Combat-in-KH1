@@ -29,7 +29,7 @@ use super::log;
 use glam::Mat4;
 use kh2_formats::mdlx;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -91,14 +91,116 @@ struct Frame {
 static POSE: Mutex<Option<Frame>> = Mutex::new(None);
 /// KH2's left Keyblade (Valor, Final), from `leftblade`, and when.
 static LEFT: Mutex<Option<(Vec<Mat4>, Instant)>> = Mutex::new(None);
-/// Sora's draw was held back since the last world pass (ours is due), and what replaced his
-/// Keyblade: bit 0 the right, bit 1 the left.
-static HIDDEN: AtomicBool = AtomicBool::new(false);
-static WEAPONS_OURS: AtomicU32 = AtomicU32::new(0);
+/// What became of each queue of a Sora (the field's, the pause menu's copy): bumped per queue,
+/// whether KH1's meshes were held back, and the draw prepared for ours then. The world pass
+/// mirrors the latest: ours is drawn on every pass whose Sora was held back, and only then.
+struct Track {
+    seq: u64,
+    /// When it last changed.
+    at: Option<Instant>,
+    hidden: bool,
+    prepared: Option<Arc<Prepared>>,
+    /// The world pass's view of it: the last seq seen and what it decided.
+    seen: u64,
+    drew: bool,
+}
+
+/// Everything one draw needs, captured when KH1's Sora was held back.
+struct Prepared {
+    parts: Vec<(Arc<Loaded>, Vec<Mat4>)>,
+    place: Mat4,
+}
+
+static MAIN: Mutex<Track> = Mutex::new(Track { seq: 0, at: None, hidden: false, prepared: None, seen: 0, drew: false });
+static MENU: Mutex<Track> = Mutex::new(Track { seq: 0, at: None, hidden: false, prepared: None, seen: 0, drew: false });
+/// The pause menu's copy of Sora: its instance and its pose on KH2's skeleton (KH1 world
+/// space, KH2 units), from `pose`, and when.
+static MENU_POSE: Mutex<Option<(usize, Vec<Mat4>, f32, Instant)>> = Mutex::new(None);
 /// KH1's left Keyblade's draw (`leftblade`) is ours this frame.
 static LEFT_OURS: AtomicBool = AtomicBool::new(false);
-static HIDES: AtomicU64 = AtomicU64::new(0);
-static DRAWN: AtomicU64 = AtomicU64::new(0);
+
+/// Counters for the log (`report`): Sora's queues, held back, refused (by reason), world
+/// passes, ours drawn, held back but not drawn, the menu's copy, KH1's interpolated replays.
+#[derive(Default)]
+struct Stats {
+    queues: u64,
+    hidden: u64,
+    refused: std::collections::BTreeMap<&'static str, u64>,
+    passes: u64,
+    drawn: u64,
+    missed: u64,
+    menu_hidden: u64,
+    menu_drawn: u64,
+    frame_buffers: std::collections::BTreeMap<i32, u64>,
+    replays: u64,
+}
+static STATS: Mutex<Option<(Stats, Instant)>> = Mutex::new(None);
+const REPORT_S: f32 = 20.0;
+/// A world pass with no queue of that Sora since the last one repeats the last decision only
+/// this soon after it.
+const STALE_S: f32 = 0.05;
+
+fn stat(f: impl FnOnce(&mut Stats)) {
+    if let Ok(mut g) = STATS.lock() {
+        let (s, _) = g.get_or_insert_with(|| (Stats::default(), Instant::now()));
+        f(s);
+    }
+}
+
+/// Logs the counters every `REPORT_S` seconds while the KH2 model is on.
+fn report() {
+    let Ok(mut g) = STATS.lock() else { return };
+    let Some((s, t)) = g.as_mut() else { return };
+    if t.elapsed().as_secs_f32() < REPORT_S {
+        return;
+    }
+    if s.queues + s.passes + s.menu_hidden > 0 {
+        log(&format!(
+            "KH2 model, last {REPORT_S:.0}s: Sora queued {}, held back {} (refused {:?}); world passes {}, ours drawn {}, held back but not drawn {}; pause menu copy held back {}, drawn {}; frame buffers {:?}; KH1 interpolated replays {}",
+            s.queues, s.hidden, s.refused, s.passes, s.drawn, s.missed, s.menu_hidden, s.menu_drawn, s.frame_buffers, s.replays
+        ));
+    }
+    *s = Stats::default();
+    *t = Instant::now();
+}
+
+/// KH1's replay of a recorded frame with an interpolated camera (`docs/kh1-render.md` §3.2):
+/// `mov rax, rsp; mov [rax+18h], rbx; mov [rax+20h], rsi; push rdi`. Hooked to count, and to
+/// keep KH1's model while it replays (our draws are recorded straight into KH1's list, so a
+/// replayed frame lacks them).
+const REPLAY_RVA: Rva = Rva(0x102740);
+const REPLAY_PROLOGUE: [u8; 12] = [0x48, 0x8B, 0xC4, 0x48, 0x89, 0x58, 0x18, 0x48, 0x89, 0x70, 0x20, 0x57];
+static ORIG_REPLAY: AtomicUsize = AtomicUsize::new(0);
+
+/// When KH1 last replayed a frame (ms since `CLOCK`, 0 never).
+static LAST_REPLAY_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CLOCK: OnceLock<Instant> = OnceLock::new();
+
+fn now_ms() -> u64 {
+    CLOCK.get_or_init(Instant::now).elapsed().as_millis() as u64 + 1
+}
+
+/// KH1 replayed a frame within the last second: a replayed frame would show him with KH1's
+/// meshes held back and ours missing, so KH1's model is drawn meanwhile.
+fn replaying() -> bool {
+    let t = LAST_REPLAY_MS.load(Ordering::Relaxed);
+    t != 0 && now_ms().saturating_sub(t) < 1000
+}
+
+unsafe extern "system" fn replay(r: usize, n: i32, t: f32) {
+    note_replay();
+    if LAST_REPLAY_MS.swap(now_ms(), Ordering::Relaxed) == 0 {
+        log("KH2 model: KH1 replays frames with an interpolated camera here; KH1's model is drawn while it does");
+    }
+    let f: unsafe extern "system" fn(usize, i32, f32) = std::mem::transmute(ORIG_REPLAY.load(Ordering::Acquire));
+    f(r, n, t)
+}
+
+/// The replay counter's hook (diagnostics; nothing changes if it fails).
+pub unsafe fn install() {
+    let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
+    super::hook::install(base + REPLAY_RVA, &REPLAY_PROLOGUE, replay as *const () as usize, &ORIG_REPLAY, "interpolated replay (KH2 model's counters)");
+}
 
 /// The Config row / ini choice.
 pub fn on() -> bool {
@@ -277,103 +379,212 @@ pub fn note_left(bones: Option<&[Mat4]>) {
     }
 }
 
-fn fresh_pose() -> bool {
-    POSE.try_lock().ok().is_some_and(|g| g.as_ref().is_some_and(|f| f.at.elapsed().as_secs_f32() < FRESH_S))
-}
-
 /// Draw params (KH1's are 0x60 bytes; 16-aligned as KH1's own).
 #[repr(C, align(16))]
 pub struct Params(pub [u8; 0x100]);
 
-/// KH1's model queue, for Sora's draw (`leftblade::queue`): the params to draw him with instead
-/// (his body masked off, his Keyblade too if ours replaces it), or `None` to draw him as KH1 does.
-pub unsafe fn hide(params: usize) -> Option<Params> {
-    if !on() || !super::fx12::usable() || !fresh_pose() {
-        return None;
+/// What `leftblade::queue` draws Sora with instead of KH1's params: his meshes masked off;
+/// `collapse`: his Keyblade's bones shrunk into the grip for the call (KH2's is drawn in its
+/// place; the weapon stays queued, so its trail and effects go on as KH1 has them).
+pub struct Hide {
+    pub params: Params,
+    pub collapse: bool,
+}
+
+fn refuse(why: &'static str, track: &Mutex<Track>) -> Option<Hide> {
+    stat(|s| *s.refused.entry(why).or_default() += 1);
+    if let Ok(mut t) = track.lock() {
+        t.seq += 1;
+        t.at = Some(Instant::now());
+        t.hidden = false;
+        t.prepared = None;
+    }
+    None
+}
+
+fn masked(params: usize, collapse: bool) -> Hide {
+    let mut p = Params([0u8; 0x100]);
+    unsafe {
+        std::ptr::copy_nonoverlapping(params as *const u8, p.0.as_mut_ptr(), 0x60);
+        std::ptr::write_unaligned(p.0.as_mut_ptr().add(P_MASK) as *mut u32, 0xFFFF_FFFF);
+    }
+    Hide { params: p, collapse }
+}
+
+/// KH1's model queue, for the field Sora's draw (`leftblade::queue`): the params to draw him with
+/// instead, or `None` to draw him as KH1 does. Ours is prepared here, for the world pass.
+pub unsafe fn hide(params: usize) -> Option<Hide> {
+    stat(|s| s.queues += 1);
+    if !on() {
+        return refuse("off", &MAIN);
+    }
+    if !super::fx12::usable() {
+        return refuse("renderer off", &MAIN);
     }
     let base = BASE.load(Ordering::Relaxed);
-    if base == 0 || super::kh2fx::paused(base).is_some() || super::pose::menu_sora_within(150) {
-        return None;
+    if base == 0 || super::kh2fx::paused(base).is_some() {
+        return refuse("paused", &MAIN);
     }
-    let lib = LIB.get()?.as_ref().ok()?;
-    let mut lib = lib.try_lock().ok()?;
-    body(&lib)?;
-    let mut ours = 0u32;
+    if super::pose::menu_sora_within(150) {
+        return refuse("pause menu's Sora", &MAIN);
+    }
+    if replaying() {
+        return refuse("interpolated frames", &MAIN);
+    }
+    let Some(Ok(lib)) = LIB.get() else { return refuse("not loaded", &MAIN) };
+    let Ok(mut lib) = lib.lock() else { return refuse("not loaded", &MAIN) };
+    let Some(body_model) = body(&lib) else { return refuse("not loaded", &MAIN) };
+    let Ok(pose) = POSE.lock() else { return refuse("no pose", &MAIN) };
+    let Some(f) = pose.as_ref().filter(|f| f.at.elapsed().as_secs_f32() < FRESH_S) else { return refuse("no pose", &MAIN) };
     let has_weapon = std::ptr::read_unaligned((params + P_WEAPON) as *const u64) != 0;
-    let weapon_pose = POSE.try_lock().ok().and_then(|g| g.as_ref().map(|f| !f.weapon.is_empty())).unwrap_or(false);
-    if has_weapon && weapon_pose && held_weapon(base).and_then(|w| weapon_model(&mut lib, w)).is_some() {
-        ours |= 1;
+    let k = if f.ratio.is_finite() && f.ratio > 0.1 { f.ratio } else { 1.0 };
+    let mut parts = vec![(body_model, f.body.clone())];
+    let mut ours = 0u32;
+    if has_weapon && !f.weapon.is_empty() {
+        if let Some(w) = held_weapon(base).and_then(|w| weapon_model(&mut lib, w)) {
+            parts.push((w, f.weapon.clone()));
+            ours |= 1;
+        }
     }
-    let left_fresh = LEFT.try_lock().ok().is_some_and(|g| g.as_ref().is_some_and(|(_, t)| t.elapsed().as_secs_f32() < FRESH_S));
-    if has_weapon && left_fresh && super::form::two_blades() && left_weapon(base).and_then(|w| weapon_model(&mut lib, w)).is_some() {
-        ours |= 2;
+    let left = LEFT.lock().ok().and_then(|g| g.as_ref().filter(|(_, t)| t.elapsed().as_secs_f32() < FRESH_S).map(|(b, _)| b.clone()));
+    if let (true, Some(b), true) = (has_weapon, left, super::form::two_blades()) {
+        if let Some(w) = left_weapon(base).and_then(|w| weapon_model(&mut lib, w)) {
+            parts.push((w, b));
+            ours |= 2;
+        }
     }
-    let mut p = Params([0u8; 0x100]);
-    std::ptr::copy_nonoverlapping(params as *const u8, p.0.as_mut_ptr(), 0x60);
-    std::ptr::write_unaligned(p.0.as_mut_ptr().add(P_MASK) as *mut u32, 0xFFFF_FFFF);
-    if ours & 1 != 0 {
-        std::ptr::write_unaligned(p.0.as_mut_ptr().add(P_WEAPON) as *mut u64, 0);
-    }
-    WEAPONS_OURS.store(ours, Ordering::Relaxed);
+    let prepared = Prepared { parts, place: f.to_world * Mat4::from_scale(glam::Vec3::splat(k)) };
+    drop(pose);
+    drop(lib);
     LEFT_OURS.store(ours & 2 != 0, Ordering::Relaxed);
-    HIDDEN.store(true, Ordering::Relaxed);
-    let n = HIDES.fetch_add(1, Ordering::Relaxed);
-    if n < 3 || n % 3600 == 0 {
-        log(&format!("KH2 model: KH1's Sora held back ({n} times; drawn {}; Keyblades ours {ours:#b})", DRAWN.load(Ordering::Relaxed)));
+    if let Ok(mut t) = MAIN.lock() {
+        t.seq += 1;
+        t.at = Some(Instant::now());
+        t.hidden = true;
+        t.prepared = Some(Arc::new(prepared));
     }
-    Some(p)
+    stat(|s| s.hidden += 1);
+    static N: AtomicU32 = AtomicU32::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) < 3 {
+        log(&format!("KH2 model: KH1's Sora held back (Keyblades ours {ours:#b})"));
+    }
+    Some(masked(params, ours & 1 != 0))
+}
+
+/// `pose`: the pause menu's copy of Sora (`instance`), KH1's menu animation on KH2's skeleton
+/// (KH1 world space, KH2 units) and KH1's size against KH2's.
+pub fn note_menu(instance: usize, kh2: Vec<Mat4>, ratio: f32) {
+    if let Ok(mut g) = MENU_POSE.lock() {
+        *g = Some((instance, kh2, ratio, Instant::now()));
+    }
+}
+
+/// The pause menu's copy of Sora, if `instance` is it.
+pub fn is_menu_copy(instance: usize) -> bool {
+    on() && MENU_POSE.lock().ok().is_some_and(|g| g.as_ref().is_some_and(|(i, _, _, t)| *i == instance && t.elapsed().as_secs_f32() < 0.5))
+}
+
+/// KH1's model queue, for the pause menu's copy of Sora: masked off, ours drawn in its place
+/// (its pose and placement from KH1's own, `note_menu`; the menu's camera in the world pass).
+pub unsafe fn hide_menu(instance: usize, params: usize) -> Option<Hide> {
+    if !on() || !super::fx12::usable() {
+        return refuse("off", &MENU);
+    }
+    if replaying() {
+        return refuse("interpolated frames", &MENU);
+    }
+    let Some(Ok(lib)) = LIB.get() else { return refuse("not loaded", &MENU) };
+    let Some(body_model) = lib.lock().ok().and_then(|l| body(&l)) else { return refuse("not loaded", &MENU) };
+    let Some((bones, k)) = MENU_POSE.lock().ok().and_then(|g| g.as_ref().filter(|(i, _, _, t)| *i == instance && t.elapsed().as_secs_f32() < FRESH_S).map(|(_, b, k, _)| (b.clone(), *k))) else {
+        return refuse("menu: no pose", &MENU);
+    };
+    let k = if k.is_finite() && k > 0.1 { k } else { 1.0 };
+    if let Ok(mut t) = MENU.lock() {
+        t.seq += 1;
+        t.at = Some(Instant::now());
+        t.hidden = true;
+        t.prepared = Some(Arc::new(Prepared { parts: vec![(body_model, bones)], place: Mat4::from_scale(glam::Vec3::splat(k)) }));
+    }
+    stat(|s| s.menu_hidden += 1);
+    static N: AtomicU32 = AtomicU32::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) < 3 {
+        log(&format!("KH2 model: the pause menu's Sora ({instance:#x}) held back"));
+    }
+    Some(masked(params, false))
 }
 
 /// Whether KH1's left Keyblade (`leftblade::second`) gives way to ours this frame.
 pub fn left_is_ours() -> bool {
-    on() && HIDDEN.load(Ordering::Relaxed) && LEFT_OURS.load(Ordering::Relaxed)
+    on() && MAIN.lock().ok().is_some_and(|t| t.hidden) && LEFT_OURS.load(Ordering::Relaxed)
 }
 
-/// The world pass (`kh2fx`): Sora drawn with KH2's model, if KH1's was held back.
+/// KH1's interpolated replay (`0x140102740`): counted for the log.
+fn note_replay() {
+    if on() {
+        stat(|s| s.replays += 1);
+    }
+}
+
+/// The world pass (`kh2fx`): ours drawn wherever KH1's Sora was held back.
 pub fn draw() {
-    if !HIDDEN.swap(false, Ordering::Relaxed) {
+    if !on() {
         return;
     }
-    let ours = WEAPONS_OURS.load(Ordering::Relaxed);
+    stat(|s| s.passes += 1);
     let base = BASE.load(Ordering::Relaxed);
-    let Some(Ok(lib)) = LIB.get() else { return };
-    let Ok(mut lib) = lib.try_lock() else { return };
-    let Some(body_model) = body(&lib) else { return };
-    let (right, left) = unsafe {
-        (
-            if ours & 1 != 0 { held_weapon(base).and_then(|w| weapon_model(&mut lib, w)) } else { None },
-            if ours & 2 != 0 { left_weapon(base).and_then(|w| weapon_model(&mut lib, w)) } else { None },
-        )
-    };
-    drop(lib);
-    let Ok(pose) = POSE.lock() else { return };
-    let Some(f) = pose.as_ref() else { return };
-    let k = if f.ratio.is_finite() && f.ratio > 0.1 { f.ratio } else { 1.0 };
-    let place = f.to_world * Mat4::from_scale(glam::Vec3::splat(k));
-    let left_bones = LEFT.lock().ok().and_then(|g| g.as_ref().map(|(b, _)| b.clone()));
-    let mut parts: Vec<(&Loaded, &[Mat4])> = vec![(&body_model, &f.body)];
-    if let Some(w) = right.as_deref() {
-        parts.push((w, &f.weapon));
+    for (track, menu) in [(&MAIN, false), (&MENU, true)] {
+        // The latest queue decides; with no queue since the last pass, as the last pass did.
+        let prepared = {
+            let Ok(mut t) = track.lock() else { continue };
+            if t.seq != t.seen {
+                t.seen = t.seq;
+                t.drew = t.hidden;
+            } else if t.at.is_none_or(|a| a.elapsed().as_secs_f32() > STALE_S) {
+                // (No Sora queued for a while: the menu closed, or he isn't drawn.)
+                t.drew = false;
+            }
+            if !t.drew {
+                continue;
+            }
+            t.prepared.clone()
+        };
+        let ok = prepared.is_some_and(|p| unsafe { draw_prepared(base, &p) });
+        stat(|s| match (ok, menu) {
+            (true, false) => s.drawn += 1,
+            (true, true) => s.menu_drawn += 1,
+            (false, _) => s.missed += 1,
+        });
+        if ok {
+            static N: AtomicU32 = AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 3 {
+                log(&format!("KH2 model: drew {}{}", if menu { "the pause menu's Sora " } else { "" }, prepared_names(track)));
+            }
+        }
     }
-    if let (Some(w), Some(b)) = (left.as_deref(), left_bones.as_deref()) {
-        parts.push((w, b));
-    }
+    report();
+}
+
+fn prepared_names(track: &Mutex<Track>) -> String {
+    track.lock().ok().and_then(|t| t.prepared.as_ref().map(|p| p.parts.iter().map(|(l, _)| l.name.as_str()).collect::<Vec<_>>().join(", "))).unwrap_or_default()
+}
+
+/// Skins and draws a prepared model (KH1's camera of this pass).
+unsafe fn draw_prepared(base: usize, p: &Prepared) -> bool {
     let mut vertices: Vec<kh2_fx::Vertex> = Vec::with_capacity(12_000);
     let mut batches = Vec::new();
     let mut textures = Vec::new();
-    for (l, bones) in &parts {
+    for (l, bones) in &p.parts {
         let first_tex = textures.len();
         for (i, t) in l.model.textures.iter().enumerate() {
             textures.push(super::fx12::MeshTexture { key: l.key | i as u64, width: t.width, height: t.height, rgba: &t.rgba });
         }
-        let start = vertices.len();
         let mut runs: Vec<(usize, usize)> = Vec::new(); // (group, first vertex)
-        kh2_anim::skin::skin(&l.model, bones, place, |g, p, uv| {
+        kh2_anim::skin::skin(&l.model, bones, p.place, |g, c, uv| {
             if runs.last().is_none_or(|r| r.0 != g) {
                 runs.push((g, vertices.len()));
             }
             for k in 0..3 {
-                vertices.push(kh2_fx::Vertex { pos: p[k].to_array(), uv: uv[k], color: [1.0; 4] });
+                vertices.push(kh2_fx::Vertex { pos: c[k].to_array(), uv: uv[k], color: [1.0; 4] });
             }
         });
         for (i, &(g, first)) in runs.iter().enumerate() {
@@ -381,13 +592,13 @@ pub fn draw() {
             let group = &l.model.groups[g];
             batches.push(super::fx12::MeshBatch { first: first as u32, count: (end - first) as u32, texture: first_tex + group.texture, translucent: group.translucent() });
         }
-        let _ = start;
     }
-    let Some((view, proj)) = (unsafe { super::fx12::camera(base) }) else { return };
-    if unsafe { super::fx12::draw_mesh(base, &vertices, &batches, &textures, view, proj) } {
-        let n = DRAWN.fetch_add(1, Ordering::Relaxed);
-        if n < 3 {
-            log(&format!("KH2 model: drew {} ({} triangles{})", body_model.name, vertices.len() / 3, parts.iter().skip(1).map(|(l, _)| format!(", {}", l.name)).collect::<String>()));
+    let Some((view, proj)) = super::fx12::camera(base) else { return false };
+    match super::fx12::draw_mesh(base, &vertices, &batches, &textures, view, proj) {
+        Some(fbi) => {
+            stat(|s| *s.frame_buffers.entry(fbi).or_default() += 1);
+            true
         }
+        None => false,
     }
 }

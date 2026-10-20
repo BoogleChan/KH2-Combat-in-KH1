@@ -30,7 +30,7 @@ use glam::{Mat3, Mat4, Quat, Vec3};
 use kh2_formats::anim::Bone;
 
 #[derive(Clone, Copy)]
-enum Pole {
+pub(crate) enum Pole {
     /// From the first bone's position to the second's.
     Line(usize, usize),
     /// Where the middle joint `b` of `a`-`b`-`c` points, away from the `a`-`c` line (the knee's
@@ -58,7 +58,7 @@ const FOOT_LOW: f32 = 24.0;
 const FOOT_HIGH: f32 = 40.0;
 
 #[derive(Clone, Copy)]
-enum Part {
+pub(crate) enum Part {
     /// x along `right` (`.1` to `.0`), y along `up` (`.0` to `.1`) made square to x.
     Torso { right: (usize, usize), up: (usize, usize) },
     /// y along `from` → `to`, z along the pole made square to y.
@@ -416,7 +416,7 @@ fn yaw_of(q: Quat) -> Quat {
 }
 
 /// Every part's frame, in order (a foot reads its shin's).
-fn frames(parts: &[Part], p: &[Vec3]) -> Vec<Option<Quat>> {
+pub(crate) fn frames(parts: &[Part], p: &[Vec3]) -> Vec<Option<Quat>> {
     let mut done: Vec<Option<Quat>> = Vec::with_capacity(parts.len());
     for part in parts {
         let f = part.frame(p, &done);
@@ -584,6 +584,16 @@ impl Retarget {
     /// Whether a measured part turns this KH1 bone.
     pub fn is_mapped(&self, bone: usize) -> bool {
         self.turns.get(bone).is_some_and(|t| t.is_some())
+    }
+
+    /// The measured parts (KH2 bone indices), as `pose` measures them.
+    pub(crate) fn parts(&self) -> &[Part] {
+        &self.parts
+    }
+
+    /// The measured part that alone turns this KH1 bone, if one does.
+    pub(crate) fn single_part(&self, bone: usize) -> Option<usize> {
+        self.turns.get(bone).copied().flatten().and_then(|(a, b, t)| (a == b || t == 0.0).then_some(a))
     }
 
     /// Whether one measured part alone turns this KH1 bone (not a blend of two: the spine's

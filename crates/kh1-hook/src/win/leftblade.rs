@@ -679,14 +679,51 @@ type Queue = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
 
 unsafe extern "system" fn queue(instance: usize, view: usize, params: usize, actor: usize) -> usize {
     let f: Queue = std::mem::transmute(ORIG_QUEUE.load(Ordering::Acquire));
-    // KH2's player model: Sora's own draw with his meshes (and maybe his Keyblade) held back.
-    let sora = !IN_SECOND.load(Ordering::Relaxed) && actor != 0 && actor == super::takeover::sora_actor() && instance == super::pose::SORA_INSTANCE.load(Ordering::Relaxed) && readable(params, P_SIZE);
-    let ours = if sora { super::model::hide(params) } else { None };
-    let r = f(instance, view, ours.as_ref().map_or(params, |p| p.0.as_ptr() as usize), actor);
+    // KH2's player model: Sora's own draw (the field's, or the pause menu's copy) with his
+    // meshes held back, and his Keyblade shrunk into his grip when KH2's replaces it.
+    let first = !IN_SECOND.load(Ordering::Relaxed) && readable(params, P_SIZE);
+    let ours = if first && actor != 0 && actor == super::takeover::sora_actor() && instance == super::pose::SORA_INSTANCE.load(Ordering::Relaxed) {
+        super::model::hide(params)
+    } else if first && super::model::is_menu_copy(instance) {
+        super::model::hide_menu(instance, params)
+    } else {
+        None
+    };
+    let collapsed = ours.as_ref().is_some_and(|h| h.collapse).then(|| collapse_weapon(instance)).flatten();
+    let r = f(instance, view, ours.as_ref().map_or(params, |h| h.params.0.as_ptr() as usize), actor);
+    if let Some((at, saved)) = collapsed {
+        std::ptr::copy_nonoverlapping(saved.as_ptr(), at as *mut u8, saved.len());
+    }
     if !IN_SECOND.load(Ordering::Relaxed) && INSTALLED.load(Ordering::Relaxed) {
         second(f, instance, view, params, actor);
     }
     r
+}
+
+/// KH1's Keyblade drawn as a speck in the grip for one queue call (KH2's is drawn in its place):
+/// every weapon bone shrunk to a thousandth about the grip. It stays queued, so whatever KH1
+/// does with a drawn weapon (its trail, its effects) goes on. Returns where the bones are and
+/// their saved bytes, to put back right after the call.
+unsafe fn collapse_weapon(instance: usize) -> Option<(usize, [u8; WEAPON_BONES * 0x40])> {
+    if !readable(instance + INST_WORLD, 4) {
+        return None;
+    }
+    let world = super::pose::ptr(rd::<u32>(instance + INST_WORLD));
+    if !readable(world, SORA_BONES * 0x40) {
+        return None;
+    }
+    let at = world + GRIP * 0x40;
+    let mut saved = [0u8; WEAPON_BONES * 0x40];
+    std::ptr::copy_nonoverlapping(at as *const u8, saved.as_mut_ptr(), saved.len());
+    let grip = Mat4::from_cols_array(&rd::<[f32; 16]>(at));
+    let shrink = Mat4::from_translation(grip.w_axis.truncate()) * Mat4::from_scale(glam::Vec3::splat(1e-3)) * Mat4::from_translation(-grip.w_axis.truncate());
+    for i in 0..WEAPON_BONES {
+        let m = shrink * Mat4::from_cols_array(&rd::<[f32; 16]>(at + i * 0x40));
+        if m.is_finite() {
+            std::ptr::write_unaligned((at + i * 0x40) as *mut [f32; 16], m.to_cols_array());
+        }
+    }
+    Some((at, saved))
 }
 
 /// The left Keyblade: Sora queued again, body hidden, our model in the left hand's bones.

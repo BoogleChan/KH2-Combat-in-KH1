@@ -3082,3 +3082,17 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - The user: the KH2 player model "comment it out for now" (s257's bugs being fixed meanwhile).
   Its Config row is commented out (`config::ROW_KINDS` maps rows to styles explicitly now) and
   `model::on` is false whatever the ini says; the code stays.
+
+### 2026-10-20: Stage 260 (KH2 player model fixes, still off)
+- The user's s257 list ("doesnt show up in pause menu ... flickers pretty consistently ...
+  doesnt have any VFX for his combos ... KH1 sora animations is super contorted"), helper
+  (`kh2-model-2`, `docs/kh1-kh2-model.md`): the pause menu's own Sora copy drawn as KH2's model
+  (its KH1 pose carried over, KH1's copy masked, KH1's menu camera); the flicker (the log:
+  hidden 18000 times, drawn 9126): the draw now prepared when KH1's Sora is held back and drawn
+  on every world pass that hid him, never hidden without it, locks no longer skipped, KH1's
+  interpolated-camera frame replay (`0x140102740`, hooked, counted) shows KH1's model while it
+  runs, a 20 s counter line; the combo effects: KH1's Keyblade stays queued (shrunk into the
+  grip for its draw) so its trail and effects carry on; the contortion: `kh1_data::inverse`
+  rebuilt on the forward retarget's body parts (limb directions and knee / elbow roll from KH1's
+  joint positions, torso turns blended, KH2's own rest for hair / face / hood / cloth). The
+  option stays commented out (s259) until the user turns it back on.

@@ -200,6 +200,7 @@ pub unsafe extern "system" fn DllMain(_inst: *mut c_void, reason: u32, _reserved
         drive::install();
         tint::install();
         leftblade::install();
+        model::install();
         gates::install();
         kh2sound::start();
         kh2fx::start();

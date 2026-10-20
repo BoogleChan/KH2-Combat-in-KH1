@@ -1234,6 +1234,19 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
         // Another copy of Sora's model away from his actor: the pause menu's (the user: it
         // walked slowly in KH2's walk and showed a frame of KH2's pose). KH1's own animation.
         MENU_SORA.lock().map(|mut m| *m = Some(Instant::now())).ok();
+        // KH2's model (`model`) over it: KH1's menu animation as posed, on KH2's skeleton. Taken
+        // in KH1's world space as it stands (placement included), so drawn with no other.
+        if let (true, Some(s)) = (super::model::on(), g.as_ref()) {
+            if let Some(inv) = s.inverse.as_ref() {
+                let world = ptr(rd::<u32>(instance + WORLD));
+                if world != 0 && super::crash::readable(world) && super::crash::readable(world + SORA_BONES as usize * 0x40 - 1) {
+                    let kh1: Vec<Mat4> = (0..SORA_BONES as usize).map(|i| mat(world + i * 0x40)).collect();
+                    if kh1.iter().all(|m| m.is_finite()) {
+                        super::model::note_menu(instance, inv.pose(&kh1), r_ratio(s.retarget.as_ref()));
+                    }
+                }
+            }
+        }
         return;
     }
     if g.as_ref().map_or(true, |s| s.instance != instance) {
@@ -1279,9 +1292,11 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
                 ));
                 s.secondary = Some(sec);
                 let grip = kh1_data::retarget::GRIP_BONE;
-                let inv = kh1_data::inverse::Inverse::new(&b, &kh2.rig.skeleton, r_ratio(s.retarget.as_ref()), |i| i < grip && s.retarget.as_ref().is_some_and(|r| r.follows_one_part(i)));
-                log(&format!("KH1's poses on KH2's skeleton: {} of {} KH2 bones follow a KH1 bone", inv.mapped(), kh2.rig.skeleton.len()));
-                s.inverse = Some(inv);
+                if let Some(r) = s.retarget.as_ref() {
+                    let inv = kh1_data::inverse::Inverse::new(&b, &kh2.rig.skeleton, r, |i| i < grip && r.follows_one_part(i));
+                    log(&format!("KH1's poses on KH2's skeleton: {} of {} KH2 bones turn with a measured part", inv.mapped(), kh2.rig.skeleton.len()));
+                    s.inverse = Some(inv);
+                }
             }
         }
     }

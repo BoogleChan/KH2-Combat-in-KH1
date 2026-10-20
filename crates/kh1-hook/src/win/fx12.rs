@@ -847,21 +847,22 @@ pub fn usable() -> bool {
 }
 
 /// Draws a model's triangles (KH1 world space) into KH1's current command list, depth-tested
-/// and depth-writing, from the world-pass hook (game thread). Returns whether it was drawn.
-pub unsafe fn draw_mesh(base: usize, vertices: &[kh2_fx::Vertex], batches: &[MeshBatch], textures: &[MeshTexture], view: glam::Mat4, proj: glam::Mat4) -> bool {
+/// and depth-writing, from the world-pass hook (game thread). Returns the frame buffer it was
+/// drawn into, `None` if it wasn't.
+pub unsafe fn draw_mesh(base: usize, vertices: &[kh2_fx::Vertex], batches: &[MeshBatch], textures: &[MeshTexture], view: glam::Mat4, proj: glam::Mat4) -> Option<i32> {
     if OFF.load(Ordering::Relaxed) || batches.is_empty() || vertices.is_empty() {
-        return false;
+        return None;
     }
     let r = base + RENDERER_RVA;
-    let Ok(mut g) = GPU.lock() else { return false };
-    let Some(gpu) = ready(base, &mut g) else { return false };
-    let Some(t) = target(r) else { return false };
+    let Ok(mut g) = GPU.lock() else { return None };
+    let gpu = ready(base, &mut g)?;
+    let t = target(r)?;
     if gpu.mesh.is_none() {
         match buffer(gpu.device, MESH_TEXELS * 4) {
             Ok((buf, map, va)) => gpu.mesh = Some(MeshArena { buf, map, va, used: 0, slots: Vec::new() }),
             Err(e) => {
                 fail(format!("model textures: {e}"));
-                return false;
+                return None;
             }
         }
     }
@@ -869,7 +870,7 @@ pub unsafe fn draw_mesh(base: usize, vertices: &[kh2_fx::Vertex], batches: &[Mes
         (Ok(a), Ok(b)) => (a, b),
         (Err(e), _) | (_, Err(e)) => {
             fail(e);
-            return false;
+            return None;
         }
     };
     let arena = gpu.mesh.as_mut().unwrap();
@@ -878,7 +879,7 @@ pub unsafe fn draw_mesh(base: usize, vertices: &[kh2_fx::Vertex], batches: &[Mes
     note_draw();
     let (vb, n) = upload(gpu, vertices);
     let (k, ..) = constants(r, view, proj);
-    let Some((cl, list_type)) = begin(base, r, gpu, &t, &vb, &k, arena_va) else { return false };
+    let (cl, list_type) = begin(base, r, gpu, &t, &vb, &k, arena_va)?;
     // Opaque runs first, then the translucent ones over them.
     let mut last_pso = 0usize;
     for pass in [false, true] {
@@ -916,5 +917,5 @@ pub unsafe fn draw_mesh(base: usize, vertices: &[kh2_fx::Vertex], batches: &[Mes
         ));
     }
     let _ = arena_buf;
-    true
+    Some(t.fbi)
 }
