@@ -58,3 +58,35 @@ has him in the air then, else Magic (`formmagic::base_kh2`).
     no-gravity frames, KH2's gravity), not KH1's fall, as Final Form's.
 - The spells' effect packages are loaded with `drive = off` too (they were only with Drive on).
 - If a spell's KH2 file or MAGC row is missing, KH1 casts its own.
+
+## Jump and Glide
+
+`stylejump.rs` (ini `jump_style`, `glide_style`; Config rows Jump, Glide). Base Sora only.
+
+- **Jump at KH1.** KH2's fresh jump press on the ground while free (idle, walking, running,
+  landing) runs KH1's ground state's own jump press handler (`0x1402CA3F0`, state 0's `+0x38`:
+  its ground test `0x1402A0D30`, then the jump start `0x1402AD860`: jump or high jump motion,
+  state 1, air time 0), KH2's ground speed carried into KH1's air speed (`+0x3C0`). KH1 has him
+  (`hand_to_kh1`, mode `JUMP`) through its rise, fall, ledge grabs and landing. In the air KH2
+  takes him back only for one of its moves, once KH1 lets him act: an Attack with the Aerial Base
+  Combo at KH2 (KH2's aerial combo, the press carried), a fresh Square (Aerial Dodge, or KH2's
+  glide on Square), a fresh jump press while falling for KH2's glide on the jump button, or a
+  command (magic, items, a Drive: it waits in `PENDING_COMMAND` and runs once KH2 has him, as
+  KH2's per the Aerial Magic style). With the Aerial Base Combo at KH1 an Attack is KH1's own air
+  combo (the hand-off becomes that combo's, `stylecombo`). Back on the ground: KH1's landing, then
+  KH2 again as after KH1's other moves (the stick, Square, Attack, a jump; a jump there is KH1's
+  again). KH1's own glide in its jump: only with Glide at KH1 (the jump button is left to KH1's
+  control step then, `kh1_keeps_jump`; with Glide at KH2 it stays stripped).
+- **Glide at KH1.** KH2's own glide is off (`abilities.glide = 0`). In KH2's jump, a fresh jump
+  press while falling (KH2 in its air or jump state) puts him in KH1's air state 2 as an air
+  command does (air-time fields, KH2's sideways speed) and starts KH1's Superglide
+  (`0x1402B05C0`) when he has it (`0x140282A70 (4, 0xB)`), else Glide (`0x1402B0530`, ability 3),
+  both through `0x1402B0BA0` (motion 0x71, state 0x15; nothing below its height over the floor:
+  then KH2 keeps him). KH1 has him (mode `GLIDE`) while it glides; back in its fall, KH2's fall;
+  down on the ground, KH2's landing.
+
+Unverified in game: that KH1's jump rises from where KH2 left him (`+0x3B4` set to his height);
+KH1's air speed from KH2's ground speed; that a fresh jump press while falling matches how KH1
+starts its own glide (KH1's state 2 takes the press, its state 1 doesn't); Superglide's own input
+(KH1's other glide path, `0x1401CD926`, prefers Superglide when he has it, as here); hits taken
+during KH1's jump or glide (KH1's reactions; KH2's Aerial Recovery doesn't come out of them).

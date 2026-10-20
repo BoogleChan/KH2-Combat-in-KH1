@@ -386,6 +386,80 @@ unsafe extern "system" fn physics(actor: usize) {
     f(actor);
 }
 
+/// KH1's ground state's jump press (`0x1402CA3F0`, state 0's `+0x38`: its ground test, then the
+/// jump start `0x1402AD860`, jump or high jump motion, state 1).
+const JUMP_PRESS_RVA: Rva = Rva(0x2CA3F0);
+/// KH1's Glide and Superglide starts (`0x1402B0BA0` under both: its glide motion 0x71, air speed,
+/// state 0x15; nothing below its height over the floor).
+const GLIDE_RVA: Rva = Rva(0x2B0530);
+const SUPERGLIDE_RVA: Rva = Rva(0x2B05C0);
+/// KH1's ability test (`(ability, 0xB)`): 3 Glide, 4 Superglide (`0x1402A4600`'s use).
+const HAS_ABILITY_RVA: Rva = Rva(0x282A70);
+
+/// KH1's jump or glide instead of KH2's, on a fresh jump press (`stylejump`): what KH1 started,
+/// or `None` (KH2's as before). KH1 has him from this frame.
+unsafe fn style_air_start(base: usize, actor: usize, d: &Driver) -> Option<&'static str> {
+    if rd::<i32>(actor + 0x70) != 0 || FLEW.load(Ordering::Relaxed) || rd::<u32>(base + BATTLE_RVA) & FLIGHT_FLAG != 0 {
+        return None;
+    }
+    let st = d.character.state_name();
+    let (dv, up) = d.last_out.as_ref().map_or(([0.0; 2], 0.0), |o| ([o.displacement[0], o.displacement[2]], o.displacement[1]));
+    let v = dv;
+    let v = if v.iter().all(|x| x.is_finite()) { v } else { [0.0; 2] };
+    let n = v[0].hypot(v[1]);
+    let k = if n > 30.0 { 30.0 / n } else { 1.0 };
+    let set: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(base + SET_STATE_RVA);
+    if super::stylejump::kh1_jump() && d.grounded && !d.character.airborne() && matches!(st, StateName::Idle | StateName::Walk | StateName::Run | StateName::Land) {
+        let press: unsafe extern "system" fn(usize) -> usize = std::mem::transmute(base + JUMP_PRESS_RVA);
+        let y = rd::<f32>(actor + 0x14);
+        press(actor);
+        if rd::<i32>(actor + 0x70) != 1 {
+            static N: AtomicU32 = AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 10 {
+                log(&format!("KH1's jump didn't start (KH1 state {}): KH2's", rd::<i32>(actor + 0x70)));
+            }
+            return None;
+        }
+        // KH2's ground speed carried into KH1's air speed (`+0x3C0`: x, y, z, its length); on
+        // KH2's first frame back (out of KH1's own landing) KH1's own is left.
+        if d.last_state.is_some() {
+            wr(actor + 0x3C0, [v[0] * k, 0.0f32, v[1] * k, n * k]);
+        }
+        wr(actor + 0x3B4, y);
+        return Some("KH1's jump (the Jump style is KH1's)");
+    }
+    let falling = up <= 0.0;
+    if super::stylejump::kh1_glide() && d.character.airborne() && falling && matches!(st, StateName::Air | StateName::Jump) {
+        let has: unsafe extern "system" fn(i32, i32) -> i32 = std::mem::transmute(base + HAS_ABILITY_RVA);
+        let (superglide, glide) = (has(4, 0xB) != 0, has(3, 0xB) != 0);
+        if !superglide && !glide {
+            return None;
+        }
+        // KH1's air state as an air command sets it (`combat::command`), then its glide.
+        let y = rd::<f32>(actor + 0x14);
+        set(actor, 2);
+        wr(actor + 0x3B0, 0.0f32);
+        wr(actor + 0x3B8, 0.0f32);
+        wr(actor + 0x3BC, 0.0f32);
+        wr(actor + 0x3B4, y);
+        wr(actor + 0x3C0, [v[0] * k, 0.0f32, v[1] * k, n * k]);
+        wr(actor + 0x3D0, 0u32);
+        wr(actor, rd::<u32>(actor) & !0x1_0000);
+        let start: unsafe extern "system" fn(usize) = std::mem::transmute(base + if superglide { SUPERGLIDE_RVA } else { GLIDE_RVA });
+        start(actor);
+        if rd::<i32>(actor + 0x70) != KH1_GLIDE_STATE {
+            set(actor, 0);
+            static N: AtomicU32 = AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 10 {
+                log(&format!("KH1's glide didn't start ({:.0} above the floor): KH2 keeps him", rd::<f32>(actor + 0x3D4)));
+            }
+            return None;
+        }
+        return Some(if superglide { "KH1's Superglide (the Glide style is KH1's)" } else { "KH1's glide (the Glide style is KH1's)" });
+    }
+    None
+}
+
 /// KH1's player step (`0x1402A75B0`, Sora's per-frame step, from the actor kinds' switch at
 /// `0x14029593C`). On a frame his state changed (flag `0x400`, set by its state change
 /// `0x1402AF7D0`) it picks the motion for the new state: down from the air (state 2 to 0, the old
@@ -466,16 +540,17 @@ unsafe extern "system" fn control(actor: usize, dir: usize) {
     // own guard, in the air too (spec 3.2); KH2's guard follows its own rules.)
     let l1_menu = super::shortcuts::menu_on_l1(if rd::<u32>(base + BUTTONS_RVA + 4) & KH1_L1 != 0 { L1 } else { 0 });
     let submenu = super::shortcuts::submenu_open();
-    const KH2_BITS: u32 = 0x6 | 0x10_0000;
+    // (KH1's jump with KH1's glide, `stylejump`: the jump button is KH1's there, its glide.)
+    let kh2_bits: u32 = if super::stylejump::kh1_keeps_jump() { 0x10_0000 } else { 0x6 | 0x10_0000 };
     let bits = |off: usize| -> u32 {
         if off != 8 {
-            KH2_BITS
+            kh2_bits
         } else if l1_menu {
             0
         } else if submenu {
-            0x10_0000
+            0x10_0000 & kh2_bits
         } else {
-            KH2_BITS
+            kh2_bits
         }
     };
     let state = base + BUTTONS_RVA;
@@ -970,6 +1045,14 @@ unsafe fn takeover(actor: usize) -> bool {
             log("KH1's air spell on the ground without its landing seen: KH2's landing");
         }
         let cast_landed = air_cast().is_some() && (seen || late);
+        // KH1's jump or glide (`stylejump`, the Jump / Glide styles at KH1): which, if any.
+        let style_air = super::stylejump::mode();
+        // KH1's glide out of KH2's jump, down on the ground: KH2's landing, as an air spell's.
+        let glide_landed = style_air == super::stylejump::GLIDE && state == 0;
+        if glide_landed {
+            log("KH1's glide landed: KH2's landing");
+        }
+        let cast_landed = cast_landed || glide_landed;
         // An Attack during a spell: KH2's once the spell is out (its end frames; the user: KH2's
         // magic can be cut by an attack to go on with the combo), not before (it would cut the
         // spell). In the air too.
@@ -1052,7 +1135,26 @@ unsafe fn takeover(actor: usize) -> bool {
         }
         // (A spell chosen during the cast, which is now over: it runs at once from the queue.)
         let magic_waits = magic_after && done;
-        if frames >= 1 && cast_landed || frames >= 2 && air_free || frames >= 10 && (falling || jump || cancel || magic_waits || matches!(state, 0 | 1) && (kh1_moving() || free || square || attack)) {
+        // KH1's jump (`stylejump::JUMP`): KH1 keeps him in the air, KH2 takes him there only for
+        // one of its own moves (an Attack for KH2's aerial combo, Square: Aerial Dodge or KH2's
+        // glide, the jump press for KH2's glide on the jump button, a command chosen); no taking
+        // him on the stick in the rise (state 1), only on the ground.
+        let (square_pressed, jump_pressed_air) = super::stylejump::presses(buttons() & SQUARE != 0, buttons() & jump_button() != 0);
+        let in_jump = style_air == super::stylejump::JUMP;
+        let kh2_glide_jump = in_jump && !super::stylejump::kh1_glide() && !super::settings::get().glide_on_square && jump_pressed_air && matches!(state, 1 | 2) && vel.is_some_and(|(_, up)| up < 0.0);
+        let kh2_air = in_jump && (attack || square_pressed || kh2_glide_jump || super::stylejump::wanted());
+        let air_free = if in_jump { air_free && kh2_air } else { air_free };
+        let falling = falling && !in_jump;
+        let jump = jump || kh2_glide_jump;
+        let square = if in_jump { square_pressed || square && state == 0 } else { square };
+        let ground_states = if in_jump { state == 0 } else { matches!(state, 0 | 1) };
+        if in_jump && kh2_air && !air_free && matches!(state, 1 | 2) {
+            static N: AtomicU32 = AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 20 {
+                log(&format!("KH1's jump: KH2's move asked, but KH1 doesn't let him act yet (state {state}, {above:.0} above the floor)"));
+            }
+        }
+        if frames >= 1 && cast_landed || frames >= 2 && air_free || frames >= 10 && (falling || jump || cancel || magic_waits || ground_states && (kh1_moving() || free || square || attack || in_jump && super::stylejump::wanted() && can_act(actor) != 0)) {
             let falling = falling || air_free;
             JUMP_NOW.store(jump, Ordering::Relaxed);
             // The spell's combo goes on only with an Attack or a spell that cut it or was chosen
@@ -1307,6 +1409,10 @@ unsafe fn takeover(actor: usize) -> bool {
     }
     d.growth.update(base, &mut d.character);
     super::form::abilities(&mut d.drive, &mut d.character);
+    // Glide at KH1 (`stylejump`): KH1's glide, none of KH2's.
+    if super::stylejump::kh1_glide() {
+        d.character.abilities.glide = 0;
+    }
     // Glide on Square, as KH1's Superglide was (the user), or on the jump button (ini `glide`).
     // (Not out of a flight: there Square is flight's descend.)
     // Air casts (Reflect) fall as they play, as KH1's spells do (the user).
@@ -1443,6 +1549,18 @@ unsafe fn takeover(actor: usize) -> bool {
         lock: Button::default(),
     };
     d.held = (jump_raw, action_raw);
+    // Jump / Glide at KH1 (`stylejump`): KH1's own, on the fresh jump press.
+    if input.jump.pressed && !frozen && !shortcut {
+        if let Some(what) = style_air_start(base, actor, d) {
+            hand_to_kh1(what);
+            FROM_COMMAND.store(false, Ordering::Relaxed);
+            super::stylejump::started(if what.contains("glide") { super::stylejump::GLIDE } else { super::stylejump::JUMP }, action_raw, jump_raw);
+            d.last_state = None;
+            d.held = (true, true);
+            drop_pose();
+            return false;
+        }
+    }
 
     // Where he is, KH2's way up (KH1's world is y-down).
     let p = rd::<[f32; 3]>(actor + 0x10);
@@ -2306,6 +2424,7 @@ pub fn air_cast() -> Option<(u8, f32)> {
 
 pub fn hand_to_kh1(why: &str) {
     super::stylecombo::clear();
+    super::stylejump::clear();
     AIR_SPELL_LANDED.store(false, Ordering::Relaxed);
     CUT_LEFT.store(false, Ordering::Relaxed);
     ATTACK_AFTER.store(false, Ordering::Relaxed);

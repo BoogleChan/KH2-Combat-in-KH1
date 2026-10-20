@@ -26,6 +26,7 @@ mod settings;
 mod shortcuts;
 mod styles;
 mod stylecombo;
+mod stylejump;
 mod probe;
 mod reflect;
 mod takeover;

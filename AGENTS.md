@@ -2856,3 +2856,16 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   is not asked for (the old state hidden from the step for the call) and `AIR_SPELL_LANDED` hands
   him to KH2 into its landing (`LAND_NOW`). If the step never saw it, KH1's ground state a frame
   later does the same, logged ("... without its landing seen").
+
+### 2026-10-19: Stage 239 (move styles: Jump and Glide)
+- The user: "a setting for kh1 jump or kh2 jump and ... kh1 or kh2 glide". `styles::Kind::Jump` /
+  `Glide` (ini `jump_style` / `glide_style`, default kh2; `glide` still picks KH2's glide
+  button), Config rows 13 / 14 on the second page.
+- Jump at KH1 (helper, `style-air`, `stylejump.rs`): a fresh jump press while KH2 has him free on
+  the ground runs KH1's ground jump handler (`0x1402CA3F0`: its jump or high jump), KH2's ground
+  speed carried; KH1 keeps him through the jump, grabs and landing; KH2 takes him once KH1 lets
+  him act for its own move (Attack with Aerial Base Combo KH2, a fresh Square, a jump press
+  falling for KH2's jump-button glide, a command, waiting, then by Aerial Magic).
+- Glide at KH1: KH2's glide off; a fresh jump press falling in KH2's air puts him in KH1's air
+  state 2 and starts KH1's Superglide (`0x1402B05C0`) or Glide (`0x1402B0530`) by its abilities
+  (`0x140282A70 (4 / 3, 0xB)`); KH2 takes him back into its fall or landing when it ends.
