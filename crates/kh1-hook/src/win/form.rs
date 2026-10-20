@@ -16,7 +16,7 @@
 //! - the change takes 45 frames (the user): Sora's Drive motion for `DRIVE_FRAMES`, then the
 //!   swap and the form's short arrival; in the air he is held where he is through it.
 //! - its shots and its spells: `formmagic`.
-//! The cost is MP (`COST`, KH1's own payment), not a Drive gauge, which KH1 has none of.
+//! The cost is MP (`cost_mp`, KH1's own payment), not a Drive gauge, which KH1 has none of.
 //!
 //! Valor Form (stage 211, the user: "i want to try to add valor form"): the same change and
 //! revert, `P_EX100_BTLF` (moveset 2, its two Keyblades' swings), its growth ability High Jump
@@ -56,9 +56,14 @@ const DRIVE_FRAMES: u32 = 39;
 pub const REVERT_ELEMENTS: [i16; 13] = [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27];
 /// The motion id the revert's effects and sound are started under (no motion of Sora's has it).
 pub const REVERT_FX: u16 = u16::MAX - 2;
-/// MP to change (KH1's payment takes hundredths of a bar from 100 up).
-pub const COST_MP: i32 = 3;
-const COST: i32 = COST_MP * 100;
+/// MP to change (KH1's payment takes hundredths of a bar from 100 up): Valor and Wisdom 1 (the
+/// user: "have valor and wisdom forms cost 1 MP"), Final 3.
+fn cost_mp(kind: Kind) -> i32 {
+    match kind {
+        Kind::Valor | Kind::Wisdom => 1,
+        Kind::Final => 3,
+    }
+}
 /// The form's level (KH1 has no form experience): Lv 1, 40 s of battle.
 const LEVEL: u32 = 1;
 /// Frames of battle per unit of yellow MP the form uses up (half as fast out of battle). A blue
@@ -288,7 +293,7 @@ pub unsafe fn usable(sora: usize, kind: Kind) -> bool {
     if in_form() {
         return true;
     }
-    pose::kh2().is_some_and(|k| kind.data(k).is_some()) && (super::takeover::kh2_has() || super::takeover::kh1_cut_window()) && sora > 0x10000 && mp(sora) > COST_MP && own_needs(kind).is_ok()
+    pose::kh2().is_some_and(|k| kind.data(k).is_some()) && (super::takeover::kh2_has() || super::takeover::kh1_cut_window()) && sora > 0x10000 && mp(sora) > cost_mp(kind) && own_needs(kind).is_ok()
 }
 
 /// What a form needs besides MP: Valor its second Keyblade (`valor::keyblade`).
@@ -317,8 +322,8 @@ pub unsafe fn choose(sora: usize, kind: Kind) -> Result<&'static str, String> {
         return Err("KH1 has Sora".into());
     }
     let have = mp(sora);
-    if have <= COST_MP {
-        return Err(format!("MP {have}: it costs {COST_MP} and needs some left to run on"));
+    if have <= cost_mp(kind) {
+        return Err(format!("MP {have}: it costs {} and needs some left to run on", cost_mp(kind)));
     }
     WANT.store(kind.code(), Ordering::Relaxed);
     REQUEST.store(1, Ordering::Relaxed);
@@ -442,8 +447,8 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
         1 if d.form.is_none() && d.change.is_none() => {
             let Some(kind) = Kind::from_code(WANT.load(Ordering::Relaxed)) else { return };
             // (Taken on the frame it was pressed in, `accept_now`; in the air too, held there.)
-            if mp(actor) <= COST_MP {
-                log(&format!("Drive: MP {} short of {COST_MP} by now", mp(actor)));
+            if mp(actor) <= cost_mp(kind) {
+                log(&format!("Drive: MP {} short of {} by now", mp(actor), cost_mp(kind)));
                 return;
             }
             let air = ch.airborne();
@@ -452,7 +457,7 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
                 return;
             }
             let before = mp(actor);
-            super::reflect::pay_mp(actor, COST);
+            super::reflect::pay_mp(actor, cost_mp(kind) * 100);
             heal_full(actor);
             // KH1's "Give me strength!" (the user: "add the battle quote from kh1 where he says
             // "give me strength" when your transforming into a drive").

@@ -3181,3 +3181,8 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   `Character::land_sliding` slides on at the speed the cast kept (`form_cast_frame`), braked by
   the form's ground inertia as a landing from his own fall is. Base Sora's KH1 air spells still
   land KH1's way (s241's choice).
+
+### 2026-10-20: Stage 268 (Valor and Wisdom cost 1 MP)
+- The user: "have valor and wisdom forms cost 1 MP". The Drive cost is per form now
+  (`form::cost_mp`): Valor 1, Wisdom 1, Final 3. As before, he needs more MP than the cost (some
+  left for the form to drain).
