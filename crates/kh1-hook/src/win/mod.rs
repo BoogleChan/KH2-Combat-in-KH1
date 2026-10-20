@@ -24,6 +24,7 @@ mod menu;
 mod model;
 mod pose;
 mod settings;
+mod shared;
 mod shortcuts;
 mod gummi;
 mod styles;

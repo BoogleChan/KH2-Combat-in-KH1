@@ -272,7 +272,7 @@ pub unsafe fn usable(sora: usize, kind: Kind) -> bool {
     if in_form() {
         return true;
     }
-    pose::kh2().is_some_and(|k| kind.data(k).is_some()) && (super::takeover::kh2_has() || super::takeover::kh1_cut_window()) && sora > 0x10000 && mp(sora) > COST_MP && own_needs(kind).is_ok()
+    pose::kh2().is_some_and(|k| kind.data(k).is_some()) && (super::takeover::kh2_has() || super::takeover::kh1_cut_window() || super::shared::active()) && sora > 0x10000 && mp(sora) > COST_MP && own_needs(kind).is_ok()
 }
 
 /// What a form needs besides MP: Valor its second Keyblade (`valor::keyblade`).

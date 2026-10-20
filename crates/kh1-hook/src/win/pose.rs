@@ -123,48 +123,6 @@ static REST: OnceLock<Option<kh1_data::mset::Motion>> = OnceLock::new();
 const REST_SLOT: usize = 1;
 /// KH1's field idle (slot 0): the thumbs' open-handed pose while no Keyblade is held.
 static REST_OPEN: OnceLock<Option<kh1_data::mset::Motion>> = OnceLock::new();
-/// KH1 Sora's whole motion table (`xa_ex_0010.mset`), for drawing his own jump under KH2
-/// (`kh1_air_pose`).
-static KH1_MOTIONS: OnceLock<Vec<Option<kh1_data::mset::Motion>>> = OnceLock::new();
-/// The pose drawn this frame is one of KH1's own motions (`kh1_air_pose`): not turned as KH2's
-/// Keyblade hold is.
-static NATIVE_KH1: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-/// Jump at KH1 (`takeover::KH1_AIR_SLOT`): KH1's own jump (12, then 13 once it has played), its
-/// fall (10, looping) or its landing (11, then held), from KH1's motion table on his own
-/// skeleton, timed from when KH2's state got there.
-fn kh1_air_pose() -> Option<Vec<Mat4>> {
-    let want = super::takeover::KH1_AIR_SLOT.load(Ordering::Relaxed) as usize;
-    if want == 0 {
-        return None;
-    }
-    let motions = KH1_MOTIONS.get()?;
-    static CUR: Mutex<Option<(usize, Instant)>> = Mutex::new(None);
-    let mut cur = CUR.lock().ok()?;
-    // (The jump's take-off goes on into its rise; a new state starts its motion over.)
-    let keep = matches!((cur.map(|c| c.0), want), (Some(12 | 13), 13) | (Some(12), 12));
-    if !keep && cur.map(|c| c.0) != Some(want) {
-        *cur = Some((want, Instant::now()));
-    }
-    let (mut slot, mut t0) = (*cur)?;
-    let mut m = motions.get(slot)?.as_ref()?;
-    let mut frame = t0.elapsed().as_secs_f32() * m.fps.max(1.0);
-    if slot == 12 && frame >= m.frames as f32 {
-        slot = 13;
-        t0 = Instant::now();
-        *cur = Some((slot, t0));
-        m = motions.get(slot)?.as_ref()?;
-        frame = 0.0;
-    }
-    let len = m.frames.max(1) as f32;
-    let frame = if slot == 10 { frame % len } else { frame.min(len - 1.0) };
-    let bones = KH1_BONES.lock().ok()?;
-    if bones.is_empty() {
-        return None;
-    }
-    let local = m.apply(&bones, frame);
-    Some(kh2_anim::Pose::bind(&local).bones)
-}
 
 /// KH2 Sora: skeleton and motions, and each action clip's root travel per frame (KH1 moves
 /// him itself, so a swing's lunge is taken out of the pose).
@@ -652,7 +610,6 @@ pub fn load_kh2() {
             }
             log(&format!("KH1 Sora's motion table: {} slots", motions.len()));
             let _ = REST.set(motions.get(REST_SLOT).cloned().flatten());
-            let _ = KH1_MOTIONS.set(motions.clone());
             let _ = REST_OPEN.set(motions.first().cloned().flatten());
             Ok((map, lengths))
         })();
@@ -896,32 +853,14 @@ fn wanted(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
                 s.follow.slot = slot;
                 return None;
             }
-            // Jump at KH1: KH1's own jump, fall and landing over KH2's (the user: "turning jump to
-            // kh1 doesn't change soras jump animation back to kh1"; asked: KH1 animations only,
-            // KH2's physics).
-            if super::takeover::kh2_frame() {
-                if let Some(p) = kh1_air_pose() {
-                    s.follow.slot = slot;
-                    NATIVE_KH1.store(true, Ordering::Relaxed);
-                    return Some(p);
-                }
-            }
-            // Misc Animations at KH1: KH1's own idle / walk / run while KH2 stands, walks or runs
-            // him (`takeover::MISC_KH1`), blended in from our last pose.
-            if super::takeover::MISC_KH1.load(Ordering::Relaxed) && super::takeover::kh2_frame() && matches!(slot, Some(0..=7)) {
-                s.follow.slot = slot;
-                return None;
-            }
-            // KH2's last pose: recent, or the last frame of his was KH2's (a pause stops the
-            // game's frames, not the clock: after one, the old pose went stale and KH1's slot was
-            // drawn until KH2's next frame; the user: paused mid KH2 move, resumed in KH1's).
+            // KH2's controller has him (a KH2 move, or a Drive Form): its pose. Recent, or the last
+            // frame of his was KH2's (a pause stops the game's frames, not the clock: after one, the
+            // old pose went stale and KH1's slot was drawn until KH2's next frame; the user: paused
+            // mid KH2 move, resumed in KH1's).
             let kh2_frame = super::takeover::kh2_frame();
-            // (KH1's own combo, `stylecombo`: KH1's swings from their first frame, not KH2's
-            // last pose over them.)
-            // (Nor over KH1's own dodge roll, `styleroll`: its roll from its first frame.)
-            // (Nor over an item's use drawn with KH2's motion, Misc Animations.)
-            let kh1_combo = super::stylecombo::active() || super::styleroll::active() || (misc_kh2() && super::takeover::item_use_now());
-            let fresh = if kh1_combo { None } else { super::takeover::POSE.try_lock().ok().and_then(|p| p.as_ref().filter(|(_, _, t)| kh2_frame || t.elapsed().as_secs_f32() < 0.15).map(|(b, w, _)| (b.clone(), w.clone()))) };
+            // (Not over KH1's own moves from their first frame: its combo, its roll, an item's use.)
+            let kh1_move = super::stylecombo::active() || super::styleroll::active() || super::takeover::item_use_now() || super::shared::active();
+            let fresh = if kh1_move { None } else { super::takeover::POSE.try_lock().ok().and_then(|p| p.as_ref().filter(|(_, _, t)| kh2_frame || t.elapsed().as_secs_f32() < 0.15).map(|(b, w, _)| (b.clone(), w.clone()))) };
             match (fresh, s.retarget.as_ref()) {
                 (Some((b, w)), Some(r)) => {
                     s.follow.slot = slot;
@@ -930,13 +869,8 @@ fn wanted(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
                     s.kh2_now = Some((b, w));
                     Some(pose)
                 }
-                // KH1's own jump, fall and landing while KH1 has him (dropping off a ladder or a
-                // vine, out of water): KH1's own animation (the user: KH2's fall, its arms
-                // flung out, looked like a T-pose there).
-                _ if matches!(slot, Some(8..=13)) => {
-                    s.follow.slot = slot;
-                    None
-                }
+                // KH1's own states (`shared`): KH1's slot, drawn with KH2's motion for it where its
+                // move style is KH2's (KH1 treats KH2's animation as its own), else KH1's own.
                 _ => follow(s, slot, to_world),
             }
         }
@@ -1009,6 +943,13 @@ fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
             };
             return follow_play(s, slot, to_world, Some(Play::Motion { motion, field: false, looping: false, group: 0 }));
         }
+    }
+    // Every other slot by its move style (`shared::kh2_look`): KH2's motion for it at KH2, KH1's
+    // own at KH1 (or with no style: KH1's magic, reactions, field actions).
+    if MODE.load(Ordering::Relaxed) == 0 && !super::shared::kh2_look(slot) {
+        s.follow.slot = slot;
+        s.follow.play = None;
+        return None;
     }
     follow_play(s, slot, to_world, None)
 }
@@ -1422,11 +1363,8 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
     };
     let kh2_feet = MODE.load(Ordering::Relaxed) == 0 && super::takeover::active() && super::takeover::GROUNDED.load(Ordering::Relaxed);
     super::feet::place(BASE.load(Ordering::Relaxed), &mut pose, &s.parents, &to_world, kh2_feet);
-    // (KH1's own motion, `kh1_air_pose`: its hold is KH1's already.)
-    if !NATIVE_KH1.swap(false, Ordering::Relaxed) {
-        kh1_wrist(&mut pose, &s.parents, (!ours).then_some(world));
-        keyblade_teeth_up(&mut pose, &s.parents);
-    }
+    kh1_wrist(&mut pose, &s.parents, (!ours).then_some(world));
+    keyblade_teeth_up(&mut pose, &s.parents);
     let set = super::settings::get();
     if set.physics {
         // KH2's own animation of the hair, hood and keychain (the user: "add the animations for

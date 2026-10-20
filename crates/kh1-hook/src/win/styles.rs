@@ -65,8 +65,9 @@ impl Kind {
     }
 }
 
-/// KH2's (true) or KH1's, per `Kind`: combos, jump, glide and dodge roll KH2's, magic KH1's by default (as before); KH1's model.
-static KH2: [AtomicBool; 10] = [AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false), AtomicBool::new(false)];
+/// KH2's (true) or KH1's, per `Kind`: every kind KH1's by default (the user: "kh1 is on by default
+/// for all settings").
+static KH2: [AtomicBool; 10] = [const { AtomicBool::new(false) }; 10];
 static INIT: Once = Once::new();
 
 fn init() {

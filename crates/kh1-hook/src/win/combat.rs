@@ -90,6 +90,12 @@ unsafe extern "system" fn exec(actor: usize, row: i32, dir: usize) {
     let base = BASE.load(Ordering::Relaxed);
     let sora = rd::<u64>(base + PARTY_RVA) as usize;
     let command = rd::<u8>(base + COMMAND_RVA);
+    // Base Sora in KH1's own states (`shared`) with KH1's combo where he is: KH1's own row, its
+    // combo as unmodded (with KH2's, the press is KH2's below: `kh1_move`).
+    if actor == sora && command == 1 && takeover::ON.load(Ordering::Relaxed) && super::shared::active() && super::stylecombo::kh1_here(matches!(rd::<i32>(actor + 0x70), 1 | 2)) {
+        let f: ExecFn = std::mem::transmute(ORIG_EXEC.load(Ordering::Acquire));
+        return f(actor, row, dir);
+    }
     // KH1's own combo (`stylecombo`, the Ground / Aerial Combo style set to KH1): its row runs.
     if actor == sora && command == 1 && takeover::ON.load(Ordering::Relaxed) && super::stylecombo::kh1_row(actor) {
         let f: ExecFn = std::mem::transmute(ORIG_EXEC.load(Ordering::Acquire));
@@ -199,6 +205,11 @@ pub fn attack_seen() -> Option<u32> {
 static PENDING_COMMAND: std::sync::Mutex<Option<([u8; 16], std::time::Instant, u32)>> = std::sync::Mutex::new(None);
 
 /// A spell is waiting in the queue for KH2's move to take it (`takeover`).
+/// Any command waits for KH2 (`resume_command`).
+pub fn command_waiting() -> bool {
+    PENDING_COMMAND.try_lock().map_or(true, |p| p.is_some())
+}
+
 pub fn spell_waiting() -> bool {
     PENDING_COMMAND.try_lock().map_or(false, |p| p.is_some_and(|(r, _, _)| r[0] == 2))
 }
@@ -225,8 +236,9 @@ pub unsafe fn resume_command() {
         cmd_log(format!("command {kind:#x} dropped: the move it was chosen in (motion {motion}) ended without a window for it"));
         return;
     }
-    // (Chosen in KH1's jump or glide, `stylejump`: KH2 is taking him for it.)
-    if super::stylejump::active() || super::styleroll::active() {
+    // (Chosen in KH1's jump or glide, `stylejump`, or its own states, `shared`: KH2 is taking him
+    // for it.)
+    if super::stylejump::active() || super::styleroll::active() || super::shared::active() {
         if t.elapsed().as_secs_f32() > 0.2 {
             *p = None;
             cmd_log(format!("command {kind:#x} dropped: KH1's jump, glide or roll didn't let him go"));
@@ -311,6 +323,35 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
         }
         cmd_log(format!("command {kind:#x} ({full:08x}) waits: KH1's jump or glide has him, KH2 takes him for it"));
         return;
+    }
+    // Base Sora in KH1's own states (`shared`): a command of KH2's (a spell where the Magic style
+    // is KH2's, Reflect, a Drive) waits for KH2 to borrow him (`takeover::shared_frame`), then runs
+    // as KH2's (`resume_command`); KH1's own commands (its spells at the KH1 style, items,
+    // specials, summons) are KH1's as unmodded.
+    if actor == sora && kind == 2 && super::settings::get().commands && takeover::ON.load(Ordering::Relaxed) && super::shared::active() {
+        let drive = super::drive::on() && arg >= super::drive::FORM_ARG;
+        let air = matches!(rd::<i32>(actor + 0x70), 1 | 2);
+        if drive || arg == super::reflect::SPELL || super::formmagic::base_kh2(air) {
+            let can: unsafe extern "system" fn(usize) -> i32 = std::mem::transmute(base + CAN_ACT_RVA);
+            if can(actor) == 0 {
+                let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
+                sound(4);
+                cmd_log(format!("command {kind:#x} ({full:08x}) refused: KH1's move has him and he can't act now (no queue)"));
+                return;
+            }
+            if let Ok(mut p) = PENDING_COMMAND.lock() {
+                *p = Some((rd::<[u8; 16]>(base + COMMAND_RVA), std::time::Instant::now(), u32::MAX));
+            }
+            super::shared::want_kh2();
+            cmd_log(format!("command {kind:#x} ({full:08x}) is KH2's: KH2 borrows him for it (shared states)"));
+            return;
+        }
+    }
+    // An item used in KH1's own states: its use drawn with KH2's motion at Misc Animations KH2
+    // (`takeover::item_use_now`).
+    if actor == sora && kind == ITEM_COMMAND_TYPE && super::shared::active() {
+        takeover::ITEM_COMMAND.store(true, Ordering::Relaxed);
+        takeover::item_started();
     }
     if actor == sora && kind == 2 && super::drive::on() && (super::drive::FORM_ARG..super::drive::FORM_ARG + super::drive::FORMS.len() as u8).contains(&arg) {
         super::drive::chosen(actor, (arg - super::drive::FORM_ARG) as usize);

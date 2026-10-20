@@ -427,7 +427,7 @@ unsafe fn in_menus(base: usize) -> bool {
 unsafe fn usable(base: usize, actor: usize, flags: usize) -> bool {
     let save = rd::<u64>(base + SAVE_PTR_RVA) as usize;
     let allowed = flags > 0x10000 && rd::<u8>(flags) & 0x20 != 0;
-    allowed && affordable(base, actor) && takeover::kh2_has() && cast_level(save).is_some()
+    allowed && affordable(base, actor) && (takeover::kh2_has() || super::shared::active()) && cast_level(save).is_some()
 }
 
 /// Why it's greyed (for the log).

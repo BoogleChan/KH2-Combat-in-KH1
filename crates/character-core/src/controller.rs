@@ -253,9 +253,9 @@ pub fn release_hop(gravity: f32) -> f32 {
     gravity * 0.5 * 5.0 * 5.0
 }
 /// The cut only happens after this many frames of the rise...
-const HOLD_MIN_FRAMES: f32 = 6.0;
+pub const HOLD_MIN_FRAMES: f32 = 6.0;
 /// ...and more than this many frames before the apex.
-const HOLD_APEX_MARGIN: f32 = 5.0;
+pub const HOLD_APEX_MARGIN: f32 = 5.0;
 
 /// Frames for a jump of `height` to reach its apex.
 pub fn uptime(height: f32, gravity: f32) -> f32 {
@@ -918,6 +918,18 @@ impl Character {
     /// combo goes on after it).
     pub fn combo_state(&self) -> ComboState {
         ComboState { count: self.count, finishers: self.finishers, hit: self.hit, finisher_next: self.carry_finisher }
+    }
+
+    /// The apex heights of a jump and of a High Jump with the abilities now.
+    pub fn jump_heights(&self) -> (f32, f32) {
+        let n = self.params.jump_height;
+        (n, self.growth(self.abilities.high_jump).map_or(n, |g| g.high_jump_height))
+    }
+
+    /// A combo is going (`combo_live`), and frames since its last swing started: a host that
+    /// lends the character to the controller only for its moves keeps it through a combo.
+    pub fn combo_going(&self) -> (bool, u32) {
+        (self.combo_live(), self.since_swing)
     }
 
     /// A combo is going (the user: a spell cast mid-combo inserts itself in it, as a modifier

@@ -33,6 +33,7 @@ static LAST_SQUARE: AtomicBool = AtomicBool::new(true);
 static LAST_JUMP: AtomicBool = AtomicBool::new(true);
 
 /// Jump is KH1's for base Sora now.
+#[allow(dead_code)]
 pub fn kh1_jump() -> bool {
     styles::kh1_now(Kind::Jump)
 }

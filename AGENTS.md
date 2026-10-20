@@ -3096,3 +3096,39 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   rebuilt on the forward retarget's body parts (limb directions and knee / elbow roll from KH1's
   joint positions, torso turns blended, KH2's own rest for hair / face / hood / cloth). The
   option stays commented out (s259) until the user turns it back on.
+
+### 2026-10-20: Stage 261 (testing branch: shared states)
+- Testing branch only. The user: "lets rewrite how kh2 injects it animations into the game ...
+  The goal is to cleanly separate animation handling from the unique logic and physics each
+  version of Sora needs". Also "comment the jump codes I just asked you to restore": s251's
+  comment-off re-applied (KH1's jump start under KH2, the jump-button strip, s247's filter).
+- Every move style is KH1's by default (`styles`, `settings`; an ini that already has a key
+  keeps it).
+- `shared.rs` (`docs/shared-states.md`, ini `shared = on`): for base Sora, KH1's own state
+  machine owns him. Idle, walk, run, item use, jump, high jump, fall and landing run in KH1's
+  states:
+  - at KH1, unmodded;
+  - at KH2, KH1's slots are drawn with KH2's motions (`shared::kh2_look`, `pose::follow`) and
+    moved by KH2's numbers (`shared::physics`).
+
+  The physics wraps KH1's state table (`0x142DB4240`): the ground step's displacement is
+  scaled to KH2's walk or run speed. KH1's takeoff and its state 2 step follow KH2's jump or
+  High Jump arc, gravity, release hop, fall cap and air steering, with KH1's own arc fields
+  kept in step.
+- KH2's controller only borrows him for KH2's moves (`takeover::shared_frame`):
+  - Aerial Dodge, as a double jump with Jump at KH1 too;
+  - KH2's glide;
+  - Square at Dodge Roll KH2;
+  - Attack at a combo style KH2;
+  - KH2 spells, Reflect, Drives.
+
+  It gives him back to KH1's ground or fall state when the move is over
+  (`shared::give_back`). A ground jump out of a KH2 move is KH1's own.
+- Removed: KH1's idle / walk / run and jump drawn back over KH2's (`MISC_KH1`,
+  `KH1_AIR_SLOT`, `pose::kh1_air_pose`).
+- RE (helper, static): KH1's jump is a 4-frame crouch in state 1 (`0x1402ADC10`), then the arc
+  in state 2's step `0x1402AD510` (the same sin-sin rise as KH2's, then `g/2 t²`, capped at 20);
+  heights from btltbl (190 / 290); walk 2.0 / run 8.0 in the stats' `+4` / `+8` (stick past
+  0.8); landing by collision (`+0x2D0` bit 0).
+- Not yet: Base / Aerial Combo, Magic and Dodge Roll at KH2 are KH2 borrows, not KH1's states
+  with KH2's motions. Nothing tested in game.

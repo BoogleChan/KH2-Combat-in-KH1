@@ -58,6 +58,10 @@ camera = kh2\r\n\
 ; camera_scale: KH2's camera distances and heights times this; 0.89 = KH1 Sora's size against\r\n\
 ; KH2 Sora's (hips 78.9 / 88.5), so he is framed exactly as in KH2\r\n\
 camera_scale = 0.89\r\n\
+; shared: on = KH1's own states run base Sora (idle, walk, run, jump, fall, landing), with\r\n\
+;   KH2's animations and physics where a move style is KH2; KH2 borrows him only for its own\r\n\
+;   moves; off = KH2's controller has him whenever he stands, walks or runs (older builds)\r\n\
+shared = on\r\n\
 ; camera_lower: KH2's camera (look point and eye together) this much lower (0 = as KH2)\r\n\
 camera_lower = 0\r\n\
 ; config_row: on = the Config menu's Camera Style row; off = no row (the ini alone switches)\r\n\
@@ -169,6 +173,10 @@ pub struct Settings {
     pub styles: [bool; 10],
     /// Skip the Gummi Ship's flights (`gummi = skip`, `gummi.rs`).
     pub gummi_skip: bool,
+    /// KH1's own states own base Sora (`shared = on`, `shared.rs`): KH2's animations and physics
+    /// on KH1's states per move style, KH2's controller only for KH2's own moves. Off: the old
+    /// way (KH2's controller has him whenever KH1 shows him standing, walking or running).
+    pub shared: bool,
 }
 
 static SETTINGS: OnceLock<Settings> = OnceLock::new();
@@ -244,8 +252,9 @@ pub fn get() -> &'static Settings {
             kh2_hair: on(&text, "kh2_hair", "on", true),
             drive: on(&text, "drive", "on", true),
             valor_left_blade: on(&text, "valor_left_blade", "on", true),
-            styles: [on(&text, "ground_combo", "kh2", true), on(&text, "air_combo", "kh2", true), on(&text, "magic", "kh2", false), on(&text, "air_magic", "kh2", false), on(&text, "jump_style", "kh2", true), on(&text, "glide_style", "kh2", true), on(&text, "roll_style", "kh2", true), on(&text, "misc_anims", "kh2", true), on(&text, "player_model", "kh2", false), on(&text, "battle_quotes", "kh2", on(&text, "kh2_voice", "on", false))],
+            styles: [on(&text, "ground_combo", "kh2", false), on(&text, "air_combo", "kh2", false), on(&text, "magic", "kh2", false), on(&text, "air_magic", "kh2", false), on(&text, "jump_style", "kh2", false), on(&text, "glide_style", "kh2", false), on(&text, "roll_style", "kh2", false), on(&text, "misc_anims", "kh2", false), on(&text, "player_model", "kh2", false), on(&text, "battle_quotes", "kh2", on(&text, "kh2_voice", "on", false))],
             gummi_skip: on(&text, "gummi", "skip", false),
+            shared: on(&text, "shared", "on", true),
         };
         log(&format!("settings ({path}): {s:?}"));
         s

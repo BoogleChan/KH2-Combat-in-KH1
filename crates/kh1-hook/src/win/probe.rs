@@ -279,9 +279,12 @@ unsafe extern "system" fn pad(src: usize, out: usize, cfg: usize) {
     // (Also through KH1's air spell, to its landing: KH1 has him then, and its landing took a
     // jump pressed on its first frame, the user.)
     let air_cast = super::takeover::air_cast().is_some();
-    if (super::takeover::active() || air_cast) && !shortcuts {
+    // (Base Sora in KH1's own states, `shared`: KH1 sees the pad; its control step leaves out what
+    // is KH2's, `takeover::shared_control`.)
+    let kh2_now = super::takeover::active() && !super::shared::active();
+    if (kh2_now || air_cast) && !shortcuts {
         std::ptr::write_unaligned(out as *mut u16, b & !(super::takeover::jump_button() | super::takeover::SQUARE));
-    } else if super::takeover::active() && !l1_menu {
+    } else if kh2_now && !l1_menu {
         std::ptr::write_unaligned(out as *mut u16, b & !super::takeover::SQUARE);
     } else if !super::takeover::kh1_keeps_square() && !shortcuts {
         std::ptr::write_unaligned(out as *mut u16, b & !super::takeover::SQUARE);
