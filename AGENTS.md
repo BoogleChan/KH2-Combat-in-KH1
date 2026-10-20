@@ -3257,3 +3257,8 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - Anti Form's ledge hang (the user's screenshot: hanging well down the wall, "looks like his
   collision is a little off"). The hang / climb pose is moved so its hands are where KH1's own
   hands are this frame (`pose::check`, `ANTI_LEDGE`).
+
+### 2026-10-20: Stage 275 (back to Sora in a new world)
+- The user: "when leaving a world in a drive form, wherever world sora lands, he should be
+  automatically reverted". A form records KH1's world as it starts (`0x142340E5C`). On KH2's
+  first step in another world, `form::before_step` reverts him (Anti Form too).

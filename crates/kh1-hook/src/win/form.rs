@@ -395,6 +395,16 @@ struct InForm {
     sora: Abilities,
     own: Abilities,
     logged_s: u32,
+    /// KH1's world when the form started (`WORLD_RVA`): in another one, back to Sora.
+    world: u32,
+}
+
+/// KH1's current world (u32; `takeover`'s room line reads it too).
+const WORLD_RVA: super::addr::Rva = super::addr::Rva(0x2340E5C);
+
+unsafe fn world_now() -> u32 {
+    let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
+    rd::<u32>(base + WORLD_RVA)
 }
 
 /// The form's controller data while in it, else Sora's.
@@ -481,6 +491,17 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
         revert(d, ch, anim, kh2, "knocked out");
         return;
     }
+    // Landed in another world in the form: Sora again at once, wherever he lands (the user: "when
+    // leaving a world in a drive form, wherever world sora lands, he should be automatically
+    // reverted"). Anti Form too.
+    if let Some(w) = d.form.as_ref().map(|f| f.world) {
+        let now = world_now();
+        if now != w {
+            log(&format!("Drive: a new world ({w} -> {now}): back to Sora"));
+            revert(d, ch, anim, kh2, "a new world");
+            return;
+        }
+    }
     // The secret code (`pad`): Anti Form (it asked for Final Form until s271), as if chosen from
     // the Drive list (KH2 must be able to change him now, as for the list: `accept_now`: free,
     // jumping, falling, landing or at a move's end; not in a form).
@@ -565,7 +586,7 @@ unsafe fn arrive(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
         ch.play_held(ARRIVE_MOTION, true);
     }
     let lv = (sora.clone(), own.clone());
-    d.form = Some(InForm { kind, left: 0, sora, own, logged_s: 0 });
+    d.form = Some(InForm { kind, left: 0, sora, own, logged_s: 0, world: world_now() });
     CURRENT.store(kind.code(), Ordering::Relaxed);
     IN_FORM.store(true, Ordering::Relaxed);
     if kind.two_blades() {
