@@ -280,7 +280,7 @@ cbuffer K : register(b0) {
     float4 V0; float4 V1; float4 V2; float4 V3;
     float4 P0; float4 P1; float4 P2; float4 P3;
     float4 clipk;   // KH1's clip scale, x and y offsets; the batch's view-z depth offset
-    uint4 tex;      // texel offset, width, height, flags (1 textured, 2 darken)
+    uint4 tex;      // texel offset, width, height, flags (1 textured, 2 darken, 4 cut out)
 };
 ByteAddressBuffer T : register(t0);
 struct VI { float3 pos : POSITION; float2 uv : TEXCOORD; float4 col : COLOR; };
@@ -318,6 +318,11 @@ float4 ps_main(VO i) : SV_Target {
     }
     float4 s = t * i.col;
     if (s.a <= 0.0) discard;
+    // A model's opaque groups: cut out where the texture is mostly clear, else solid.
+    if ((tex.w & 4) != 0) {
+        if (s.a < 0.5) discard;
+        s.a = 1.0;
+    }
     float a = saturate(s.a);
     if ((tex.w & 2) != 0) return float4(0, 0, 0, a);
     return float4(s.rgb * s.a, a);
@@ -337,8 +342,8 @@ struct Gpu {
     root: usize,
     vs: Vec<u8>,
     ps: Vec<u8>,
-    /// (mode, depth test, has depth view, samples, quality) → pipeline state.
-    psos: Vec<((Mode, bool, bool, u32, u32), usize)>,
+    /// (mode, depth test, has depth view, samples, quality, depth write) → pipeline state.
+    psos: Vec<(PsoKey, usize)>,
     ring: usize,
     ring_map: usize,
     ring_va: u64,
@@ -347,7 +352,24 @@ struct Gpu {
     tex: Vec<TexSlot>,
     /// The vertex ring's write point (bytes).
     frame: u64,
+    /// Model textures (`draw_mesh`): an append-only buffer made at the first model draw, and
+    /// each texture's place by its caller's key.
+    mesh: Option<MeshArena>,
 }
+
+type PsoKey = (Mode, bool, bool, u32, u32, bool);
+
+struct MeshArena {
+    buf: usize,
+    map: usize,
+    va: u64,
+    /// Texels used.
+    used: usize,
+    slots: Vec<(u64, TexSlot)>,
+}
+
+/// Room for model textures (texels): Sora, three forms and a dozen Keyblades take about 2.5 M.
+const MESH_TEXELS: usize = 6 << 20;
 
 // Raw COM pointers, used only on the game thread.
 unsafe impl Send for Gpu {}
@@ -505,15 +527,15 @@ unsafe fn init(device: usize) -> Result<Gpu, String> {
         at += n;
     }
     log(&format!("fx: renderer ready ({} textures, {} KB; shaders {} + {} bytes)", tex.len(), total * 4 / 1024, vs.len(), ps.len()));
-    Ok(Gpu { device, root: root as usize, vs, ps, psos: Vec::new(), ring, ring_map, ring_va, tex_buf, tex_va, tex, frame: 0 })
+    Ok(Gpu { device, root: root as usize, vs, ps, psos: Vec::new(), ring, ring_map, ring_va, tex_buf, tex_va, tex, frame: 0, mesh: None })
 }
 
 impl Gpu {
-    unsafe fn pso(&mut self, key: (Mode, bool, bool, u32, u32)) -> Result<usize, String> {
+    unsafe fn pso(&mut self, key: PsoKey) -> Result<usize, String> {
         if let Some((_, p)) = self.psos.iter().find(|(k, _)| *k == key) {
             return Ok(*p);
         }
-        let (mode, depth, has_dsv, samples, quality) = key;
+        let (mode, depth, has_dsv, samples, quality, write) = key;
         // Premultiplied output (rgb·As, sat(As)); only rgb is written, KH1's alpha stays.
         let (src, dst, op) = match mode {
             Mode::Additive => (2, 2, 1),
@@ -543,7 +565,7 @@ impl Gpu {
             blend: BlendDesc { alpha_to_coverage: 0, independent: 0, rt: rts },
             sample_mask: u32::MAX,
             raster: RasterDesc { fill: 3, cull: 1, front_ccw: 0, depth_bias: 0, depth_bias_clamp: 0.0, slope_bias: 0.0, depth_clip: 1, multisample: (samples > 1) as i32, aa_lines: 0, forced_samples: 0, conservative: 0 },
-            depth: DepthDesc { enable: (depth && has_dsv) as i32, write_mask: 0, func: 4, stencil: 0, read_mask: 0xFF, write_mask_s: 0xFF, _p: [0; 2], front: keep, back: keep },
+            depth: DepthDesc { enable: (depth && has_dsv) as i32, write_mask: (write && depth && has_dsv) as u32, func: 4, stencil: 0, read_mask: 0xFF, write_mask_s: 0xFF, _p: [0; 2], front: keep, back: keep },
             input: InputLayout { elems: elems.as_ptr(), n: 3 },
             strip_cut: 0,
             topology: 3,
@@ -580,68 +602,70 @@ pub unsafe fn camera(base: usize) -> Option<(glam::Mat4, glam::Mat4)> {
     (v.is_finite() && p.is_finite() && v.determinant().abs() > 1e-6 && p.determinant().abs() > 1e-12).then_some((v, p))
 }
 
-/// Draws `frame` into KH1's current command list (from the world-pass hook, game thread).
-pub unsafe fn draw(base: usize, frame: &kh2_fx::Frame, view: glam::Mat4, proj: glam::Mat4) {
-    if OFF.load(Ordering::Relaxed) || frame.batches.is_empty() || frame.vertices.is_empty() {
-        return;
-    }
-    let r = base + RENDERER_RVA;
-    let device = rd::<u64>(r + 0x2E0) as usize;
-    if device < 0x10000 {
-        return;
-    }
-    let Ok(mut g) = GPU.lock() else { return };
-    if g.as_ref().is_some_and(|g| g.device != device) {
-        fail("KH1 made a new device".into());
-        return;
-    }
-    if g.is_none() {
-        match init(device) {
-            Ok(x) => *g = Some(x),
-            Err(e) => return fail(e),
-        }
-    }
-    let gpu = g.as_mut().unwrap();
-    // KH1's bound frame buffer: 0 main, 5 resolve, 1..4 the others.
+/// KH1's bound frame buffer.
+struct Target {
+    fbi: i32,
+    fb: usize,
+    rtv: u64,
+    dsv: u64,
+    has_dsv: bool,
+    samples: u32,
+    quality: u32,
+}
+
+/// KH1's bound frame buffer: 0 main, 5 resolve, 1..4 the others.
+unsafe fn target(r: usize) -> Option<Target> {
     let fbi = rd::<i32>(r + 0x6C);
     let fb = match fbi {
         0 => r + 0x540,
         5 => r + 0x660,
         1..=4 => r + 0x688 + fbi as usize * 0x120,
-        _ => return,
+        _ => return None,
     };
     let (rtv_id, dsv_id) = (rd::<i32>(fb + 0x20), rd::<i32>(fb + 0x24));
     let (rtv_base, dsv_base) = (rd::<u64>(fb + 0x38), rd::<u64>(fb + 0x40));
     if rtv_id < 0 || rtv_base == 0 {
-        return;
+        return None;
     }
     let rtv = rtv_base + rd::<u32>(fb + 0x50) as u64 * rtv_id as u64;
     let has_dsv = dsv_id >= 0 && dsv_base != 0;
     let dsv = if has_dsv { dsv_base + rd::<u32>(fb + 0x58) as u64 * dsv_id as u64 } else { 0 };
     let (samples, quality) = (rd::<u32>(fb + 0xA0).max(1), rd::<u32>(fb + 0xA4));
-    if !matches!(samples, 1 | 2 | 4 | 8 | 16) {
-        return;
+    matches!(samples, 1 | 2 | 4 | 8 | 16).then_some(Target { fbi, fb, rtv, dsv, has_dsv, samples, quality })
+}
+
+/// The GPU state for KH1's device, made on the first draw; `None` while off or not ready.
+unsafe fn ready<'a>(base: usize, g: &'a mut Option<Gpu>) -> Option<&'a mut Gpu> {
+    if OFF.load(Ordering::Relaxed) {
+        return None;
     }
-    // Pipeline states first (a failure leaves KH1's list untouched).
-    let mut states = Vec::with_capacity(frame.batches.len());
-    for b in &frame.batches {
-        match gpu.pso((Mode::of(b.blend), b.depth_test, has_dsv, samples, quality)) {
-            Ok(p) => states.push(p),
-            Err(e) => return fail(e),
+    let device = rd::<u64>(base + RENDERER_RVA + 0x2E0) as usize;
+    if device < 0x10000 {
+        return None;
+    }
+    if g.as_ref().is_some_and(|g| g.device != device) {
+        fail("KH1 made a new device".into());
+        return None;
+    }
+    if g.is_none() {
+        match init(device) {
+            Ok(x) => *g = Some(x),
+            Err(e) => {
+                fail(e);
+                return None;
+            }
         }
     }
-    DRAWS.fetch_add(1, Ordering::Relaxed);
-    LAST_DRAW_MS.store(START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64, Ordering::Relaxed);
-    let get_list: unsafe extern "system" fn(usize, usize, usize, usize) -> usize = std::mem::transmute(base + LIST_RVA);
-    let cl = get_list(r, 0, 0, 0);
-    if cl < 0x10000 {
-        return;
-    }
-    // Vertices at the ring's write point, which goes round the whole ring (24 MB): a draw's
-    // vertices stay put for many frames, however many draws a frame has (a slot per draw, as
-    // before, came round again within KH1's 3 frames in flight with several draws a frame).
+    g.as_mut()
+}
+
+/// Copies `vertices` to the ring's write point, which goes round the whole ring (24 MB): a
+/// draw's vertices stay put for many frames, however many draws a frame has (a slot per draw, as
+/// before, came round again within KH1's 3 frames in flight with several draws a frame).
+/// Returns the vertex buffer view and how many vertices it holds.
+unsafe fn upload(gpu: &mut Gpu, vertices: &[kh2_fx::Vertex]) -> ([u64; 2], usize) {
     let max = SLOT_BYTES / 36;
-    let n = frame.vertices.len().min(max);
+    let n = vertices.len().min(max);
     let bytes = (n * 36 + 255) & !255;
     let total = RING_SLOTS * SLOT_BYTES;
     let mut at = gpu.frame as usize;
@@ -649,9 +673,13 @@ pub unsafe fn draw(base: usize, frame: &kh2_fx::Frame, view: glam::Mat4, proj: g
         at = 0;
     }
     gpu.frame = (at + bytes) as u64;
-    std::ptr::copy_nonoverlapping(frame.vertices.as_ptr() as *const u8, (gpu.ring_map + at) as *mut u8, n * 36);
-    let vb: [u64; 2] = [gpu.ring_va + at as u64, ((n * 36) as u64) | (36u64 << 32)];
-    // KH1's clip scale and offsets (its cbConstantVS shadow: SafeScale, xyOffset.zw).
+    std::ptr::copy_nonoverlapping(vertices.as_ptr() as *const u8, (gpu.ring_map + at) as *mut u8, n * 36);
+    ([gpu.ring_va + at as u64, ((n * 36) as u64) | (36u64 << 32)], n)
+}
+
+/// View, projection and KH1's clip scale and offsets (its cbConstantVS shadow: SafeScale,
+/// xyOffset.zw) as root constants 0..35.
+unsafe fn constants(r: usize, view: glam::Mat4, proj: glam::Mat4) -> ([u32; 40], f32, f32, f32) {
     let mut s = rd::<f32>(r + 0x5A10);
     if !(s.is_finite() && s > 0.01 && s < 100.0) {
         s = 1.0;
@@ -665,24 +693,75 @@ pub unsafe fn draw(base: usize, frame: &kh2_fx::Frame, view: glam::Mat4, proj: g
     k[32] = s.to_bits();
     k[33] = ox.to_bits();
     k[34] = oy.to_bits();
+    (k, s, ox, oy)
+}
+
+/// KH1's current list with our targets (a direct list) or theirs (a bundle), our root signature,
+/// triangle lists, the vertices and constants 0..35 bound; and its type (0 direct, 1 bundle).
+unsafe fn begin(base: usize, r: usize, gpu: &Gpu, t: &Target, vb: &[u64; 2], k: &[u32; 40], srv: u64) -> Option<(P, u32)> {
+    let get_list: unsafe extern "system" fn(usize, usize, usize, usize) -> usize = std::mem::transmute(base + LIST_RVA);
+    let cl = get_list(r, 0, 0, 0);
+    if cl < 0x10000 {
+        return None;
+    }
     let cl = cl as P;
-    let rtv_h = rtv as usize;
-    let dsv_h = dsv as usize;
+    let rtv_h = t.rtv as usize;
+    let dsv_h = t.dsv as usize;
     // KH1 records its draws into bundles (`0x1400FE6E0` makes them, `0x1400F7290` closes one and
     // runs it in the frame's direct list): a bundle inherits the direct list's targets and may
     // not set them (it would fail to close: the crash of the first try). Only a direct list
     // gets them from us.
     let list_type = com!(cl, CL_GET_TYPE, fn() -> u32);
     if list_type == 0 {
-        com!(cl, CL_SET_RT, fn(u32, *const usize, i32, *const usize), 1, &rtv_h, 0, if has_dsv { &dsv_h as *const usize } else { std::ptr::null() });
+        com!(cl, CL_SET_RT, fn(u32, *const usize, i32, *const usize), 1, &rtv_h, 0, if t.has_dsv { &dsv_h as *const usize } else { std::ptr::null() });
     } else if list_type != 1 {
-        return;
+        return None;
     }
     com!(cl, CL_SET_ROOT_SIG, fn(P), gpu.root as P);
     com!(cl, CL_TOPOLOGY, fn(u32), 4);
     com!(cl, CL_SET_VB, fn(u32, u32, *const u64), 0, 1, vb.as_ptr());
     com!(cl, CL_ROOT_CONSTANTS, fn(u32, u32, *const u32, u32), 0, 35, k.as_ptr(), 0);
-    com!(cl, CL_ROOT_SRV, fn(u32, u64), 1, gpu.tex_va);
+    com!(cl, CL_ROOT_SRV, fn(u32, u64), 1, srv);
+    Some((cl, list_type))
+}
+
+/// KH1 gets a fresh list, exactly as when its vertex ring runs out mid-scene (`0x1400FBBA0`):
+/// ours is closed and queued (`0x1400F7300(R, 0)`), a new one opened with KH1's root signature
+/// and heaps and all its cached state marked dirty (`0x140109360(R, 1, 0)`), so its next draw
+/// sets everything again.
+unsafe fn hand_back(base: usize, r: usize) {
+    let close: unsafe extern "system" fn(usize, u32) -> u64 = std::mem::transmute(base + CLOSE_RVA);
+    let reopen: unsafe extern "system" fn(usize, u32, u32) = std::mem::transmute(base + REOPEN_RVA);
+    close(r, 0);
+    reopen(r, 1, 0);
+}
+
+fn note_draw() {
+    DRAWS.fetch_add(1, Ordering::Relaxed);
+    LAST_DRAW_MS.store(START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64, Ordering::Relaxed);
+}
+
+/// Draws `frame` into KH1's current command list (from the world-pass hook, game thread).
+pub unsafe fn draw(base: usize, frame: &kh2_fx::Frame, view: glam::Mat4, proj: glam::Mat4) {
+    if OFF.load(Ordering::Relaxed) || frame.batches.is_empty() || frame.vertices.is_empty() {
+        return;
+    }
+    let r = base + RENDERER_RVA;
+    let Ok(mut g) = GPU.lock() else { return };
+    let Some(gpu) = ready(base, &mut g) else { return };
+    let Some(t) = target(r) else { return };
+    // Pipeline states first (a failure leaves KH1's list untouched).
+    let mut states = Vec::with_capacity(frame.batches.len());
+    for b in &frame.batches {
+        match gpu.pso((Mode::of(b.blend), b.depth_test, t.has_dsv, t.samples, t.quality, false)) {
+            Ok(p) => states.push(p),
+            Err(e) => return fail(e),
+        }
+    }
+    note_draw();
+    let (vb, n) = upload(gpu, &frame.vertices);
+    let (k, s, ox, oy) = constants(r, view, proj);
+    let Some((cl, list_type)) = begin(base, r, gpu, &t, &vb, &k, gpu.tex_va) else { return };
     let mut last_pso = 0usize;
     for (b, &pso) in frame.batches.iter().zip(&states) {
         let (first, count) = (b.first as usize, b.count as usize);
@@ -694,35 +773,148 @@ pub unsafe fn draw(base: usize, frame: &kh2_fx::Frame, view: glam::Mat4, proj: g
             com!(cl, CL_SET_PSO, fn(P), pso as P);
             last_pso = pso;
         }
-        let t = b.texture.and_then(|t| gpu.tex.get(t as usize)).copied();
-        let mut flags = if t.is_some() { 1 } else { 0 };
+        let tx = b.texture.and_then(|t| gpu.tex.get(t as usize)).copied();
+        let mut flags = if tx.is_some() { 1 } else { 0 };
         if Mode::of(b.blend) == Mode::Darken {
             flags |= 2;
         }
-        let t = t.unwrap_or(TexSlot { offset: 0, w: 1, h: 1 });
-        let kb = [b.depth_offset.to_bits(), t.offset, t.w, t.h, flags];
+        let tx = tx.unwrap_or(TexSlot { offset: 0, w: 1, h: 1 });
+        let kb = [b.depth_offset.to_bits(), tx.offset, tx.w, tx.h, flags];
         com!(cl, CL_ROOT_CONSTANTS, fn(u32, u32, *const u32, u32), 0, 5, kb.as_ptr(), 35);
         com!(cl, CL_DRAW, fn(u32, u32, u32, u32), count as u32, 1, first as u32, 0);
     }
-    // KH1 gets a fresh list, exactly as when its vertex ring runs out mid-scene
-    // (`0x1400FBBA0`): ours is closed and queued (`0x1400F7300(R, 0)`), a new one opened with
-    // KH1's root signature and heaps and all its cached state marked dirty
-    // (`0x140109360(R, 1, 0)`), so its next draw sets everything again.
-    let close: unsafe extern "system" fn(usize, u32) -> u64 = std::mem::transmute(base + CLOSE_RVA);
-    let reopen: unsafe extern "system" fn(usize, u32, u32) = std::mem::transmute(base + REOPEN_RVA);
-    close(r, 0);
-    reopen(r, 1, 0);
+    hand_back(base, r);
     static LOGGED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     if LOGGED.fetch_add(1, Ordering::Relaxed) < 3 {
         log(&format!(
-            "fx: drew {} batches, {} vertices into a {} list, frame buffer {fbi} ({}x{}, {samples}x MSAA, depth {has_dsv}); clip scale {s}, offset ({ox}, {oy}); viewport {:?}",
+            "fx: drew {} batches, {} vertices into a {} list, frame buffer {} ({}x{}, {}x MSAA, depth {}); clip scale {s}, offset ({ox}, {oy}); viewport {:?}",
             frame.batches.len(),
             n,
             if list_type == 1 { "bundle" } else { "direct" },
-            rd::<i32>(fb + 8),
-            rd::<i32>(fb + 0xC),
+            t.fbi,
+            rd::<i32>(t.fb + 8),
+            rd::<i32>(t.fb + 0xC),
+            t.samples,
+            t.has_dsv,
             rd::<[f32; 4]>(r + 0x15C)
         ));
     }
     let _ = (gpu.ring, gpu.tex_buf);
+}
+
+/// A texture a model draw uses: `key` names it for good (the same key, the same pixels).
+pub struct MeshTexture<'a> {
+    pub key: u64,
+    pub width: u32,
+    pub height: u32,
+    /// RGBA8, 255 = opaque.
+    pub rgba: &'a [u8],
+}
+
+/// A run of a model's triangles: `count` vertices from `first`, with texture `texture` (an
+/// index into the draw's textures). Opaque runs are cut out at half alpha and write depth;
+/// translucent ones blend and don't.
+#[derive(Clone, Copy, Debug)]
+pub struct MeshBatch {
+    pub first: u32,
+    pub count: u32,
+    pub texture: usize,
+    pub translucent: bool,
+}
+
+impl MeshArena {
+    /// The texture's place, uploaded the first time its key is seen (a texture that doesn't fit
+    /// any more is drawn untextured).
+    unsafe fn slot(&mut self, t: &MeshTexture) -> Option<TexSlot> {
+        if let Some((_, s)) = self.slots.iter().find(|(k, _)| *k == t.key) {
+            return Some(*s);
+        }
+        let n = (t.width * t.height) as usize;
+        if n == 0 || t.rgba.len() < n * 4 || self.used + n > MESH_TEXELS {
+            return None;
+        }
+        std::ptr::copy_nonoverlapping(t.rgba.as_ptr(), (self.map + self.used * 4) as *mut u8, n * 4);
+        let s = TexSlot { offset: self.used as u32, w: t.width, h: t.height };
+        self.used += n;
+        self.slots.push((t.key, s));
+        Some(s)
+    }
+}
+
+/// The renderer is up or may still come up (not turned off by a failure).
+pub fn usable() -> bool {
+    !OFF.load(Ordering::Relaxed)
+}
+
+/// Draws a model's triangles (KH1 world space) into KH1's current command list, depth-tested
+/// and depth-writing, from the world-pass hook (game thread). Returns whether it was drawn.
+pub unsafe fn draw_mesh(base: usize, vertices: &[kh2_fx::Vertex], batches: &[MeshBatch], textures: &[MeshTexture], view: glam::Mat4, proj: glam::Mat4) -> bool {
+    if OFF.load(Ordering::Relaxed) || batches.is_empty() || vertices.is_empty() {
+        return false;
+    }
+    let r = base + RENDERER_RVA;
+    let Ok(mut g) = GPU.lock() else { return false };
+    let Some(gpu) = ready(base, &mut g) else { return false };
+    let Some(t) = target(r) else { return false };
+    if gpu.mesh.is_none() {
+        match buffer(gpu.device, MESH_TEXELS * 4) {
+            Ok((buf, map, va)) => gpu.mesh = Some(MeshArena { buf, map, va, used: 0, slots: Vec::new() }),
+            Err(e) => {
+                fail(format!("model textures: {e}"));
+                return false;
+            }
+        }
+    }
+    let (opaque, blended) = match (gpu.pso((Mode::Alpha, true, t.has_dsv, t.samples, t.quality, true)), gpu.pso((Mode::Alpha, true, t.has_dsv, t.samples, t.quality, false))) {
+        (Ok(a), Ok(b)) => (a, b),
+        (Err(e), _) | (_, Err(e)) => {
+            fail(e);
+            return false;
+        }
+    };
+    let arena = gpu.mesh.as_mut().unwrap();
+    let slots: Vec<Option<TexSlot>> = textures.iter().map(|t| arena.slot(t)).collect();
+    let (arena_va, arena_buf) = (arena.va, arena.buf);
+    note_draw();
+    let (vb, n) = upload(gpu, vertices);
+    let (k, ..) = constants(r, view, proj);
+    let Some((cl, list_type)) = begin(base, r, gpu, &t, &vb, &k, arena_va) else { return false };
+    // Opaque runs first, then the translucent ones over them.
+    let mut last_pso = 0usize;
+    for pass in [false, true] {
+        for b in batches.iter().filter(|b| b.translucent == pass) {
+            let (first, count) = (b.first as usize, b.count as usize);
+            if first >= n || count < 3 {
+                continue;
+            }
+            let count = count.min(n - first) / 3 * 3;
+            let pso = if pass { blended } else { opaque };
+            if pso != last_pso {
+                com!(cl, CL_SET_PSO, fn(P), pso as P);
+                last_pso = pso;
+            }
+            let tx = slots.get(b.texture).copied().flatten();
+            let flags = if tx.is_some() { 1 } else { 0 } | if pass { 0 } else { 4 };
+            let tx = tx.unwrap_or(TexSlot { offset: 0, w: 1, h: 1 });
+            let kb = [0f32.to_bits(), tx.offset, tx.w, tx.h, flags];
+            com!(cl, CL_ROOT_CONSTANTS, fn(u32, u32, *const u32, u32), 0, 5, kb.as_ptr(), 35);
+            com!(cl, CL_DRAW, fn(u32, u32, u32, u32), count as u32, 1, first as u32, 0);
+        }
+    }
+    hand_back(base, r);
+    static LOGGED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if LOGGED.fetch_add(1, Ordering::Relaxed) < 3 {
+        log(&format!(
+            "fx: drew a model: {} runs, {n} vertices, {} textures ({} KB of model textures) into a {} list, frame buffer {} ({}x MSAA, depth {})",
+            batches.len(),
+            textures.len(),
+            gpu.mesh.as_ref().map_or(0, |a| a.used * 4 / 1024),
+            if list_type == 1 { "bundle" } else { "direct" },
+            t.fbi,
+            t.samples,
+            t.has_dsv
+        ));
+    }
+    let _ = arena_buf;
+    true
 }

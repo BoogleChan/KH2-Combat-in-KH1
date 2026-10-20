@@ -21,6 +21,7 @@ mod kh1voice;
 mod kh2sound;
 mod leftblade;
 mod menu;
+mod model;
 mod pose;
 mod settings;
 mod shortcuts;
@@ -203,6 +204,7 @@ pub unsafe extern "system" fn DllMain(_inst: *mut c_void, reason: u32, _reserved
         kh2sound::start();
         kh2fx::start();
         pose::load_kh2();
+        model::load();
         CreateThread(std::ptr::null_mut(), 0, monitor, std::ptr::null_mut(), 0, std::ptr::null_mut());
     }
     1

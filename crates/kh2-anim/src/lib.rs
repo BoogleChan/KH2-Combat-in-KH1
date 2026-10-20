@@ -9,9 +9,10 @@
 //! 2. joints in the motion's joint-table order: expressions, constraints
 //!    (position, orientation, aim, scale, limits), one- and two-bone IK
 //!
-//! Only skeletons are involved: no meshes or textures. Units are model units
-//! (y up, the character faces +z).
+//! Units are model units (y up, the character faces +z). [`skin`] puts a
+//! model's triangles at a pose.
 
+pub mod skin;
 mod solve;
 
 pub use solve::{euler_from_matrix, ik_solve};

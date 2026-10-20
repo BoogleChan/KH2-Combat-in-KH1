@@ -442,7 +442,7 @@ const PAUSE_STATE_RVA: Rva = Rva(0x232E9B4);
 
 /// The game is paused or a full-screen menu holds it: KH1's pause machine is up, or Sora has had
 /// no physics frame for a while (`takeover::paused`: any other menu that stops the field).
-fn paused(base: usize) -> Option<String> {
+pub(super) fn paused(base: usize) -> Option<String> {
     let state = unsafe { std::ptr::read_unaligned((base + PAUSE_STATE_RVA) as *const i32) };
     if state != 0 {
         return Some(format!("KH1's pause / menu state {state}"));
@@ -595,7 +595,11 @@ fn step(s: &mut State, motion: Option<u16>) {
 unsafe extern "system" fn world_pass() {
     let f: unsafe extern "system" fn() = std::mem::transmute(ORIG.load(Ordering::Acquire));
     f();
-    let _ = std::panic::catch_unwind(|| draw());
+    let _ = std::panic::catch_unwind(|| {
+        // KH2's player model first (the effects then blend over it).
+        super::model::draw();
+        draw()
+    });
 }
 
 fn draw() {

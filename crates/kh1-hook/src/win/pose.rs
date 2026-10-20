@@ -312,6 +312,9 @@ struct Sora {
     /// KH1's hair, hood and keychain following KH2's own animation of them
     /// (`kh1_data::secondary`), built with the retarget.
     secondary: Option<kh1_data::secondary::Secondary>,
+    /// KH1's poses on KH2's skeleton (`kh1_data::inverse`), for KH2's model while KH1 animates
+    /// him; built with the retarget.
+    inverse: Option<kh1_data::inverse::Inverse>,
     /// The KH2 pose (Sora's bones, the Keyblade's) the pose being drawn came from, if KH2's.
     kh2_now: Option<(Vec<Mat4>, Vec<Mat4>)>,
 }
@@ -1248,7 +1251,7 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
         };
         log(&format!("Sora's instance {instance:#x} (bones at {table:#x})"));
         let bind = kh2_anim::Pose::bind(&kh1).bones;
-        *g = Some(Sora { instance, retarget: None, bind, calls: 0, checked: false, follow: Follow::default(), to_world: None, wrote_root: None, last_drawn: None, param_agree: 0, param_ok: PARAM_OK.load(Ordering::Relaxed), jumps: 0, parents: kh1.iter().map(|b| b.parent).collect(), jiggle: None, secondary: None, kh2_now: None });
+        *g = Some(Sora { instance, retarget: None, bind, calls: 0, checked: false, follow: Follow::default(), to_world: None, wrote_root: None, last_drawn: None, param_agree: 0, param_ok: PARAM_OK.load(Ordering::Relaxed), jumps: 0, parents: kh1.iter().map(|b| b.parent).collect(), jiggle: None, secondary: None, inverse: None, kh2_now: None });
         KH1_BONES.lock().map(|mut b| *b = kh1).ok();
     }
     let s = g.as_mut().unwrap();
@@ -1275,6 +1278,10 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
                     sec.chain().len()
                 ));
                 s.secondary = Some(sec);
+                let grip = kh1_data::retarget::GRIP_BONE;
+                let inv = kh1_data::inverse::Inverse::new(&b, &kh2.rig.skeleton, r_ratio(s.retarget.as_ref()), |i| i < grip && s.retarget.as_ref().is_some_and(|r| r.follows_one_part(i)));
+                log(&format!("KH1's poses on KH2's skeleton: {} of {} KH2 bones follow a KH1 bone", inv.mapped(), kh2.rig.skeleton.len()));
+                s.inverse = Some(inv);
             }
         }
     }
@@ -1390,6 +1397,12 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
                 *h = Some(Hands { orig: o, drawn: o, at: Instant::now() });
             }
         }
+        // KH2's model (`model`) on KH1's own animation, as drawn.
+        if let (true, Some(inv)) = (super::model::on(), s.inverse.as_ref()) {
+            let back = to_world.inverse();
+            let kh1: Vec<Mat4> = (0..SORA_BONES as usize).map(|i| back * mat(world + i * 0x40)).collect();
+            super::model::note_pose(&inv.pose(&kh1), &[], &to_world, r_ratio(s.retarget.as_ref()));
+        }
         return;
     };
     let kh2_feet = MODE.load(Ordering::Relaxed) == 0 && super::takeover::active() && super::takeover::GROUNDED.load(Ordering::Relaxed);
@@ -1454,6 +1467,12 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
     }
     // Valor's second Keyblade (`leftblade`): the left hand's weapon bones, from this pose and
     // KH2's, handed to its draw (it does nothing outside Valor or with it off).
+    // KH2's model (`model`): KH2's own pose, or KH1's (its own motion drawn) on KH2's skeleton.
+    match (s.kh2_now.as_ref(), s.inverse.as_ref()) {
+        (Some((body, weapon)), _) => super::model::note_pose(body, weapon, &to_world, r_ratio(s.retarget.as_ref())),
+        (None, Some(inv)) if super::model::on() => super::model::note_pose(&inv.pose(&pose), &[], &to_world, r_ratio(s.retarget.as_ref())),
+        _ => {}
+    }
     if let Some((body, weapon)) = s.kh2_now.as_ref() {
         super::leftblade::note_pose(&pose, &s.bind, body, weapon, &to_world, s.retarget.as_ref().map_or(1.0, |r| r.hip_ratio()));
     }
@@ -1464,6 +1483,11 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
 }
 
 static KH1_BONES: Mutex<Vec<kh2_formats::anim::Bone>> = Mutex::new(Vec::new());
+
+/// KH1's size against KH2's (`Retarget::hip_ratio`), 1 without a retarget.
+fn r_ratio(r: Option<&Retarget>) -> f32 {
+    r.map_or(1.0, |r| r.hip_ratio())
+}
 
 /// A small model posed while Sora's hands are known: is it held (its world matrix a fixed
 /// relation to KH1's hand while the hand moves)? Returns the world matrix to pose it with

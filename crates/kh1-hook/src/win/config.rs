@@ -70,7 +70,7 @@ const DECOR_RVA: Rva = Rva(0x2F0740);
 /// Our rows: 8 the camera, 9..16 the move styles (8 a page: rows 8..15, 16..) (`styles::Kind::EVERY` in order). Each:
 /// label, left value, right value, help.
 const FIRST_ROW: i32 = 8;
-const ROWS: [[u32; 4]; 11] = [
+const ROWS: [[u32; 4]; 12] = [
     [0x7F00_0001, 0x7F00_0002, 0x7F00_0003, 0x7F00_0004],
     [0x7F00_0101, 0x7F00_0002, 0x7F00_0003, 0x7F00_0102],
     [0x7F00_0103, 0x7F00_0002, 0x7F00_0003, 0x7F00_0104],
@@ -80,12 +80,13 @@ const ROWS: [[u32; 4]; 11] = [
     [0x7F00_010B, 0x7F00_0002, 0x7F00_0003, 0x7F00_010C],
     [0x7F00_010D, 0x7F00_0002, 0x7F00_0003, 0x7F00_010E],
     [0x7F00_0115, 0x7F00_0002, 0x7F00_0003, 0x7F00_0116],
+    [0x7F00_0117, 0x7F00_0002, 0x7F00_0003, 0x7F00_0118],
     [0x7F00_010F, 0x7F00_0002, 0x7F00_0003, 0x7F00_0110],
     [0x7F00_0111, 0x7F00_0113, 0x7F00_0114, 0x7F00_0112],
 ];
 /// The camera row's help line (with the version under it).
 const HELP_ID: u32 = 0x7F00_0004;
-const STRINGS: [(u32, &str); 26] = [
+const STRINGS: [(u32, &str); 28] = [
     (0x7F00_0001, "Camera Style"),
     (0x7F00_0002, "KH1"),
     (0x7F00_0003, "KH2"),
@@ -106,6 +107,8 @@ const STRINGS: [(u32, &str); 26] = [
     (0x7F00_010E, "Choose KH1's or KH2's dodge roll for Sora.\nDrive Forms keep their own."),
     (0x7F00_0115, "Misc Animations"),
     (0x7F00_0116, "Choose KH1's or KH2's animations for standing, walking,\nrunning and items."),
+    (0x7F00_0117, "Player Model"),
+    (0x7F00_0118, "Draw Sora with KH1's model or KH2's.\nDrive Forms and Keyblades follow."),
     (0x7F00_010F, "Battle Quotes"),
     (0x7F00_0110, "Choose KH1's or KH2's battle quotes for Sora."),
     (0x7F00_0111, "Gummi Routes"),

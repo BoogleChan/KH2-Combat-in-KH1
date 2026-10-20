@@ -104,6 +104,9 @@ roll_style = kh2\r\n\
 ; misc_anims: kh1 or kh2, KH1's or KH2's animations for base Sora standing, walking, running\r\n\
 ; and using an item (KH2 still moves him; KH1 runs the item either way)\r\n\
 misc_anims = kh2\r\n\
+; player_model: kh1 or kh2, draw Sora with KH1's model or KH2's (his KH2 Drive Form models and\r\n\
+; KH2's Keyblades where KH2 has the same one)\r\n\
+player_model = kh1\r\n\
 ; battle_quotes: kh1 or kh2, Sora's KH1 or KH2 battle quotes (the Config menu's row; without\r\n\
 ; this line kh2_voice decides)\r\n\
 battle_quotes = kh1\r\n\
@@ -162,8 +165,8 @@ pub struct Settings {
     pub drive: bool,
     /// Valor's Keyblade drawn in his left hand (`valor_left_blade = on`, `leftblade`).
     pub valor_left_blade: bool,
-    /// KH2's (true) or KH1's moves per `styles::Kind` (ground combo, air combo, magic, air magic, jump, glide, dodge roll, misc animations, battle quotes).
-    pub styles: [bool; 9],
+    /// KH2's (true) or KH1's moves per `styles::Kind` (ground combo, air combo, magic, air magic, jump, glide, dodge roll, misc animations, player model, battle quotes).
+    pub styles: [bool; 10],
     /// Skip the Gummi Ship's flights (`gummi = skip`, `gummi.rs`).
     pub gummi_skip: bool,
 }
@@ -241,7 +244,7 @@ pub fn get() -> &'static Settings {
             kh2_hair: on(&text, "kh2_hair", "on", true),
             drive: on(&text, "drive", "on", true),
             valor_left_blade: on(&text, "valor_left_blade", "on", true),
-            styles: [on(&text, "ground_combo", "kh2", true), on(&text, "air_combo", "kh2", true), on(&text, "magic", "kh2", false), on(&text, "air_magic", "kh2", false), on(&text, "jump_style", "kh2", true), on(&text, "glide_style", "kh2", true), on(&text, "roll_style", "kh2", true), on(&text, "misc_anims", "kh2", true), on(&text, "battle_quotes", "kh2", on(&text, "kh2_voice", "on", false))],
+            styles: [on(&text, "ground_combo", "kh2", true), on(&text, "air_combo", "kh2", true), on(&text, "magic", "kh2", false), on(&text, "air_magic", "kh2", false), on(&text, "jump_style", "kh2", true), on(&text, "glide_style", "kh2", true), on(&text, "roll_style", "kh2", true), on(&text, "misc_anims", "kh2", true), on(&text, "player_model", "kh2", false), on(&text, "battle_quotes", "kh2", on(&text, "kh2_voice", "on", false))],
             gummi_skip: on(&text, "gummi", "skip", false),
         };
         log(&format!("settings ({path}): {s:?}"));

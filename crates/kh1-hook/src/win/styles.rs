@@ -18,12 +18,15 @@ pub enum Kind {
     DodgeRoll,
     /// KH2's animations over KH1's own non-combat actions (an item's use), `pose::follow`.
     MiscAnims,
+    /// Which model Sora is drawn with: KH1's own, or KH2's (`model`). Not a move: the same in
+    /// Drive Forms (their own KH2 models).
+    PlayerModel,
     /// Sora's battle quotes (KH2's voice on KH2's moves, or KH1's): everywhere, forms too.
     BattleQuotes,
 }
 
 impl Kind {
-    pub const EVERY: [Kind; 9] = [Kind::GroundCombo, Kind::AirCombo, Kind::Magic, Kind::AirMagic, Kind::Jump, Kind::Glide, Kind::DodgeRoll, Kind::MiscAnims, Kind::BattleQuotes];
+    pub const EVERY: [Kind; 10] = [Kind::GroundCombo, Kind::AirCombo, Kind::Magic, Kind::AirMagic, Kind::Jump, Kind::Glide, Kind::DodgeRoll, Kind::MiscAnims, Kind::PlayerModel, Kind::BattleQuotes];
 
     /// Its ini key.
     pub fn key(self) -> &'static str {
@@ -36,6 +39,7 @@ impl Kind {
             Kind::Glide => "glide_style",
             Kind::DodgeRoll => "roll_style",
             Kind::MiscAnims => "misc_anims",
+            Kind::PlayerModel => "player_model",
             Kind::BattleQuotes => "battle_quotes",
         }
     }
@@ -51,6 +55,7 @@ impl Kind {
             Kind::Glide => "Glide",
             Kind::DodgeRoll => "Dodge Roll",
             Kind::MiscAnims => "Misc Animations",
+            Kind::PlayerModel => "Player Model",
             Kind::BattleQuotes => "Battle Quotes",
         }
     }
@@ -60,8 +65,8 @@ impl Kind {
     }
 }
 
-/// KH2's (true) or KH1's, per `Kind`: combos, jump, glide and dodge roll KH2's, magic KH1's by default (as before).
-static KH2: [AtomicBool; 9] = [AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false)];
+/// KH2's (true) or KH1's, per `Kind`: combos, jump, glide and dodge roll KH2's, magic KH1's by default (as before); KH1's model.
+static KH2: [AtomicBool; 10] = [AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false), AtomicBool::new(false)];
 static INIT: Once = Once::new();
 
 fn init() {

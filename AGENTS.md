@@ -3056,3 +3056,16 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   KH1's jump / Square kept from it in its jump (s245), and s247's filter on KH1's action bit.
   s255's KH1 animations over KH2's jump stay for KH2's own falls with Jump at KH1 (after a KH2
   move in the air).
+
+### 2026-10-20: Stage 257 (KH2's player model)
+- The user: "an option in config to switch between sora's player model And his KH2 Player
+  Model"; asked: KH2's model always (KH1's animation carried onto it), the forms' own KH2 models,
+  KH2's Keyblades. Helper (`kh2-model`, `docs/kh1-kh2-model.md`): `kh2_formats::mdlx` (meshes,
+  skeleton, textures replayed through the PS2 GS memory layout), `kh2_anim::skin`,
+  `kh1_data::inverse` (KH1's pose onto KH2's skeleton), `win/model.rs` (loads P_EX100 and the
+  forms' models and the matching KH2 Keyblades from the user's KH2 install, hides KH1's Sora by
+  masking his body meshes in the model queue, draws the KH2 model in the effect renderer before
+  the effects, with depth and alpha cut-out). Config row "Player Model" (KH1 | KH2), ini
+  `player_model`, default kh1. No lighting yet; KH1's Keyblade while KH1 animates him; nothing
+  seen in game. The model-queue hook is always installed now (`valor_left_blade` only gates the
+  second Keyblade).

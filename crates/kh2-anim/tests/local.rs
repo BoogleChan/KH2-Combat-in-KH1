@@ -30,3 +30,25 @@ fn every_sora_motion_poses_and_feet_reach_ik_targets() {
     let low = (0..idle.bone_count).map(|i| p.bone_position(i).y).fold(f32::MAX, f32::min);
     assert!(low.abs() < 1.0, "lowest bone {low}");
 }
+
+/// Sora's mesh at his bind pose: a T-pose standing on the ground, about 155 units tall.
+#[test]
+fn sora_mesh_skins_at_bind_pose() {
+    let Some(d) = dir() else { return };
+    let Ok(bytes) = std::fs::read(d.join("P_EX100.mdlx")) else { return };
+    let model = kh2_formats::mdlx::parse(&bytes).unwrap();
+    let pose = kh2_anim::Pose::bind(&model.bones);
+    let (mut lo, mut hi) = (glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN));
+    let mut n = 0;
+    kh2_anim::skin::skin(&model, &pose.bones, glam::Mat4::IDENTITY, |_, p, _| {
+        n += 1;
+        for v in p {
+            lo = lo.min(v);
+            hi = hi.max(v);
+        }
+    });
+    assert_eq!(n, model.triangle_count());
+    assert!(lo.y > -2.0 && lo.y < 2.0, "{lo}");
+    assert!(hi.y > 140.0 && hi.y < 170.0, "{hi}");
+    assert!(hi.x > 50.0 && lo.x < -50.0, "arms out: {lo} {hi}");
+}

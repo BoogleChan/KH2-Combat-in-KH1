@@ -249,24 +249,36 @@ fn log_n(counter: &AtomicU32, max: u32, line: impl FnOnce() -> String) {
     }
 }
 
+/// The model queue's hook is in (KH2's player model, `model::hide`, uses it too).
+static QUEUE_HOOKED: AtomicBool = AtomicBool::new(false);
+
 pub unsafe fn install() {
-    if !super::settings::get().valor_left_blade {
-        log("left Keyblade: off (valor_left_blade = off)");
-        return;
-    }
     let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
     BASE.store(base, Ordering::Relaxed);
     // KH1's .wpn release handler, pointed at ours (data: the pointer itself is checked).
     let slot = base + WPN_RELEASE_SLOT_RVA;
     let want = ((base + WPN_RELEASE_RVA) as u64).to_le_bytes();
     let ours = (wpn_release as *const () as usize as u64).to_le_bytes();
-    if !super::crash::readable(slot) || !super::hook::patch(slot, &want, &ours, "the .wpn release handler (left Keyblade)") {
+    let left = super::settings::get().valor_left_blade;
+    let patched = if !left {
+        log("left Keyblade: off (valor_left_blade = off)");
+        false
+    } else if !super::crash::readable(slot) || !super::hook::patch(slot, &want, &ours, "the .wpn release handler (left Keyblade)") {
         log("left Keyblade: KH1's .wpn release handler not where expected: not installed");
+        false
+    } else {
+        true
+    };
+    // The queue's hook goes in either way: KH2's player model holds back KH1's Sora through it.
+    if super::hook::install(base + QUEUE_RVA, &QUEUE_PROLOGUE, queue as *const () as usize, &ORIG_QUEUE, "model queue (left Keyblade, KH2 model)").is_none() {
+        // (Put KH1's handler back: nothing of ours will be loaded.)
+        if patched {
+            super::hook::patch(slot, &ours, &want, "the .wpn release handler (back)");
+        }
         return;
     }
-    if super::hook::install(base + QUEUE_RVA, &QUEUE_PROLOGUE, queue as *const () as usize, &ORIG_QUEUE, "model queue (left Keyblade)").is_none() {
-        // (Put KH1's handler back: nothing of ours will be loaded.)
-        super::hook::patch(slot, &ours, &want, "the .wpn release handler (back)");
+    QUEUE_HOOKED.store(true, Ordering::Relaxed);
+    if !patched {
         return;
     }
     INSTALLED.store(true, Ordering::Relaxed);
@@ -527,6 +539,7 @@ unsafe extern "system" fn wpn_release(record: usize) -> u64 {
 /// - whether any of the clip's trail windows is open (`trail`, used if the left weapon's own
 ///   ranges couldn't be read).
 pub fn kh2_left(bones: Option<&[Mat4]>, body: &[Mat4], motion: u16, frame: u32, trail: bool) {
+    super::model::note_left(bones);
     if !INSTALLED.load(Ordering::Relaxed) {
         return;
     }
@@ -666,8 +679,11 @@ type Queue = unsafe extern "system" fn(usize, usize, usize, usize) -> usize;
 
 unsafe extern "system" fn queue(instance: usize, view: usize, params: usize, actor: usize) -> usize {
     let f: Queue = std::mem::transmute(ORIG_QUEUE.load(Ordering::Acquire));
-    let r = f(instance, view, params, actor);
-    if !IN_SECOND.load(Ordering::Relaxed) {
+    // KH2's player model: Sora's own draw with his meshes (and maybe his Keyblade) held back.
+    let sora = !IN_SECOND.load(Ordering::Relaxed) && actor != 0 && actor == super::takeover::sora_actor() && instance == super::pose::SORA_INSTANCE.load(Ordering::Relaxed) && readable(params, P_SIZE);
+    let ours = if sora { super::model::hide(params) } else { None };
+    let r = f(instance, view, ours.as_ref().map_or(params, |p| p.0.as_ptr() as usize), actor);
+    if !IN_SECOND.load(Ordering::Relaxed) && INSTALLED.load(Ordering::Relaxed) {
         second(f, instance, view, params, actor);
     }
     r
@@ -677,6 +693,10 @@ unsafe extern "system" fn queue(instance: usize, view: usize, params: usize, act
 unsafe fn second(f: Queue, instance: usize, view: usize, params: usize, actor: usize) {
     let mesh = MESH.load(Ordering::Relaxed);
     if mesh == 0 || !SHOWN.load(Ordering::Relaxed) || !super::form::two_blades() || actor == 0 || actor != super::takeover::sora_actor() {
+        return;
+    }
+    // (KH2's model of the same Keyblade is drawn in its place.)
+    if super::model::left_is_ours() {
         return;
     }
     if instance != super::pose::SORA_INSTANCE.load(Ordering::Relaxed) || !readable(params, P_SIZE) {

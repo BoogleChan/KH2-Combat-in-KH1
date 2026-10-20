@@ -586,6 +586,12 @@ impl Retarget {
         self.turns.get(bone).is_some_and(|t| t.is_some())
     }
 
+    /// Whether one measured part alone turns this KH1 bone (not a blend of two: the spine's
+    /// middle, the neck), so its turn is that part's (`inverse` pairs KH2 bones with these).
+    pub fn follows_one_part(&self, bone: usize) -> bool {
+        self.turns.get(bone).copied().flatten().is_some_and(|(a, b, t)| a == b || t == 0.0)
+    }
+
     /// How many KH1 bones a measured part turns.
     pub fn mapped(&self) -> usize {
         self.turns.iter().filter(|t| t.is_some()).count()
