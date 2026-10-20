@@ -2957,3 +2957,12 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   list's moves (ability moves by default) had voices loaded and played. Every move's voices load,
   and play on any move with Battle Quotes at KH2; KH1's swing voice stands down for every move
   then.
+
+### 2026-10-20: Stage 247 (KH1's glide bit read as Square)
+- The user (s245 log: Jump KH2, Glide KH1, Dodge Roll KH1): jumps cut short of their full
+  height ("multiple inputs are being sent ... unable to get the max height"), straight into KH1's
+  glide, "still able to input normal glide on the jump button". `takeover::buttons` reads KH1's
+  action bit `0x100000` of its held state as Square, and KH1 sets it too with its jump held in
+  the air (its glide): KH2 saw Square mid-rise (the rise cut from 14 to 2 a frame at ~126) and
+  the Glide style's start (Square held, falling) fired at the top. With the jump held, only the
+  pad's own Square counts now (logged when the bit comes with the jump).

@@ -2535,8 +2535,18 @@ pub fn buttons() -> u16 {
         if held & 6 != 0 {
             b |= jump_button();
         }
-        if held & 0x10_0000 != 0 {
+        // (KH1's action bit, `0x100000`, is Square's, but KH1 also sets it with its jump held in
+        // the air: its glide. Read as Square then it cut KH2's jump short and started KH1's glide
+        // on Square, the user: "multiple inputs are being sent ... unable to get the max height on
+        // jump, and if glide is equipped you go straight into glide". With the jump held, only
+        // the pad's own Square counts.)
+        if held & 0x10_0000 != 0 && held & 6 == 0 && b & jump_button() == 0 {
             b |= SQUARE;
+        } else if held & 0x10_0000 != 0 && b & SQUARE == 0 {
+            static N: AtomicU32 = AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 10 {
+                log(&format!("KH1's action bit with the jump held (KH1 buttons {held:08x}): not taken for Square"));
+            }
         }
     }
     b
