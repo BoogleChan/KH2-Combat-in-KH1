@@ -2989,3 +2989,12 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
     cut it now (`takeover::SPELL_CUT_OPEN`), else refused / dropped; what's stored is dropped
     after 0.2 s.
   - KH2 spells' and Reflect's `WAITING` (up to 5 s for the move's next window): dropped at once.
+
+### 2026-10-20: Stage 250 (the dream weapons' stretch, again)
+- A tester (the user's relay, Dive to the Heart, screenshots): "tap move, the split second any
+  animations begin, he stretches ... his un-stretched shield appears at the end of the stretched
+  mesh", not on jumps; a long stretched blade along the floor. s226's rigid hold (`dream_hold`)
+  notes KH1's hold from KH1's pose on any frame KH1 posed him; on an animation's first frame some
+  weapon bones were still the last drawn ones, far from the hand, and that hold put the weapon
+  there. A hold is noted only with every weapon bone within 250 of the grip (logged otherwise).
+  The shield's orientation ("isn't perfectly oriented in his hand") is open: no detail given.

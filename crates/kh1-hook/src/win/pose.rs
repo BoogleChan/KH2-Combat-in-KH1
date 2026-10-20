@@ -726,6 +726,8 @@ fn dream_weapon(w: u8) -> bool {
 /// after the grip relative to the grip, from KH1's own pose of a frame (`dream_hold`).
 static DREAM_HOLD: Mutex<Option<(u8, Vec<Mat4>)>> = Mutex::new(None);
 const WEAPON_BONES: usize = 13;
+/// How far from the hand / grip a dream weapon's bones can be in a hold that is noted.
+const DREAM_NEAR: f32 = 250.0;
 
 /// A dream weapon held rigidly as KH1 holds it (the tester: the Dream Sword "stretches" the
 /// split second a movement begins, the rest of him not, and the Dream Shield is held another
@@ -745,7 +747,20 @@ unsafe fn dream_hold(pose: &mut [Mat4], parents: &[i16], kh1_world: Option<usize
         let mut rel = vec![mat(world + hand * 0x40).inverse() * g];
         let gi = g.inverse();
         rel.extend((1..WEAPON_BONES).map(|i| gi * mat(world + (grip + i) * 0x40)));
-        if rel.iter().all(|m| m.is_finite()) {
+        // (Only a hold whose bones lie where a weapon can: on the frame an animation starts some
+        // weapon bones are still the last drawn ones, far from the hand, and a hold noted then
+        // put the shield there with the mesh stretched to it, the user: "tap move, the split
+        // second any animations begin, he stretches ... you can see his un-stretched shield
+        // appears at the end of the stretched mesh".)
+        let near = rel[0].w_axis.truncate().length() < DREAM_NEAR && rel[1..].iter().all(|m| m.w_axis.truncate().length() < DREAM_NEAR);
+        if !near {
+            static N: AtomicU32 = AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 10 {
+                let far = rel.iter().map(|m| m.w_axis.truncate().length()).fold(0.0f32, f32::max);
+                log(&format!("weapon {w:#x}: KH1's hold this frame not noted (a bone {far:.0} from the grip)"));
+            }
+        }
+        if near && rel.iter().all(|m| m.is_finite()) {
             if let Ok(mut h) = DREAM_HOLD.lock() {
                 let new = h.as_ref().map_or(true, |(id, _)| *id != w);
                 *h = Some((w, rel));
