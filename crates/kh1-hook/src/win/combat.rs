@@ -1242,7 +1242,9 @@ impl Strikes {
         let base = BASE.load(Ordering::Relaxed);
         let cs = pose::ptr(rd::<u32>(sora + 0x14C));
         let source = if cs > 0x10000 { rd::<u64>(cs + 0x18) as usize } else { 0 };
-        if source > 0x10000 {
+        // (Anti Form has no Keyblade: no trail and no Keyblade swing effect, the user: "sora still has
+        // keyblade trails while in this form, lets not have that".)
+        if source > 0x10000 && !super::form::in_anti() {
             if r.trail >= 0 {
                 let f: unsafe extern "system" fn(usize, u32) = std::mem::transmute(base + TRAIL_RVA);
                 f(sora, r.trail as u32);

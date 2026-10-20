@@ -2358,7 +2358,10 @@ unsafe fn takeover(actor: usize) -> bool {
         if guard_swish && !d.strikes.has_trail() {
             d.strikes.trail_for_guard(actor);
         }
-        d.strikes.trail(actor, attacking && !out.hitboxes.is_empty() || guard_swish);
+        // (No Keyblade trail in Anti Form: it has no Keyblade, the user: "sora still has keyblade
+        // trails while in this form, lets not have that".)
+        let anti = super::form::in_anti();
+        d.strikes.trail(actor, !anti && (attacking && !out.hitboxes.is_empty() || guard_swish));
     }
     let attacking = matches!(out.state, StateName::Attack);
     d.swing = attacking.then_some(out.motion);

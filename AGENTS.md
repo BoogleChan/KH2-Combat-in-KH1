@@ -3230,3 +3230,15 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   faint blue-violet sheen, its shading kept. There are no yellow eyes: KH1's Shadow Sora has
   none (KH Wiki). `ANTI_EYES` turns them on.
 - Not tested in game.
+
+### 2026-10-20: Stage 273 (Anti Form: yellow eyes, its ledge grab, no Keyblade trails)
+- The user: "antiform doesnt have yellow eyes" (`tint::ANTI_EYES` on: the eye region of `-1c0`
+  and the eye frames glow yellow); "antiform has it's own unique ledge grab animation please
+  bring that in"; "sora still has keyblade trails while in this form, lets not have that".
+- Ledge grab (`pose::anti_ledge`):
+  - KH1's ledge grab still does the work. In the user's log that is the "bar" grab: state 15
+    hanging, then 19 and 18 pulling up.
+  - In Anti it is drawn with Anti's own hang (motion 7, looping) and climb (motion 8). The climb
+    plays through state 18 for at most a second.
+- No KH1 Keyblade trail or Keyblade swing effect in Anti (`Strikes::swing_start`, `trail`); the
+  swing voice stays.

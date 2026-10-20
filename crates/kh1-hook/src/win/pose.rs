@@ -1014,6 +1014,14 @@ fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
     if misc_kh2() && super::takeover::item_use_now() {
         return follow_play(s, slot, to_world, Some(Play::Motion { motion: KH2_ITEM_USE, field: false, looping: false, group: 9 }));
     }
+    // Anti Form's own ledge grab (the user: "antiform has it's own unique ledge grab animation
+    // please bring that in"): KH1 grabs the ledge and pulls him up as ever (its states 15, then 19
+    // and 18: the log), drawn with Anti's hang (motion 7, looping) and its climb (8).
+    if super::form::in_anti() {
+        if let Some(play) = anti_ledge() {
+            return follow_play(s, slot, to_world, Some(play));
+        }
+    }
     // KH1's own combo (`stylecombo`, the move style set to KH1): KH1's swings, not KH2's drawn
     // over them.
     if super::stylecombo::active() && matches!(slot, Some(98..=104)) {
@@ -1042,6 +1050,38 @@ fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
         }
     }
     follow_play(s, slot, to_world, None)
+}
+
+/// KH1's ledge grab while Anti Form has him: its hang (KH1 state 15, as `takeover::grab`'s "bar"
+/// finds it; 13 too) as Anti's hang, its pull-up (19, then 18 on top of the ledge for its last
+/// motions) as Anti's climb. `None`: not on a ledge, or Anti has no such motion.
+fn anti_ledge() -> Option<Play> {
+    use character_core::motion as m2;
+    static CLIMB_AT: Mutex<Option<Instant>> = Mutex::new(None);
+    let actor = super::takeover::sora_actor();
+    if actor < 0x10000 {
+        return None;
+    }
+    let state = unsafe { rd::<i32>(actor + 0x70) };
+    let mut climb = CLIMB_AT.lock().ok()?;
+    let motion = match state {
+        13 | 15 => {
+            *climb = None;
+            m2::HANG
+        }
+        19 => {
+            climb.get_or_insert_with(Instant::now);
+            m2::CLIMB
+        }
+        // (On top of the ledge, finishing the pull-up: the climb plays on, a second at most.)
+        18 if climb.is_some_and(|t| t.elapsed().as_secs_f32() < 1.0) => m2::CLIMB,
+        _ => {
+            *climb = None;
+            return None;
+        }
+    };
+    let has = KH2.get()?.as_ref().ok()?.anti.as_ref().is_some_and(|f| f.rig.motions.contains_key(&motion));
+    has.then_some(Play::Motion { motion, field: false, looping: motion == m2::HANG, group: if motion == m2::HANG { 7 } else { 8 } })
 }
 
 /// KH2 Sora's item-use motion (P_EX100 motion 9, `A110`).

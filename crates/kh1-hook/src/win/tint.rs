@@ -94,7 +94,7 @@ const SHADOW_HI: f32 = 0.13;
 /// Glowing yellow eyes for Anti. Off: KH1's Shadow Sora is a featureless black silhouette,
 /// without the yellow eyes other Heartless have (`docs/kh1-tint.md`); on, the irises and whites
 /// of `-1c0`'s eyes (`EYES`) and of every `-2c0` frame glow yellow instead.
-const ANTI_EYES: bool = false;
+const ANTI_EYES: bool = true;
 const GLOW_HUE: f32 = 52.0;
 /// The eyes on `-1c0` (both, with the lids; all on the head bone, found by plotting mesh 0).
 const EYES: [f32; 4] = [0.01, 0.115, 0.30, 0.195];
