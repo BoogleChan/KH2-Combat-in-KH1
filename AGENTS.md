@@ -3160,3 +3160,15 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   him at the sideways speed he went in with. In the cast motion's allow-movement range the
   stick steers that speed by the form's air steering (`air_keep`, toward its run speed).
   KH1's own air speed (`+0x3C0`) is zeroed, and his height stays KH1's.
+
+### 2026-10-20: Stage 266 (Final Form's combo effects on its floating Keyblades)
+- The user: "some of the particles effects in final form's combo aren't 1:1" (helper, from
+  their recording and log; `docs/kh2-effects.md` 12.3).
+- KH2 puts its weapon-point effects on the Keyblade's blade bone (bone 2, turned with it). The
+  blade runs along that bone's −x, so element 52's [-144, 0, 0] is 144 out along the blade.
+  Ours used the weapon root turned with Sora's facing. Final's elements 52..57, 20, 21, 42..47,
+  101 and 102 all landed beside him, in one spot. They now sit on Final's two floating blades
+  as drawn, with their spin (`leftblade` records both).
+- Effects that follow their anchor were moved, after their first frame, by base Sora's rule (the
+  right hand's Keyblade tip). The left blade's effects jumped there; Valor's too. Both forms now
+  follow the right anchor every frame.

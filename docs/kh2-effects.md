@@ -57,7 +57,7 @@ Layout per OpenKH (80 bytes each, after the 16-byte `PAX_` header). Meanings che
 | 0x02 | u16 | id | Motion trigger 1 passes this id; the **first** element with that id starts. |
 | 0x04 | u8 | group | |
 | 0x05 | u8 | fadeout | Fade-out length in game frames (used by flag 0x40). |
-| 0x06 | u16 | bone | Bone index, or an anchor: 0x4000 object root (object rotation and position), 0x4001 body centre, 0x4003+ weapon points (`0x1403b43d0`). |
+| 0x06 | u16 | bone | Bone index, or an anchor: 0x4000 object root (object rotation and position), 0x4001 body centre, 0x4003+ weapon points (`0x1403b43d0`, §12.3). |
 | 0x08 | u64 | category | |
 | 0x10 | u32 | flags | see below |
 | 0x14 | f32 | start wait | Game frames before the effect starts ticking. With flag 0x01 the game adds 0.1. |
@@ -930,6 +930,63 @@ three levels of each spell unless a level is named):
 With these every element of those packages runs (`kh2-fx`'s test
 `spell_packages_fully_supported`, which needs the user's files in `local/re/`).
 
+### 12.3 Weapon anchors and Final Form's combo
+
+**Weapon anchors [checked, exe].** A bone code 0x4003..0x4008 names weapon `(code − 1) & 1`
+(0x4003 / 0x4005 / 0x4007 the right Keyblade, the even codes the left). For the player
+(`0x1403B4730` → `0x1403D68E0`) the weapon object is the player's `+0xD60 + 8·n`, and
+`0x1403B5020` takes the bone of the weapon model's first live collision entry of type 0xF
+and asks `0x1403B43D0` for that bone:
+
+- an ordinary bone's matrix (`0x1401A71A0`) is the skeleton's posed bone with the y and z
+  parts of every row negated (the half turn about x from the y-up model to the y-down
+  object), times the object's world matrix (`+0x808`, `0x14013D310`). The same as an
+  ordinary bone of Sora's: the whole matrix, turn included, not the object root's turn;
+- 0x4005 / 0x4006 are that matrix as it is (the weapon point);
+- 0x4003 / 0x4004 move it along its own x by a length `0x1401A71A0` returns (a float at
+  `+0x1C` of a 0x40-byte record per bone, through a table the skeleton's vtable gives:
+  not traced which), 0x4007 / 0x4008 by that times `DAT_14062399C` (0.5).
+
+In W_EX010 the type-0xF entry is on **bone 2** (the blade bone; bones 0 and 1 place the
+Keyblade, 3.. are the keychain) at [−78, 0, 0]: the blade runs along that bone's **−x**,
+its tip 78 out. An element offset [−144, 0, 0] on 0x4005 is 144 out along the blade.
+
+**Final Form's combo (`P_EX100_ULTF.a.us`, package 18 in the mod).** Its motions' frame
+trigger 1 elements (from `P_EX100_ULTF.mset` and the user's log; flags as §2):
+
+| Motion | Elements (frame) | Anchor, offset, turn | Flags |
+|---|---|---|---|
+| 151 (ground 1) | 52, 53 (58), 54 (68), 55 (72), 56 (80), 57 (84) | 0x4005 / 0x4006 alternately, [−144, 0, 0], (−π/2, π/2, 0) | 0x243: placed on the blade as it starts, then left there |
+| 152 | none | | |
+| 153 | 20 (26); 21 (70); 22, 23, 24 (88, 104, 120) | 20, 21 on 0x4005 (20 turned π/2 about x); 22..24 on 0x4000 at [0, −91..−145, −185..−248] | 20 0xA61 bound, ends with the motion; 21 0xA47; 22..24 0x243 |
+| 154 (finisher) | 25..40 (6..76) | 25, 29 on bone 0x43, 26 on 0xB1, 27 on 0x55; 28 on 0x4000 y −115; 30..35 on 0x4000 up to 307 out; 36..40 on 0x4000 at chest height turned −π/2 about x | 0xA65 / 0xA61 bound (25..29); 0x243 / 0x241 / 0xA43 (30..40) |
+| 181 (air 1) | 58, 59 (2); 60, 61 (74) | 0x4000, y −124 / −84; y −156 turned | 0xA65; 0xA61 |
+| 182 (air 2) | 62, 63 (14) | 0x4000, [−23, −138, 12] / [34, −119, 12] turned about z | 0xA61 |
+| 183 (air finisher) | 42 (6), 43 (24), 44..47 (36, 40), 48 (92), 49 (142), 50, 51 (144) | 42..45 on 0x4005, 46, 47 on 0x4006 (44, 47 at [−60, 0, 0] turned π about x); 48..51 on 0x4000 | 0x261 / 0x47 / 0x265; 0xA61 / 0x261 |
+| 53 (the Drive) | 1..12, 100; 101, 102 | body bones and 0x4000; 101 / 102 on 0x4005 / 0x4006 at [−29, 0, 0] | 0xA41 |
+
+The Keyblades' own weapon motions (`W_EX010_ULTF_R` / `_L`) have trail windows (range
+trigger 12) over these swings: KH2 draws its weapon trail on both floating blades as well.
+
+**In the mod (`kh2fx::form_bone`).**
+- Final's weapon anchors are KH2's: the blade bone as drawn, i.e. where KH1's floated
+  Keyblade is (`leftblade::final_float` for the right one, `note_pose` for the left: KH1's
+  hand, KH2's float and spin relative to KH2's hand, unscaled turn), noted each draw
+  (`leftblade::final_blade`); before the first draw, KH2's own blade bone of the step by
+  Sora's last placement. 0x4003 / 0x4004 there are the collision point (−78 along x),
+  0x4007 / 0x4008 half of it (KH2's own length not traced; Final uses only 0x4005 / 0x4006).
+  Before, the point was the weapon's root with Sora's facing as its turn, so elements 52..57
+  all landed at one place beside him, 144 to his side, whatever the Keyblades did.
+- Valor's keep their point (its root) with Sora's facing, as the user asked for its
+  finisher.
+- Bound elements re-read their anchor each tick through the same function. The forms'
+  packages ticked with Sora's own bone codes, which put every weapon anchor on the right
+  hand's base Keyblade tip after the first tick (Valor's 13 / 14 of its finisher, Final's
+  20, 42..47, 101, 102: the left Keyblade's too).
+- Not changed: the effects are KH2-sized (positions from KH2's bones, unscaled, and the
+  elements' own sizes) while KH1's Sora is drawn at 0.89 of KH2's; KH1's own Keyblade trail
+  (`swing_fx`) stands in for KH2's weapon trail on both blades.
+
 ## 13. Function index
 
 | Address | What |
@@ -950,6 +1007,7 @@ With these every element of those packages runs (`kh2-fx`'s test
 | 0x1402C0AB0, 0x1402C0FF0, 0x1402C0CA0 | Resource tables by number; shape and model TEX0 relocation. |
 | 0x1404B2C70, 0x1402C27B0, 0x1402C2680 | Root matrix; derived matrices; camera matrices. |
 | 0x1402C4D90, 0x1402C5080, 0x1402C3E70, 0x1402C5410, 0x1403B43D0 | Element per frame; bone → effect transform; bone matrix; anchor bones. |
+| 0x1403B4730, 0x1403D68E0, 0x1403B5020, 0x1401A71A0 | Weapon point: the player's weapon object, its type-0xF collision bone, a bone's matrix (y, z negated) and length (§12.3). |
 | 0x1402BDB40, 0x1402BDD90, 0x1402C67A0 | Fade out; end loop; end on owner gone. |
 | 0x1404DE100 | Random number. |
 | 0x1404C1C40.. 0x1404C2B30 | Integrator programs (Accele, Move, Point, Angle, Scale, Color). |

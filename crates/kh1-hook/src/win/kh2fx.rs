@@ -315,7 +315,7 @@ pub fn form_event(motion: u16, el: i16) {
         None => {
             static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
             if N.fetch_add(1, Ordering::Relaxed) < 10 {
-                log(&format!("KH2 effect: element {el} not in Valor's package"));
+                log(&format!("KH2 effect: element {el} not in the form's package {pkg}"));
             }
         }
     }
@@ -485,6 +485,16 @@ fn bone(code: u16, tip_local: Vec3) -> Option<Mat4> {
 /// turned with Sora's facing, as the object root (the user: "valor forms grounded finisher
 /// effect should spawn in front of the keyblades and its direction its sent should be the same
 /// as where sora is facing"). Other codes as `bone`.
+///
+/// Final Form's are KH2's own: the weapon point is the weapon's bone that carries its type-0xF
+/// collision point (`0x1403B5020` → `0x1403B43D0`; W_EX010's bone 2, the blade bone its
+/// Keyblades spin on), its turn included; the tip here is that collision point (KH2 adds a length
+/// from the weapon's tables along the bone's x, not traced; Final's elements use only 0x4005 /
+/// 0x4006). Final's elements sit along the blade there (52..57 of its first ground swing at
+/// [-144, 0, 0]: 144 out along the blade, whose tip is 78 along -x) and turn with it; with Sora's
+/// facing they all landed in one place beside him whatever the Keyblades did (the user: "some of
+/// the particles effects in final form's combo aren't 1:1"). The bone is taken as drawn: KH1's
+/// floated Keyblade (`leftblade::final_blade`), else KH2's own pose.
 fn form_bone(code: u16, tip_local: Vec3) -> Option<Mat4> {
     if !(0x4003..=0x4008).contains(&code) {
         return bone(code, tip_local);
@@ -495,6 +505,9 @@ fn form_bone(code: u16, tip_local: Vec3) -> Option<Mat4> {
         0x4005 | 0x4006 => 0.0,
         _ => 0.5,
     };
+    if super::form::in_final() {
+        return final_weapon_point(second, along);
+    }
     let _ = tip_local;
     let right_root = {
         let g = super::takeover::POSE.try_lock().ok()?;
@@ -520,6 +533,41 @@ fn form_bone(code: u16, tip_local: Vec3) -> Option<Mat4> {
         m.w_axis = w.transform_point3(point_model).extend(1.0);
         m
     })
+}
+
+/// The tip in KH2's Keyblade blade bone's frame: W_EX010's type-0xF collision point (bone 2, at
+/// [-78, 0, 0]: the blade runs along the bone's -x), the same model in both hands.
+const TIP_IN_BLADE: Vec3 = Vec3::new(-78.0, 0.0, 0.0);
+
+/// Final Form's weapon point (`form_bone`): Keyblade `second`'s blade bone as drawn, moved
+/// `along` the way to its tip (0 the point itself, 0x4005 / 0x4006).
+fn final_weapon_point(second: bool, along: f32) -> Option<Mat4> {
+    let blade = super::leftblade::final_blade(second).or_else(|| {
+        // (Not drawn yet: KH2's own blade bone of the step, by Sora's last placement.)
+        let b = if second {
+            super::leftblade::kh2_left_blade()?
+        } else {
+            let g = super::takeover::POSE.try_lock().ok()?;
+            let w = &g.as_ref()?.1;
+            *w.get(super::leftblade::KH2_BLADE).or(w.first())?
+        };
+        super::pose::kh2_pose(|_, w| *w * b)
+    })?;
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) < 4 {
+        log(&format!("KH2 effects: Final's weapon point {} at {:.0?} (its blade bone)", if second { "left" } else { "right" }, blade.w_axis.truncate()));
+    }
+    Some(blade * Mat4::from_translation(TIP_IN_BLADE * along))
+}
+
+/// The bone codes of a spell package's elements: the forms' (Valor's, Final's) weapon anchors are
+/// their Keyblades' (`form_bone`), the rest as Sora's own (`bone`).
+fn package_bone(package: usize, code: u16, tip_local: Vec3) -> Option<Mat4> {
+    if package == VALOR as usize - 1 || package == FINAL as usize - 1 {
+        form_bone(code, tip_local)
+    } else {
+        bone(code, tip_local)
+    }
 }
 
 /// A KH2 controller event (from `takeover`, each frame KH2 has Sora).
@@ -583,8 +631,12 @@ fn step(s: &mut State, motion: Option<u16>) {
         }
     }
     s.fx.tick(1.0, &mut |c| bone(c, tip));
-    for sp in s.spell.iter_mut().flatten() {
-        sp.fx.tick(1.0, &mut |c| bone(c, tip));
+    // (A form's bound elements follow their own anchors: on a weapon point they had followed the
+    // right hand's base Keyblade tip after their first tick, the left one's too.)
+    for (i, sp) in s.spell.iter_mut().enumerate() {
+        if let Some(sp) = sp.as_mut() {
+            sp.fx.tick(1.0, &mut |c| package_bone(i, c, tip));
+        }
     }
     if let Some(wp) = s.weapon.as_mut() {
         if let Some((view, _)) = unsafe { fx12::camera(BASE.load(Ordering::Relaxed)) } {

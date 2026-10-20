@@ -554,3 +554,6 @@ hand would be wrong.
   in front of the keyblades and its direction its sent should be the same as where sora is
   facing"). Every form element's anchor, flags and offset are logged once: if Valor's finisher
   elements (154's 16, 155's 13..15) turn out to use another anchor, the log says which.
+- Final Form's are KH2's own (`docs/kh2-effects.md` §12.3): the weapon point is the Keyblade's
+  blade bone (bone 2, which carries its type-0xF collision point), turn included, taken where
+  KH1's floated Keyblade is drawn (`leftblade::final_blade`).

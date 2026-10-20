@@ -131,7 +131,7 @@ const LEFT_HAND: usize = 206;
 /// this bone, not on the root: the glide's (205..207) spins it six times a loop about its z, the
 /// idle rolls it once a loop (the user: "sora's keyblades dont spin properly during final form
 /// glide"; we followed the root, which the glide holds still beside him).
-const KH2_BLADE: usize = 2;
+pub const KH2_BLADE: usize = 2;
 /// A KH2 weapon's blade bone (its root if the pose is short).
 fn kh2_blade(weapon: &[Mat4]) -> Option<Mat4> {
     weapon.get(KH2_BLADE).or(weapon.first()).copied()
@@ -186,6 +186,35 @@ static KH2_LEFT: Mutex<std::collections::VecDeque<(u64, Vec<Mat4>, Instant)>> = 
 pub fn kh2_left_root() -> Option<Mat4> {
     let g = KH2_LEFT.try_lock().ok()?;
     g.back().filter(|(_, _, t)| t.elapsed().as_secs_f32() < 0.5).and_then(|(_, b, _)| b.first().copied())
+}
+
+/// KH2's left Keyblade's blade bone (`KH2_BLADE`, KH2 model space) of the last step, if recent.
+pub fn kh2_left_blade() -> Option<Mat4> {
+    let g = KH2_LEFT.try_lock().ok()?;
+    g.back().filter(|(_, _, t)| t.elapsed().as_secs_f32() < 0.5).and_then(|(_, b, _)| kh2_blade(b))
+}
+
+/// Final Form's two floating Keyblades as drawn (KH1's world): KH2's blade bone (`KH2_BLADE`) of
+/// each, where KH1's floated Keyblade is (`final_float`, `note_pose`: KH1's hand, KH2's float and
+/// spin from it), right then left, and when. KH2's weapon anchors are that bone
+/// (`kh2fx::form_bone`): Final's elements on them sit along the blade and turn with it (the user:
+/// "some of the particles effects in final form's combo aren't 1:1").
+static FINAL_BLADES: Mutex<[Option<(Mat4, Instant)>; 2]> = Mutex::new([None, None]);
+
+/// Final Form's Keyblade `second` (0 right, 1 left) as drawn: its KH2 blade bone in the world
+/// (KH2 world, y down, as `kh2fx`'s bones), if drawn in the last quarter second.
+pub fn final_blade(second: bool) -> Option<Mat4> {
+    let g = FINAL_BLADES.try_lock().ok()?;
+    g[second as usize].filter(|(_, t)| t.elapsed().as_secs_f32() < 0.25).map(|(m, _)| m)
+}
+
+fn note_final_blade(second: bool, world: Mat4) {
+    if !world.is_finite() {
+        return;
+    }
+    if let Ok(mut g) = FINAL_BLADES.try_lock() {
+        g[second as usize] = Some((world, Instant::now()));
+    }
 }
 
 /// A body pose's signature (its bones' places, bit for bit).
@@ -574,8 +603,9 @@ static HELD: std::sync::OnceLock<Option<Mat4>> = std::sync::OnceLock::new();
 /// Sora's idle, at his hand; its blade bone, `KH2_BLADE`) to KH1's grip as drawn is kept, and put
 /// on Final's blade now, its spin included; the left one then follows by the same turn
 /// (`note_pose`). `kh2_body`, `kh2_right`: KH2's body and right Keyblade of the drawn frame (model
-/// space); `ratio`: KH1's size against KH2's.
-pub fn final_float(kh1: &mut [Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: &[Mat4], ratio: f32) {
+/// space); `ratio`: KH1's size against KH2's; `to_world` KH1's placement (the blade as drawn is
+/// noted for the effects on KH2's weapon anchors, `final_blade`).
+pub fn final_float(kh1: &mut [Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: &[Mat4], ratio: f32, to_world: &Mat4) {
     static N: AtomicU32 = AtomicU32::new(0);
     if !super::form::in_final() || kh1.len() < SORA_BONES || kh1_bind.len() < SORA_BONES || kh2_right.is_empty() {
         return;
@@ -608,10 +638,20 @@ pub fn final_float(kh1: &mut [Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_r
     if !grip.is_finite() {
         return;
     }
+    note_final_blade(false, *to_world * unit(now_root));
     let inv = kh1[GRIP].inverse();
     let moved: Vec<Mat4> = (0..WEAPON_BONES).map(|i| grip * inv * kh1[GRIP + i]).collect();
     kh1[GRIP..GRIP + WEAPON_BONES].copy_from_slice(&moved);
     log_n(&N, 3, || format!("Final Form: right Keyblade floated {:.0} units from his hand", (grip.w_axis - kh1[RIGHT_HAND].w_axis).truncate().length()));
+}
+
+/// A matrix's turn and place without any scale (its axes made unit and square to each other).
+fn unit(m: Mat4) -> Mat4 {
+    let x = m.x_axis.truncate().normalize_or_zero();
+    let y = (m.y_axis.truncate() - x * x.dot(m.y_axis.truncate())).normalize_or_zero();
+    let z = x.cross(y);
+    let z = if z.dot(m.z_axis.truncate()) < 0.0 { -z } else { z };
+    Mat4::from_cols(x.extend(0.0), y.extend(0.0), z.extend(0.0), m.w_axis)
 }
 
 /// A matrix with its translation times `k` (KH2 units to KH1's).
@@ -669,7 +709,8 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
     let rel = |kh2_hand: usize, root: Mat4| scaled(kh2_body[kh2_hand].inverse() * root, k);
     let right_root = kh1[RIGHT_HAND] * offset(RIGHT_HAND, sr) * rel(sr, right);
     let turn = right_root.inverse() * kh1[GRIP];
-    let grip = kh1[LEFT_HAND] * offset(LEFT_HAND, sl) * rel(sl, left) * turn;
+    let left_blade = kh1[LEFT_HAND] * offset(LEFT_HAND, sl) * rel(sl, left);
+    let grip = left_blade * turn;
     let from_hand = (grip.w_axis - kh1[LEFT_HAND].w_axis).truncate().length();
     // (Final Form's floats away from his hand.)
     let reach = if super::form::in_final() { 400.0 } else { 40.0 };
@@ -683,6 +724,10 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
         *m = grip * inv_grip * kh1[GRIP + i];
     }
     log_n(&N, 3, || format!("left grip posed, {from_hand:.1} units from the left hand"));
+    // (Final's left blade bone as drawn, for the effects on its weapon anchor.)
+    if super::form::in_final() {
+        note_final_blade(true, *to_world * unit(left_blade));
+    }
     if let Ok(mut g) = LEFT.try_lock() {
         *g = Some((out, super::takeover::GAME_FRAME.load(Ordering::Relaxed)));
     }

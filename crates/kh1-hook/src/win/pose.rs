@@ -1476,7 +1476,7 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
     dream_hold(&mut pose, &s.parents, (!ours).then_some(world));
     // Final Form's Keyblade floating where KH2's weapon motion has it.
     if let (Some((body, weapon)), true) = (s.kh2_now.as_ref(), super::form::in_final()) {
-        super::leftblade::final_float(&mut pose, &s.bind, body, weapon, s.retarget.as_ref().map_or(1.0, |r| r.hip_ratio()));
+        super::leftblade::final_float(&mut pose, &s.bind, body, weapon, s.retarget.as_ref().map_or(1.0, |r| r.hip_ratio()), &to_world);
     }
     for (i, m) in pose.iter().enumerate().take(SORA_BONES as usize) {
         std::ptr::write_unaligned((world + i * 0x40) as *mut [f32; 16], (to_world * *m).to_cols_array());
