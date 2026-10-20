@@ -22,9 +22,11 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 /// The forms (command record, word index, name).
-/// (In `form::Kind::ALL`'s order, KH2's: Valor, then Wisdom. Wisdom kept its record and word; Valor
-/// takes the next free ones, record 0x7F and word 0x1FD.)
-pub const FORMS: [(u8, u16, &str); 2] = [(0x7F, 0x1FD, "Valor Form"), (0x7E, 0x1FE, "Wisdom Form")];
+/// (In `form::Kind::ALL`'s order, KH2's: Valor, then Wisdom, then Final. Wisdom kept its record and
+/// word; Valor takes the next free ones, record 0x7F and word 0x1FD; Final record 0x80 and word
+/// 0x1FC (the user: "put it into the drive menu"; btltbl's records 0x7E.. are empty and none of
+/// its records names a word above 0x173).)
+pub const FORMS: [(u8, u16, &str); 3] = [(0x7F, 0x1FD, "Valor Form"), (0x7E, 0x1FE, "Wisdom Form"), (0x80, 0x1FC, "Final Form")];
 /// The record argument of form `k` (KH1's spells are 0..6, Reflect 7).
 pub const FORM_ARG: u8 = 0x10;
 /// Summon's command (its record opens the summon list) and the summon-is-out one.

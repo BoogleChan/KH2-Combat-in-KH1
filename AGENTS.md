@@ -3201,3 +3201,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - `form::growth_up` gives Valor's High Jump, Wisdom's Quick Run and Final's Glide base Sora's
   level + 1, MAX (4) at most. Before, each was at MAX. They follow Sora's when KH1's menu changes
   mid-form (`form::abilities`), and the form's start log names both levels.
+
+### 2026-10-20: Stage 271 (Final Form in the Drive list)
+- The user: "make final form cost 3 MP to enter, and put it into the drive menu, and have the
+  cheat code do nothing for the moment".
+- Final Form is the Drive list's third entry (`drive::FORMS`, `form::Kind::ALL`): command
+  record 0x80 and word 0x1FC. btltbl's records 0x7E.. are empty, and no record names a word
+  above 0x173. Argument 0x12. It costs 3 MP (`form::cost_mp`, unchanged).
+- The secret code is off: `probe::pad` no longer calls `form::pad`, which stays in the code.

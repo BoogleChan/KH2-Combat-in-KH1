@@ -265,8 +265,9 @@ unsafe extern "system" fn pad(src: usize, out: usize, cfg: usize) {
     let (b_all, st_all) = merge_pads(out, b, st);
     super::takeover::RAW_BUTTONS.store(b_all as u32, Ordering::Relaxed);
     super::takeover::RAW_STICKS.store(u32::from_le_bytes(st_all), Ordering::Relaxed);
-    // Final Form's secret code (`form::pad`).
-    super::form::pad(b_all);
+    // Final Form's secret code (`form::pad`). (Off for now, the user: "put it into the drive menu,
+    // and have the cheat code do nothing for the moment".)
+    // super::form::pad(b_all);
     // L1 held: KH1's shortcuts (L1 + a face button cast the spells set there), so KH1 keeps
     // Circle and Square then (the user: the Square shortcut didn't cast).
     // (Only when L1 opens KH1's shortcut menu: with no shortcut set it opens nothing, and KH1

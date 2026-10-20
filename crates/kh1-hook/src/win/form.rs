@@ -83,8 +83,8 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// The Drive list's (Final is secret, `pad`).
-    pub const ALL: [Kind; 2] = [Kind::Valor, Kind::Wisdom];
+    /// The Drive list's (Final too now, the user: "put it into the drive menu").
+    pub const ALL: [Kind; 3] = [Kind::Valor, Kind::Wisdom, Kind::Final];
     const EVERY: [Kind; 3] = [Kind::Valor, Kind::Wisdom, Kind::Final];
     pub fn name(self) -> &'static str {
         match self {
@@ -200,6 +200,7 @@ static CODE_DONE: AtomicBool = AtomicBool::new(false);
 
 /// The pad as pressed, every read (`probe::pad`): the secret code for Final Form (the user: a
 /// button sequence, "in that exact sequence, put them into final form").
+#[allow(dead_code)]
 pub fn pad(buttons: u16) {
     let Ok(mut g) = CODE_STATE.try_lock() else { return };
     let (held, at, last) = &mut *g;
