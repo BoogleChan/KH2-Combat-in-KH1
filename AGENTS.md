@@ -2842,3 +2842,17 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - The Config rows read as the user wrote them: "Base Combo", "Aerial Base Combo", "Magic",
   "Aerial Magic" (were "Ground Combo", "Aerial Combo"). The ini keys stay `ground_combo` /
   `air_combo`.
+
+### 2026-10-19: Stage 238 (KH1's air spells call KH2's landing, from scratch)
+- The user: "scrap everything related to aerial magic transitioning to kh2 landing animation and
+  start fresh ... kh1s aerial magic animation states are hardcoded to transition to kh1's landing
+  animation ... code [them] so that they are able to call kh2's animation states and call kh2's
+  landing animation". Out: s235's state-change hook and its second takeover in a frame, and
+  s207's rule (KH2 took him on the frame after KH1 had landed him, its landing queued).
+- Where KH1 hard-wires it: Sora's player step `0x1402A75B0` (Steam `0x2A9740`; from the actor
+  kinds' switch at `0x14029593C`), on a frame his state changed (flag `0x400`): state 2 to 0
+  (old state `+0x378`) asks for KH1's landing, motion `(+0x3D0) + 7 | 0x1000000`, and
+  `0x14029D8A0 (0x40000000)`; to state 2 its fall (6). Hooked: during KH1's air spell that landing
+  is not asked for (the old state hidden from the step for the call) and `AIR_SPELL_LANDED` hands
+  him to KH2 into its landing (`LAND_NOW`). If the step never saw it, KH1's ground state a frame
+  later does the same, logged ("... without its landing seen").

@@ -358,8 +358,6 @@ type MoveFn = unsafe extern "system" fn(usize, *const [f32; 4], u32);
 unsafe extern "system" fn physics(actor: usize) {
     let sora = actor > 0x10000 && actor == rd::<u64>(BASE.load(Ordering::Relaxed) + PARTY_RVA) as usize;
     if sora {
-        TOUCHDOWN.store(false, Ordering::Relaxed);
-        IN_PHYS.store(true, Ordering::Relaxed);
         HANDOFF_FRAME.store(false, Ordering::Relaxed);
         // A gap in Sora's physics frames: the game was paused (or a menu held it).
         let now = now_ms();
@@ -386,55 +384,51 @@ unsafe extern "system" fn physics(actor: usize) {
     }
     let f: PhysFn = std::mem::transmute(ORIG_PHYS.load(Ordering::Acquire));
     f(actor);
-    if sora {
-        IN_PHYS.store(false, Ordering::Relaxed);
-        // KH1 landed him out of an air spell in the step just run (`set_state`): KH2 takes him
-        // now, this same frame, in its landing, so KH1's landing never shows nor runs (the user:
-        // "rewrite kh1s magic animations so that if they're used in the air they can call for
-        // kh2s landing animation"). Before, KH2 took him on the next frame, after KH1's own
-        // landing frame.
-        if TOUCHDOWN.swap(false, Ordering::Relaxed) && ON.load(Ordering::Relaxed) && HANDOFF.load(Ordering::Relaxed) {
-            let took = takeover(actor);
-            if took {
-                FRAME_KIND.store(1, Ordering::Relaxed);
-            }
-            static N: AtomicU32 = AtomicU32::new(0);
-            if N.fetch_add(1, Ordering::Relaxed) < 20 {
-                log(&format!("air spell's touchdown: KH2 {} him on KH1's landing frame", if took { "took" } else { "didn't take" }));
-            }
-        }
-    }
 }
 
-/// KH1's state change (`0x1402AF7D0 (actor, state)`: the old state's exit step, the new one's
-/// entry step), hooked to see the air spell's landing as KH1 makes it.
-const SET_STATE_PROLOGUE: [u8; 10] = [0x48, 0x89, 0x5C, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x20];
-static ORIG_SET_STATE: AtomicUsize = AtomicUsize::new(0);
-/// KH1 put Sora down out of an air spell in this physics step (state 1 / 2 to its ground state
-/// 0 while KH1 had him for the cast).
-static TOUCHDOWN: AtomicBool = AtomicBool::new(false);
-/// Sora's physics step is running (KH1's own, `physics`).
-static IN_PHYS: AtomicBool = AtomicBool::new(false);
+/// KH1's player step (`0x1402A75B0`, Sora's per-frame step, from the actor kinds' switch at
+/// `0x14029593C`). On a frame his state changed (flag `0x400`, set by its state change
+/// `0x1402AF7D0`) it picks the motion for the new state: down from the air (state 2 to 0, the old
+/// state at `+0x378`) KH1's landing (`(+0x3D0) + 7 | 0x1000000`, then `0x14029D8A0 (0x40000000)`),
+/// into the air its fall (6). That is where KH1's air spell is hard-wired to KH1's landing.
+const PLAYER_STEP_RVA: Rva = Rva(0x2A75B0);
+/// `push rbx; sub rsp, 0x50` (the next instruction is rip-relative, not moved).
+const PLAYER_STEP_PROLOGUE: [u8; 6] = [0x40, 0x53, 0x48, 0x83, 0xEC, 0x50];
+static ORIG_PLAYER_STEP: AtomicUsize = AtomicUsize::new(0);
+/// KH1 set Sora down out of an air spell, and its landing motion wasn't asked for: KH2 takes him
+/// into KH2's landing (`takeover`'s hand-off, its next frame).
+static AIR_SPELL_LANDED: AtomicBool = AtomicBool::new(false);
 
-unsafe extern "system" fn set_state(actor: usize, state: i32) -> u32 {
+unsafe extern "system" fn player_step(actor: usize) {
     let base = BASE.load(Ordering::Relaxed);
-    let old = if actor > 0x10000 { rd::<i32>(actor + 0x70) } else { -1 };
-    let f: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(ORIG_SET_STATE.load(Ordering::Acquire));
-    let r = f(actor, state);
-    if state == 0 && matches!(old, 1 | 2) && actor == rd::<u64>(base + PARTY_RVA) as usize && HANDOFF.load(Ordering::Relaxed) && air_cast().is_some() {
-        let inside = IN_PHYS.load(Ordering::Relaxed);
-        TOUCHDOWN.store(inside, Ordering::Relaxed);
-        static N: AtomicU32 = AtomicU32::new(0);
-        if N.fetch_add(1, Ordering::Relaxed) < 20 {
-            log(&format!(
-                "KH1 lands him out of the air spell (state {old} to 0, {:.0} above the floor, KH1 motion {:#x}){}",
-                rd::<f32>(actor + 0x3D4),
-                rd::<u32>(actor + 0x164),
-                if inside { "" } else { ": outside his physics step, KH2 takes him next frame" }
-            ));
-        }
+    let f: unsafe extern "system" fn(usize) = std::mem::transmute(ORIG_PLAYER_STEP.load(Ordering::Acquire));
+    // KH1's air spell (KH1 has him for it) landing this frame: KH1's own landing isn't asked for
+    // (its old state hidden from the step for the call), KH2's is, from his spell's air state (the
+    // user: "code soras kh1s aerial magic animation states so that they are able to call kh2's
+    // animation states and call kh2's landing animation").
+    let landing = actor > 0x10000
+        && actor == rd::<u64>(base + PARTY_RVA) as usize
+        && ON.load(Ordering::Relaxed)
+        && HANDOFF.load(Ordering::Relaxed)
+        && air_cast().is_some()
+        && rd::<u32>(actor) & 0x400 != 0
+        && rd::<i32>(actor + 0x70) == 0
+        && rd::<i32>(actor + 0x378) == 2;
+    if !landing {
+        return f(actor);
     }
-    r
+    wr(actor + 0x378, 0i32);
+    f(actor);
+    wr(actor + 0x378, 2i32);
+    AIR_SPELL_LANDED.store(true, Ordering::Relaxed);
+    static N: AtomicU32 = AtomicU32::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) < 20 {
+        log(&format!(
+            "KH1's air spell landed: KH1's landing motion not asked for, KH2's landing next (KH1 motion {:#x}, {:.0} above the floor)",
+            rd::<u32>(actor + 0x164),
+            rd::<f32>(actor + 0x3D4)
+        ));
+    }
 }
 
 unsafe extern "system" fn control(actor: usize, dir: usize) {
@@ -961,31 +955,21 @@ unsafe fn takeover(actor: usize) -> bool {
         // glide and Superglide never come out of it (its jump / Square are KH2's meanwhile,
         // `kh1_air_free`).
         let air_free = kh1_air_free(base, actor) && above > STEP_DOWN && vel.is_some();
-        // A spell cast in the air (KH1's animation all through, the user's choice): when KH1
-        // lands him, KH2's landing from there, its short hold and a jump out of it (the user:
-        // "the same pause buffer, and if he jumps out of it, KH2 Sora's jump"), instead of
-        // KH1's landing, its hold and then a snap.
-        // (And on the frame he would touch down, before KH1's own landing frame: falling in its air
-        // state with less than this frame's drop left to the floor, he is put down and KH2 lands
-        // him. The user: on KH1's landing frame its roll or jump could still come out, KH2 took
-        // him a frame late.)
-        // (s222: back to s207's, the user: "revert the changes made to aerial magic to before
-        // s207"; s208's touchdown a frame early, s219's and s221's KH1 motion and height resets
-        // on it, and s209's form casts ended in the air are out.)
-        // (KH1's ground state alone: its height above the floor can still be the last frame's on
-        // the landing frame, and that frame went to KH1's landing, its jump with it, the user:
-        // "there's a chance that the conditions aren't met and you can still go into kh1 landing
-        // animation state for a frame and be able to input kh1 jump".)
-        // (Only once KH1 had him in the air for it: a cast KH1 turned into its ground one is
-        // left to play.)
-        static CAST_AIRBORNE: AtomicBool = AtomicBool::new(false);
-        if frames == 0 {
-            CAST_AIRBORNE.store(false, Ordering::Relaxed);
+        // A spell cast in the air (KH1's animation all through): when KH1 sets him down, its
+        // player step asks for KH2's landing instead of KH1's (`player_step`), and KH2 takes him
+        // here into it, its short hold and a jump out of it.
+        // (Should that step not have seen it, KH1's ground state on a later frame with the spell
+        // still KH1's does the same, logged: KH1's landing must not hold him.)
+        static GROUND: AtomicU32 = AtomicU32::new(0);
+        if frames == 0 || state != 0 {
+            GROUND.store(0, Ordering::Relaxed);
         }
-        if air_cast().is_some() && state != 0 {
-            CAST_AIRBORNE.store(true, Ordering::Relaxed);
+        let seen = AIR_SPELL_LANDED.swap(false, Ordering::Relaxed);
+        let late = air_cast().is_some() && state == 0 && !seen && GROUND.fetch_add(1, Ordering::Relaxed) >= 1;
+        if late {
+            log("KH1's air spell on the ground without its landing seen: KH2's landing");
         }
-        let cast_landed = air_cast().is_some() && state == 0 && CAST_AIRBORNE.load(Ordering::Relaxed);
+        let cast_landed = air_cast().is_some() && (seen || late);
         // An Attack during a spell: KH2's once the spell is out (its end frames; the user: KH2's
         // magic can be cut by an attack to go on with the combo), not before (it would cut the
         // spell). In the air too.
@@ -2322,6 +2306,7 @@ pub fn air_cast() -> Option<(u8, f32)> {
 
 pub fn hand_to_kh1(why: &str) {
     super::stylecombo::clear();
+    AIR_SPELL_LANDED.store(false, Ordering::Relaxed);
     CUT_LEFT.store(false, Ordering::Relaxed);
     ATTACK_AFTER.store(false, Ordering::Relaxed);
     HANDOFF_FRAMES.store(0, Ordering::Relaxed);
@@ -2407,7 +2392,7 @@ pub unsafe fn install() {
     // (KH2's footsteps, KH1's dropped while KH2 has him: s229 had them off, the user then:
     // "revert the changes on footsteps".)
     let _ = hook::install(base + STEP_SOUND_RVA, &STEP_SOUND_PROLOGUE, step_sound as *const () as usize, &ORIG_STEP_SOUND, "step sound (KH2's footsteps)");
-    let _ = hook::install(base + SET_STATE_RVA, &SET_STATE_PROLOGUE, set_state as *const () as usize, &ORIG_SET_STATE, "state change (an air spell's landing)");
+    let _ = hook::install(base + PLAYER_STEP_RVA, &PLAYER_STEP_PROLOGUE, player_step as *const () as usize, &ORIG_PLAYER_STEP, "player step (an air spell's landing: KH2's)");
     if hook::install(base + CONTROL_RVA, &CONTROL_PROLOGUE, control as *const () as usize, &ORIG_CONTROL, "player control step").is_some() {
         CONTROL_HOOKED.store(true, Ordering::Relaxed);
     }
