@@ -3308,3 +3308,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   are now 20 ms, four queued, still woken by the device's event.
 - Anti's hang by his foot. s277 took the pose's topmost bone, which was a hood string (drawn up
   at the ledge, the user's video) while his foot hung far below. It is now his higher ankle.
+
+### 2026-10-20: Stage 280 (Anti's foot on the roof's edge)
+- The user (s279's screenshot): "he is still hanging too low, his foot should be hooked on the
+  edge of the roof".
+  - The ledge's height is now KH1's own hang's highest bone near its hands this frame (its
+    fingers over the edge). It is kept for frames whose bones are ours.
+  - Anti's gripping ankle goes `ANKLE_UNDER_EDGE` (6) under it, at the hands' place sideways.
+  - Logged with whether KH1's hands came from its pass this frame.

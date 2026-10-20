@@ -1052,6 +1052,10 @@ fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
     follow_play(s, slot, to_world, None)
 }
 
+/// Anti's gripping ankle sits this far under the ledge (KH1's highest bone in its hang), so the
+/// foot hooks over the edge.
+const ANKLE_UNDER_EDGE: f32 = 6.0;
+
 /// This frame's pose is Anti's ledge hang or climb (`anti_ledge`): `check` puts its hands on KH1's.
 static ANTI_LEDGE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -1515,6 +1519,8 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
     // wall, "looks like his collision is a little off"). The pose is moved so its hands are where
     // KH1's own hands are this frame (KH1's pass drew them on the ledge).
     if ANTI_LEDGE.swap(false, Ordering::Relaxed) {
+        // (This frame's bones are KH1's own pass's, not ours from before: `ours`.)
+        let ours_frame = ours;
         let kh1_hands = orig_hands.or_else(|| HANDS_NOW.lock().ok().and_then(|h| h.map(|h| h.orig)));
         if let Some(h) = kh1_hands {
             let inv = to_world.inverse();
@@ -1526,10 +1532,27 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
             // (Of his two feet: any bone at all picked a hood string or the hidden Keyblade's, drawn
             // up at the ledge while his foot hung far below, the user's video.)
             let ours = super::feet::LEGS.iter().filter_map(|l| pose.get(l[2]).map(|m| m.w_axis.truncate())).filter(|p| p.is_finite()).max_by(|a, b| a.dot(up).total_cmp(&b.dot(up))).unwrap_or_default();
-            let d = kh1_mid - ours;
+            // The ledge's height: KH1's own hang reaches over the edge (its highest bone this frame,
+            // its fingers), higher than its hands' roots (the user, s279: "he is still hanging too
+            // low, his foot should be hooked on the edge of the roof"). The ankle a little under it,
+            // so the foot hooks over.
+            static KH1_TOP: AtomicU32 = AtomicU32::new(u32::MAX);
+            if !ours_frame {
+                let top = (0..SORA_BONES as usize)
+                    .map(|i| (inv * mat(world + i * 0x40)).w_axis.truncate())
+                    .filter(|p| p.is_finite() && (*p - kh1_mid).length() < 80.0)
+                    .map(|p| p.dot(up))
+                    .fold(f32::MIN, f32::max);
+                if top.is_finite() && top > f32::MIN {
+                    KH1_TOP.store(top.to_bits(), Ordering::Relaxed);
+                }
+            }
+            let top = f32::from_bits(KH1_TOP.load(Ordering::Relaxed));
+            let target = if top.is_finite() { kh1_mid + up * (top - ANKLE_UNDER_EDGE - kh1_mid.dot(up)) } else { kh1_mid };
+            let d = target - ours;
             static N: AtomicU32 = AtomicU32::new(0);
             if N.fetch_add(1, Ordering::Relaxed) < 30 {
-                log(&format!("Anti Form's ledge pose: its top {ours:.0?}, KH1's hands {kh1_mid:.0?}: moved {d:.0?}"));
+                log(&format!("Anti Form's ledge pose: its ankle {ours:.0?}, KH1's hands {kh1_mid:.0?} ({}), KH1's top {top:.0}: moved {d:.0?}", if ours_frame { "kept from an earlier frame" } else { "KH1's pass this frame" }));
             }
             // (s274 kept the move under 300 and so never made it: the hang's hands sit further.)
             if d.is_finite() && d.length() < 3000.0 {
