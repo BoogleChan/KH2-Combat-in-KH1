@@ -267,3 +267,28 @@ RIP-relative. Pointing them at a 9-entry copy of the label table in memory withi
 the exe (as `hook.rs`'s `alloc_near` allocates) would make the game draw our label and its
 selection style itself. A selected row 8 would get style 1, with no arrows. The value panels
 and finger would still be ours.
+
+## 4. Five rows of ours: a second page (s236)
+
+The mod's rows are Camera Style, Ground Combo, Aerial Combo, Magic and Aerial Magic (8..12),
+13 rows in all (definition `+0x26` / `+0x28` = 13). Thirteen rows at KH1's pitch of 28 don't fit
+above the help box, and shrinking the pitch below ~18 would overlap the panels. **[high]** KH1's
+Config draw doesn't scroll: the label loop starts at an immediate y (`mov ebp, 0x47` at
+`0x1402F828C`) and adds the pitch per row, and the value panels compute `0x47 + row × pitch`
+themselves, whatever the window's scroll (`+0xFC`) says. The cursor framework (`0x1402ED230`)
+does scroll when the visible rows are fewer than the rows, but nothing would move the drawing.
+
+So the list has two pages, chosen by the cursor's row before the frame's move
+(`0x1402ED030(win)`): rows 0..7 show KH1's page as KH1 draws it; rows 8..12 show ours, drawn in
+the places of KH1's rows 0..4. **[high]** Every piece of a KH1 row is drawn by the panel call
+`0x1402D5590` (box `0x1402F07A0`, then the text `0x1402EAEA0`); the selection arrows
+(`0x1402F0740`) and the finger (`0x1402ECAA0`) only for a selected KH1 row. The panel call is
+hooked (`push rbx; sub rsp, 0x50`, Steam `0x1402D7910` the same), and skipped while KH1's update
+runs with our page up. Our own panel calls come after the update, so they draw.
+
+The help ids of rows 8..12 are read from `0x1405470C0 + row × 4`, i.e. the max-value table's
+entries 0..4: they hold our ids only for the help call and are put back right after.
+
+**[low] check in game:** a page change shows one frame late (the frame the cursor moves, the
+old page, without its selection); that our page with no KH1 rows looks right (whether the
+window's frame or other KH1 pieces are drawn outside the panel call).

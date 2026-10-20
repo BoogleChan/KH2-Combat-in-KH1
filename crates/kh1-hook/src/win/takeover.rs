@@ -606,16 +606,22 @@ pub fn command_started(shots: usize, spell: Option<u8>) {
     // as thunder, available input window, when the animation is supposed to end"), and slides
     // as the form's casts do ("the same velocity in his casts as he does for the KH2 adjacent
     // spells").
-    let fc = spell.filter(|_| super::form::in_wisdom()).and_then(|sp| {
-        let air = AIR_CAST.try_lock().ok().is_some_and(|a| a.is_some());
+    // (Base Sora too, with the Magic style at KH2 (`styles`): KH1's Gravity, Stop and Aero on his
+    // own KH2 cast motions, the user's choice "KH1 spell, KH2 animation".)
+    let air_now = AIR_CAST.try_lock().ok().is_some_and(|a| a.is_some());
+    let base_look = spell.is_some_and(|sp| sp >= 4) && super::formmagic::base_kh2(air_now);
+    super::formmagic::BASE_KH1_CAST.store(base_look, Ordering::Relaxed);
+    let fc = spell.filter(|_| super::form::in_wisdom() || base_look).and_then(|sp| {
+        let air = air_now;
         let level = unsafe { super::reflect::kh1_spell_level(sp) };
         let motion = super::formmagic::kh1_spell_motion(sp, level, air);
-        let form = pose::kh2()?.wisdom.as_ref()?;
-        let clip = form.character.moveset.clips.get(&motion)?;
+        let kh2 = pose::kh2()?;
+        let form = if base_look { &kh2.character } else { &kh2.wisdom.as_ref()?.character };
+        let clip = form.moveset.clips.get(&motion)?;
         let react = clip.first(|k| matches!(k, character_core::WindowKind::AllowReactionCommand)).unwrap_or(clip.length);
         let allow = clip.windows.iter().find(|w| matches!(w.kind, character_core::WindowKind::AllowMovement)).map(|w| (w.start, w.end.unwrap_or(clip.length)));
-        let p = &form.character.params;
-        log(&format!("Drive Form: KH1 spell {sp} on the form's cast motion {motion}'s clock: {} frames, input from {react}, moving {allow:?}", clip.length));
+        let p = &form.params;
+        log(&format!("{}: KH1 spell {sp} on the cast motion {motion}'s clock: {} frames, input from {react}, moving {allow:?}", if base_look { "KH2 magic style" } else { "Drive Form" }, clip.length));
         // (His speed going in, KH2's last frame: no halt at the cast's start, the user.)
         let v = with_kh2(|_, o| [o.displacement[0], o.displacement[2]]).unwrap_or([0.0; 2]);
         let v = if v[0].is_finite() && v[1].is_finite() && v[0].hypot(v[1]) < 40.0 { v } else { [0.0; 2] };
@@ -1017,7 +1023,9 @@ unsafe fn takeover(actor: usize) -> bool {
         let drive_cut = in_cut && DRIVE_CUT.swap(false, Ordering::Relaxed);
         let item_end = in_cut && cut_frame.is_some_and(|(_, item)| item);
         let last = slot == 3 && !in_cut;
-        let out_any = command && !done && (spell_out(actor) || in_cut);
+        // (KH1's own combo plays as in KH1: none of the spell cuts, `stylecombo`.)
+        let kh1_combo = super::stylecombo::active();
+        let out_any = command && !done && !kh1_combo && (spell_out(actor) || in_cut);
         let out = out_any && air_cast().is_none();
         let jump_pressed = buttons() & jump_button() != 0;
         let magic_after = MAGIC_AFTER.load(Ordering::Relaxed);
@@ -1068,7 +1076,8 @@ unsafe fn takeover(actor: usize) -> bool {
             SPELL_CUT.store(command && (attack_cut || magic_cut || magic_after || ATTACK_AFTER.load(Ordering::Relaxed)), Ordering::Relaxed);
             // An Attack waiting through a spell (pressed during it): the combo goes on after it,
             // as after KH2's own casts (the user: magic is part of the combo's queue).
-            if command && attack && SPELL_SLOT.load(Ordering::Relaxed) == 0 {
+            // (Not out of KH1's own combo: KH2's starts over after it.)
+            if command && attack && SPELL_SLOT.load(Ordering::Relaxed) == 0 && !kh1_combo {
                 COMBO_ON.store(true, Ordering::Relaxed);
             }
             // A spell chosen during the cast runs from the queue once KH2 has him (`resume_command`).
@@ -1327,7 +1336,9 @@ unsafe fn takeover(actor: usize) -> bool {
     d.character.air_magic_fall_max = Some(KH1_FALL_MAX);
     // Final Form: KH2's own (its cast motions' no-gravity frames, KH2's gravity), as KH2 has it
     // (the user: "aerial final form reflect is not 1:1 physics wise with kh2").
-    if super::form::in_final() {
+    // Base Sora's Aerial Magic style at KH2 (`styles`): KH2's own air casts too (Reflect's with
+    // them), not KH1's fall.
+    if super::form::in_final() || super::formmagic::base_kh2(true) {
         d.character.air_magic_falls = false;
         d.character.air_magic_gravity = 1.0;
         d.character.air_magic_fall_max = None;
@@ -2144,6 +2155,11 @@ pub fn kh1_keeps_square() -> bool {
     !(sora > 0x10000 && matches!(unsafe { rd::<i32>(sora + 0x70) }, 0 | 1))
 }
 
+/// KH1 has Sora for one of its moves (`hand_to_kh1`, a grab), until KH2 takes him back.
+pub fn handing_off() -> bool {
+    HANDOFF.load(Ordering::Relaxed)
+}
+
 /// KH2 has Sora this moment (not handed to KH1).
 /// KH1 has him for one of its own moves (`hand_to_kh1`), until he can be KH2's again.
 pub fn kh1_move() -> bool {
@@ -2305,6 +2321,7 @@ pub fn air_cast() -> Option<(u8, f32)> {
 }
 
 pub fn hand_to_kh1(why: &str) {
+    super::stylecombo::clear();
     CUT_LEFT.store(false, Ordering::Relaxed);
     ATTACK_AFTER.store(false, Ordering::Relaxed);
     HANDOFF_FRAMES.store(0, Ordering::Relaxed);

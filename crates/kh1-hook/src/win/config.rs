@@ -1,23 +1,29 @@
-//! A ninth Config menu row, "Camera Style: KH1 / KH2" (the user: switch between KH1's and KH2's
-//! camera in the game's Config menu). (A tenth, Gummi Routes, went with the Gummi skip: the
-//! user, keep the mod modular.)
+//! Our Config menu rows (the user: switch between KH1's and KH2's camera in the game's Config
+//! menu; then "toggle what sora uses for his ground and aerial moves"): Camera Style, Ground
+//! Combo, Aerial Combo, Magic, Aerial Magic, each KH1 / KH2. (A Gummi Routes row went with the
+//! Gummi skip: the user, keep the mod modular.)
 //! `docs/kh1-config-menu.md` has KH1's side.
 //!
-//! - The Config list window's definition (`0x140547090`) gets 9 rows instead of 8.
-//! - Its update (`0x1402F7DD0`) is wrapped: on our row, left / right / confirm switch the camera
-//!   (and are hidden from KH1's update, whose left / right on a ninth row would step the
-//!   difficulty); after it, our row is drawn with KH1's own panel calls. While it runs the rows
-//!   are 25 apart instead of 28, so nine fit above the help box.
-//! - The help line (`0x1402F7D60`) reads its text id from a table by row; for our row it is
+//! - The Config list window's definition (`0x140547090`) gets 13 rows instead of 8.
+//! - KH1 draws its rows at fixed places (`0x47` + row × 28, no scrolling), and 13 don't fit
+//!   above the help box, so the list has two pages: KH1's 8 rows, and ours (rows 8..12) drawn
+//!   in their places when the cursor is on one of ours. KH1's own drawing is then held back for
+//!   the call: every row piece it draws is one panel call (`0x1402D5590`, hooked), skipped.
+//! - Its update (`0x1402F7DD0`) is wrapped: on our rows, left / right / confirm switch the
+//!   value (and are hidden from KH1's update, whose left / right there would step the
+//!   difficulty); after it, our page is drawn with KH1's own panel calls.
+//! - The help line (`0x1402F7D60`) reads its text id from a table by row; for our rows it is
 //!   pointed at our id for the call.
 //! - The menu's text lookup (`0x1402CE7C0`, sysmsg ids) is replaced: ids from `OUR_IDS` are our
 //!   strings, the rest are looked up as KH1 does.
 //!
-//! The choice is kept in `kh1-kh2.ini` (`camera = kh1 / kh2`), not the save.
+//! The choices are kept in `kh1-kh2.ini` (`camera`, `ground_combo`, `air_combo`, `magic`,
+//! `air_magic` = kh1 / kh2), not the save.
 
 use super::addr::Rva;
-use super::{camera, hook, log};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use super::styles::Kind;
+use super::{camera, hook, log, styles};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 const TEXT_RVA: Rva = Rva(0x2CE7C0);
 /// Its first instruction (`mov rax, [rip -> TEXT_TABLE_RVA]`; Epic: 48 8B 05 89 CE B4 02).
@@ -52,30 +58,62 @@ const RIGHT: u32 = 0x2000_0020;
 const FOCUS_RVA: Rva = Rva(0x2E2E40);
 const SOUND_RVA: Rva = Rva(0x177F60);
 const PANEL_RVA: Rva = Rva(0x2D5590);
+/// `push rbx; sub rsp, 0x50`.
+const PANEL_PROLOGUE: [u8; 6] = [0x40, 0x53, 0x48, 0x83, 0xEC, 0x50];
+/// The list cursor's row (`(win+0xFE + 8 + (win+0xFC & 0xF)) >> 4`).
+const CURSOR_ROW_RVA: Rva = Rva(0x2ED030);
 const DECOR_RVA: Rva = Rva(0x2F0740);
 
-/// Our rows: 8 the camera. Each: label, left value, right value, help.
+/// Our rows: 8 the camera, 9..12 the move styles (`styles::Kind::EVERY` in order). Each:
+/// label, left value, right value, help.
 const FIRST_ROW: i32 = 8;
-const ROWS: [[u32; 4]; 1] = [[0x7F00_0001, 0x7F00_0002, 0x7F00_0003, 0x7F00_0004]];
+const ROWS: [[u32; 4]; 5] = [
+    [0x7F00_0001, 0x7F00_0002, 0x7F00_0003, 0x7F00_0004],
+    [0x7F00_0101, 0x7F00_0002, 0x7F00_0003, 0x7F00_0102],
+    [0x7F00_0103, 0x7F00_0002, 0x7F00_0003, 0x7F00_0104],
+    [0x7F00_0105, 0x7F00_0002, 0x7F00_0003, 0x7F00_0106],
+    [0x7F00_0107, 0x7F00_0002, 0x7F00_0003, 0x7F00_0108],
+];
 /// The camera row's help line (with the version under it).
 const HELP_ID: u32 = 0x7F00_0004;
-const STRINGS: [(u32, &str); 4] = [
+const STRINGS: [(u32, &str); 12] = [
     (0x7F00_0001, "Camera Style"),
     (0x7F00_0002, "KH1"),
     (0x7F00_0003, "KH2"),
     (0x7F00_0004, "Choose KH1's camera or KH2's field camera."),
+    (0x7F00_0101, "Ground Combo"),
+    (0x7F00_0102, "Choose KH1's or KH2's ground combo for Sora.\nDrive Forms keep their own."),
+    (0x7F00_0103, "Aerial Combo"),
+    (0x7F00_0104, "Choose KH1's or KH2's aerial combo for Sora.\nDrive Forms keep their own."),
+    (0x7F00_0105, "Magic"),
+    (0x7F00_0106, "Choose KH1's or KH2's magic for Sora on the ground.\nDrive Forms keep their own."),
+    (0x7F00_0107, "Aerial Magic"),
+    (0x7F00_0108, "Choose KH1's or KH2's magic for Sora in the air.\nDrive Forms keep their own."),
 ];
 
-/// A row's value: right (true) or left.
-fn value(_row: i32) -> bool {
-    camera::KH2.load(Ordering::Relaxed)
+/// The move style a row switches (`None`: the camera row).
+fn style(row: i32) -> Option<Kind> {
+    Kind::EVERY.get(usize::try_from(row - FIRST_ROW - 1).ok()?).copied()
+}
+
+/// A row's value: right (KH2, true) or left (KH1).
+fn value(row: i32) -> bool {
+    match style(row) {
+        Some(k) => styles::kh2(k),
+        None => camera::KH2.load(Ordering::Relaxed),
+    }
 }
 
 fn toggle(row: i32) {
     let v = !value(row);
-    camera::KH2.store(v, Ordering::Relaxed);
-    super::settings::save("camera", if v { "kh2" } else { "kh1" });
-    log(&format!("Config menu: camera style {}", if v { "KH2" } else { "KH1" }));
+    match style(row) {
+        Some(k) => styles::set(k, v),
+        None => {
+            camera::KH2.store(v, Ordering::Relaxed);
+            super::settings::save("camera", if v { "kh2" } else { "kh1" });
+            log(&format!("Config menu: camera style {}", if v { "KH2" } else { "KH1" }));
+        }
+    }
 }
 
 fn ours(row: i32) -> bool {
@@ -86,6 +124,9 @@ static BASE: AtomicUsize = AtomicUsize::new(0);
 static ORIG_UPDATE: AtomicUsize = AtomicUsize::new(0);
 static ORIG_HELP: AtomicUsize = AtomicUsize::new(0);
 static ORIG_TEXT: AtomicUsize = AtomicUsize::new(0);
+static ORIG_PANEL: AtomicUsize = AtomicUsize::new(0);
+/// KH1's Config update runs while our page shows: its own row pieces aren't drawn.
+static HIDE_KH1: AtomicBool = AtomicBool::new(false);
 static TEXT: std::sync::OnceLock<Vec<(u32, usize)>> = std::sync::OnceLock::new();
 
 unsafe fn rd<T: Copy>(p: usize) -> T {
@@ -125,6 +166,10 @@ pub unsafe fn install() {
     if hook::install(base + HELP_RVA, &HELP_PROLOGUE, help as *const () as usize, &ORIG_HELP, "Config help line").is_none() {
         return;
     }
+    // (Before the update's hook: without it our page would show over KH1's rows.)
+    if hook::install(base + PANEL_RVA, &PANEL_PROLOGUE, panel as *const () as usize, &ORIG_PANEL, "menu panel (Config pages)").is_none() {
+        return;
+    }
     if hook::install(base + UPDATE_RVA, &UPDATE_PROLOGUE, update as *const () as usize, &ORIG_UPDATE, "Config menu").is_none() {
         return;
     }
@@ -133,7 +178,7 @@ pub unsafe fn install() {
     let n = 8 + ROWS.len() as u16;
     wr(base + ROWS_RVA, n);
     wr(base + VISIBLE_RVA, n);
-    log("Config menu: Camera Style row added");
+    log("Config menu: our rows added (Camera Style, Ground Combo, Aerial Combo, Magic, Aerial Magic; a second page)");
 }
 
 /// KH1's sysmsg lookup (its own instructions, re-done here: its first one is RIP-relative, so
@@ -176,9 +221,11 @@ unsafe extern "system" fn help(win: usize) {
     if !ours(row) {
         return f(win);
     }
-    // Row 8 reads its help id from just past the table (the next table's first entry): ours
-    // for the call.
+    // Rows 8..12 read their help ids from just past the table (the max-value table's entries
+    // 0..4, read only by the Config update's left / right, never during this call): ours for the
+    // call, put back right after.
     debug_assert_eq!(base + HELP_IDS_RVA + 8 * 4, base + MAX0_RVA);
+    debug_assert!(row - FIRST_ROW < 8);
     let at = base + HELP_IDS_RVA + row as usize * 4;
     let keep = rd::<u32>(at);
     wr(at, ROWS[(row - FIRST_ROW) as usize][3]);
@@ -186,13 +233,25 @@ unsafe extern "system" fn help(win: usize) {
     wr(at, keep);
 }
 
+/// KH1's panel draw (a label or a value of a menu row): held back while our page shows.
+unsafe extern "system" fn panel(win: usize, style: i32, a: i32, b: i32, x: i32, y: i32, w: i32, h: i32, id: u32) {
+    if HIDE_KH1.load(Ordering::Relaxed) {
+        return;
+    }
+    let f: unsafe extern "system" fn(usize, i32, i32, i32, i32, i32, i32, i32, u32) = std::mem::transmute(ORIG_PANEL.load(Ordering::Acquire));
+    f(win, style, a, b, x, y, w, h, id)
+}
+
 unsafe extern "system" fn update(win: usize) {
     let base = BASE.load(Ordering::Relaxed);
     let f: unsafe extern "system" fn(usize) = std::mem::transmute(ORIG_UPDATE.load(Ordering::Acquire));
     let focus: unsafe extern "system" fn(usize) -> i32 = std::mem::transmute(base + FOCUS_RVA);
+    let cursor: unsafe extern "system" fn(usize) -> i32 = std::mem::transmute(base + CURSOR_ROW_RVA);
     let pad = rd::<u64>(base + PAD_PTR_RVA) as usize;
     let mut kept: Option<(u32, u32)> = None;
-    let row = rd::<i32>(base + ROW_RVA);
+    // The row before this frame's cursor move: the page shown (KH1's and ours alike, so they
+    // never both draw; a page change shows a frame late).
+    let row = cursor(win);
     if pad > 0x10000 && ours(row) && focus(win) != 0 {
         let confirm = rd::<u32>(base + CONFIRM_MASK_RVA);
         let (pressed, repeat) = (rd::<u32>(pad + 8), rd::<u32>(pad + 0x10));
@@ -206,32 +265,29 @@ unsafe extern "system" fn update(win: usize) {
         wr(pad + 8, pressed & !(LEFT | RIGHT | confirm));
         wr(pad + 0x10, repeat & !(LEFT | RIGHT | confirm));
     }
-    // Nine rows 25 apart (instead of 28) during the call, so ours clears the help box.
-    let (h, gap) = (rd::<i32>(base + ROW_H_RVA), rd::<i32>(base + ROW_GAP_RVA));
-    wr(base + ROW_H_RVA, ROW_PITCH.min(h));
-    wr(base + ROW_GAP_RVA, 0i32);
+    let our_page = ours(row);
+    HIDE_KH1.store(our_page, Ordering::Relaxed);
     f(win);
-    for k in 0..ROWS.len() as i32 {
-        draw(base, win, FIRST_ROW + k);
+    HIDE_KH1.store(false, Ordering::Relaxed);
+    if our_page {
+        for k in 0..ROWS.len() as i32 {
+            draw(base, win, FIRST_ROW + k);
+        }
     }
-    wr(base + ROW_H_RVA, h);
-    wr(base + ROW_GAP_RVA, gap);
     if let Some((p, r)) = kept {
         wr(pad + 8, p);
         wr(pad + 0x10, r);
     }
 }
 
-/// Our rows' pitch while the Config list runs.
-const ROW_PITCH: i32 = 25;
-
-/// One of our rows, drawn as KH1 draws rows 0..5: the label, then the two choice panels.
+/// One of our rows, drawn as KH1 draws rows 0..5 (in the place of KH1's row `row - 8`): the
+/// label, then the two choice panels.
 unsafe fn draw(base: usize, win: usize, row: i32) {
     let panel: unsafe extern "system" fn(usize, i32, i32, i32, i32, i32, i32, i32, u32) = std::mem::transmute(base + PANEL_RVA);
     let decor: unsafe extern "system" fn(usize, i32, i32, i32) = std::mem::transmute(base + DECOR_RVA);
     let ids = ROWS[(row - FIRST_ROW) as usize];
     let h = rd::<i32>(base + ROW_H_RVA);
-    let y = 0x47 + row * (h + rd::<i32>(base + ROW_GAP_RVA));
+    let y = 0x47 + (row - FIRST_ROW) * (h + rd::<i32>(base + ROW_GAP_RVA));
     let selected = rd::<i32>(base + ROW_RVA) == row;
     if selected {
         let y2 = h / 2 - 1 + y;

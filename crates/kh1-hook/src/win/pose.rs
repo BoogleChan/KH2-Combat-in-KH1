@@ -800,7 +800,10 @@ fn wanted(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
             // game's frames, not the clock: after one, the old pose went stale and KH1's slot was
             // drawn until KH2's next frame; the user: paused mid KH2 move, resumed in KH1's).
             let kh2_frame = super::takeover::kh2_frame();
-            let fresh = super::takeover::POSE.try_lock().ok().and_then(|p| p.as_ref().filter(|(_, _, t)| kh2_frame || t.elapsed().as_secs_f32() < 0.15).map(|(b, w, _)| (b.clone(), w.clone())));
+            // (KH1's own combo, `stylecombo`: KH1's swings from their first frame, not KH2's
+            // last pose over them.)
+            let kh1_combo = super::stylecombo::active();
+            let fresh = if kh1_combo { None } else { super::takeover::POSE.try_lock().ok().and_then(|p| p.as_ref().filter(|(_, _, t)| kh2_frame || t.elapsed().as_secs_f32() < 0.15).map(|(b, w, _)| (b.clone(), w.clone()))) };
             match (fresh, s.retarget.as_ref()) {
                 (Some((b, w)), Some(r)) => {
                     s.follow.slot = slot;
@@ -855,11 +858,20 @@ fn decompose(v: &[Mat4]) -> Vec<(Vec3, Quat, Vec3)> {
 
 /// KH2's motion for what KH1's slot shows Sora doing; `None` leaves KH1's own animation.
 fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4>> {
+    // KH1's own combo (`stylecombo`, the move style set to KH1): KH1's swings, not KH2's drawn
+    // over them.
+    if super::stylecombo::active() && matches!(slot, Some(98..=104)) {
+        s.follow.slot = slot;
+        return None;
+    }
     // In Wisdom Form, KH1's spells with no KH2 counterpart (Gravity, Stop, Aero: KH1 casts them)
     // show the form's own cast (the user: "any kh1 magic that doesn't have a kh2 equivalent
     // (gravity, stop) should use the normal thunder/cure wisdom form animation but still cast
     // their respected magic"): Gravity Thunder's, Stop and Aero Cure's; the air ones in the air.
-    if super::form::in_wisdom() {
+    // (And base Sora's KH1 Gravity, Stop and Aero with the Magic style at KH2: his own KH2 cast
+    // motions, `formmagic::BASE_KH1_CAST`.)
+    let base_look = super::formmagic::BASE_KH1_CAST.load(std::sync::atomic::Ordering::Relaxed) && !super::form::in_form();
+    if super::form::in_wisdom() || base_look {
         if let Some(spell @ 3..=6) = super::takeover::kh1_spell_now() {
             let air = super::takeover::air_cast().is_some();
             let motion = match (spell, air) {

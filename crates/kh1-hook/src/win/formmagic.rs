@@ -29,6 +29,27 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 pub const SPELL_NAMES: [&str; 4] = ["Fire", "Blizzard", "Thunder", "Cure"];
+
+/// Base Sora casts KH2's magic for a spell cast now, on the ground or in the air (the move
+/// styles' Magic / Aerial Magic set to KH2, `styles`; not in a Drive Form, which keep their own).
+pub fn base_kh2(air: bool) -> bool {
+    use super::styles::{kh2, Kind};
+    !super::form::in_form() && kh2(if air { Kind::AirMagic } else { Kind::Magic })
+}
+
+/// The KH1 spell KH1 casts now (Gravity, Stop, Aero) is drawn with base Sora's KH2 cast motion
+/// on its clock, as Wisdom's KH1 spells are (`takeover::command_started`, `pose::follow`): the
+/// Magic styles at KH2 in base form (the user: "KH1 spell, KH2 animation").
+pub static BASE_KH1_CAST: AtomicBool = AtomicBool::new(false);
+
+/// Whose spells these are, for the log.
+fn who() -> &'static str {
+    if super::form::in_wisdom() {
+        "Wisdom"
+    } else {
+        "KH2 magic"
+    }
+}
 const FILE_NAMES: [&str; 4] = ["FIRE", "BLIZZARD", "THUNDER", "CURE"];
 /// `kh2fx` packages (1-based, its `level` argument): 1..3 Reflect, 4 Wisdom's archive, then
 /// each spell's three levels.
@@ -82,7 +103,7 @@ pub fn spell_file(spell: u8, level: u8) -> Option<Arc<Vec<u8>>> {
             match r {
                 Ok(b) => Some(Arc::new(b)),
                 Err(e) => {
-                    log(&format!("Wisdom spells: {name} not read ({e})"));
+                    log(&format!("KH2 spells: {name} not read ({e})"));
                     None
                 }
             }
@@ -108,7 +129,8 @@ pub fn element_sounds(kh2: &pose::Kh2) -> Vec<(u8, u16, i32)> {
     if let Some(a) = kh2.final_form.as_ref().and_then(|f| f.archive.as_ref()) {
         add(super::kh2fx::FINAL, a);
     }
-    if super::settings::get().drive {
+    // (Also for base Sora's KH2 magic, `base_kh2`, which the Config menu switches in game.)
+    {
         for spell in 0..4u8 {
             for level in 1..=3u8 {
                 if let Some(b) = spell_file(spell, level) {
@@ -194,7 +216,7 @@ fn spell_index(rt: &mut Runtime, spell: u8, level: u8) -> Option<usize> {
             Some(i)
         }
         Err(e) => {
-            log(&format!("Wisdom spells: {name} not usable ({e})"));
+            log(&format!("KH2 spells: {name} not usable ({e})"));
             None
         }
     });
@@ -230,13 +252,19 @@ pub fn end_all() {
     rt.fx.clear();
 }
 
-/// A KH1 spell chosen (`combat::command`, magic `spell`): in the form, KH2's. Returns whether
-/// it was taken (else KH1 casts its own).
+/// A KH1 spell chosen (`combat::command`, magic `spell`): in the form, KH2's; in base form,
+/// KH2's when the Magic style (ground or air, as he is now) is KH2's (`base_kh2`). Returns
+/// whether it was taken (else KH1 casts its own).
 pub unsafe fn spell_chosen(actor: usize, spell: u8) -> bool {
-    // (Fire, Blizzard, Thunder; Cure is KH1's own on the form's Cure motion, as Gravity, Stop and
-    // Aero are: the user, "wisdom form currently casts kh2 cure, it needs to be kh1 cure with kh2s
-    // cures animation".)
-    if spell > 2 || !super::form::in_wisdom() || !super::takeover::kh2_has() || !super::settings::get().drive {
+    // (Wisdom: Fire, Blizzard, Thunder; Cure is KH1's own on the form's Cure motion, as Gravity,
+    // Stop and Aero are: the user, "wisdom form currently casts kh2 cure, it needs to be kh1 cure
+    // with kh2s cures animation". Base Sora's KH2 magic: Cure too, KH2's.)
+    if !super::takeover::kh2_has() {
+        return false;
+    }
+    let wisdom = spell <= 2 && super::form::in_wisdom() && super::settings::get().drive;
+    let base = spell <= 3 && base_kh2(super::takeover::kh2_airborne());
+    if !(wisdom || base) {
         return false;
     }
     let level = super::reflect::kh1_spell_level(spell);
@@ -246,13 +274,13 @@ pub unsafe fn spell_chosen(actor: usize, spell: u8) -> bool {
     let cost = super::reflect::kh1_spell_cost(spell);
     if !super::reflect::can_pay(actor, cost) {
         super::reflect::menu_sound(4);
-        log(&format!("Wisdom {} refused: can't pay {cost}", SPELL_NAMES[spell as usize]));
+        log(&format!("{} {} refused: can't pay {cost}", who(), SPELL_NAMES[spell as usize]));
         return true;
     }
     if let Ok(mut w) = WAITING.lock() {
         *w = Some((spell, Instant::now(), super::takeover::KH2_MOTION.load(Ordering::Relaxed)));
     }
-    log(&format!("Wisdom {} chosen (level {level}, cost {cost})", SPELL_NAMES[spell as usize]));
+    log(&format!("{} {} chosen (level {level}, cost {cost})", who(), SPELL_NAMES[spell as usize]));
     true
 }
 
@@ -268,7 +296,7 @@ pub unsafe fn before_step(actor: usize, ch: &mut Character) {
     if !ch.can_cast() {
         if !super::takeover::same_move(motion) || !ch.magic_later() || when.elapsed().as_secs_f32() > WAIT_S {
             *w = None;
-            log(&format!("Wisdom {}: dropped, the move it was chosen in (motion {motion}) ended without a window for it", SPELL_NAMES[spell as usize]));
+            log(&format!("{} {}: dropped, the move it was chosen in (motion {motion}) ended without a window for it", who(), SPELL_NAMES[spell as usize]));
         }
         return;
     }
@@ -283,7 +311,7 @@ pub unsafe fn before_step(actor: usize, ch: &mut Character) {
     let pick = |v: i16| (v >= 0).then_some(v as u16);
     let motions = CastMotions { ground: pick(m.ground_motion).unwrap_or(56), air: pick(m.air_motion).unwrap_or(58), finisher: pick(m.finish_motion) };
     let Some(motion) = ch.cast(motions) else {
-        log(&format!("Wisdom {}: no cast motion ({motions:?})", SPELL_NAMES[spell as usize]));
+        log(&format!("{} {}: no cast motion ({motions:?})", who(), SPELL_NAMES[spell as usize]));
         return;
     };
     super::reflect::pay_mp(actor, cost);
@@ -295,7 +323,7 @@ pub unsafe fn before_step(actor: usize, ch: &mut Character) {
     if v != 255 {
         super::kh2sound::voice(v as i16);
     }
-    log(&format!("Wisdom {} (level {level}) cast: motion {motion}{}", SPELL_NAMES[spell as usize], if finisher { " (combo finisher)" } else { "" }));
+    log(&format!("{} {} (level {level}) cast: motion {motion}{}", who(), SPELL_NAMES[spell as usize], if finisher { " (combo finisher)" } else { "" }));
 }
 
 /// The form's own cast motion for a KH1 spell it has no KH2 version of (Gravity, Stop, Aero):
@@ -371,11 +399,12 @@ pub unsafe fn shots_step(actor: usize, out: &Output, airborne: bool, strikes: &m
     // A spell cast this frame (trigger 20), its release (21) at the motion's magic-cast event.
     if let Some(f) = rt.fresh.take() {
         if let Some(file) = spell_index(rt, f.spell, f.level) {
-            let sub = f.level as i32 * 2 - 2 + f.finisher as i32 + super::form::MAGIC_SUB;
+            // (Wisdom's subs from 10; base Sora's from 0, `form::magic_sub`.)
+            let sub = f.level as i32 * 2 - 2 + f.finisher as i32 + super::form::magic_sub();
             let magi = pose::kh2().and_then(|k| k.magi.get(sub).map(|r| r.to_vec())).unwrap_or_else(|| vec![0; kh2_formats::pref::MagiTable::RECORD]);
             match rt.magic.cast(file, SORA, f.spell, sub, &magi, &mut world) {
                 Ok(_) => rt.casting = Some(f.motion),
-                Err(e) => log(&format!("Wisdom {}'s script didn't start ({e})", SPELL_NAMES[f.spell as usize])),
+                Err(e) => log(&format!("{} {}'s script didn't start ({e})", who(), SPELL_NAMES[f.spell as usize])),
             }
         }
     }
@@ -433,7 +462,7 @@ pub unsafe fn shots_step(actor: usize, out: &Output, airborne: bool, strikes: &m
                 let Some(r) = row(battle, atk, sub, 0) else { continue };
                 if matches!(combat_core::AttackKind::from_id(r.kind), combat_core::AttackKind::Cure | combat_core::AttackKind::CureStrong) {
                     if let Some((from, to)) = heal(actor, r.power) {
-                        log(&format!("Wisdom Cure: ATKP {atk} sub {sub} (power {}): HP {from} -> {to}", r.power));
+                        log(&format!("{} Cure: ATKP {atk} sub {sub} (power {}): HP {from} -> {to}", who(), r.power));
                     }
                 }
             }
@@ -505,7 +534,7 @@ pub unsafe fn shots_step(actor: usize, out: &Output, airborne: bool, strikes: &m
                 a.hit = true;
             }
             if rt.hits <= 60 {
-                log(&format!("Wisdom: ATKP {atk} hit {foe:#x} -> damage {dealt:?}"));
+                log(&format!("{}: ATKP {atk} hit {foe:#x} -> damage {dealt:?}", who()));
             }
         }
     }

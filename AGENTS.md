@@ -2821,3 +2821,19 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   landing (`TOUCHDOWN`, a second `takeover` that frame). Before, KH2 took him a frame later, so
   KH1's landing frame showed and ran first. A landing KH1 makes outside the physics step is
   logged and left to the next frame's hand-off as before.
+
+### 2026-10-19: Stage 236 (move styles: KH1 or KH2 per kind of move)
+- The user: toggles for "base combo KH1 | KH2, aerial base combo KH1 | KH2, magic kh1 | kh2, aerial
+  magic kh1 | kh2"; asked: in the Config menu and the ini, Gravity / Stop / Aero as KH1 spells on
+  KH2 cast motions, base Sora only. `styles.rs` (ini `ground_combo`, `air_combo`, `magic`,
+  `air_magic`; defaults combos KH2, magic KH1, as before). `docs/kh1-move-styles.md`.
+- Combos at KH1 (helper, `style-combo`, `stylecombo.rs`): Attack runs KH1's own combo (its rows,
+  finishers, abilities), KH1 keeps the presses, KH2 takes him back once KH1 lets him act; the
+  style is picked by where he is when Attack is pressed.
+- Magic at KH2 (helper, `style-magic`): Fire / Blizzard / Thunder / Cure are KH2's base-form spells
+  (Wisdom's path, base Sora's MAGC cast motions, magic sub level × 2 − 2); Gravity / Stop / Aero
+  KH1's on base Sora's KH2 cast motions (`BASE_KH1_CAST`); Aerial Magic at KH2 gives air casts
+  (Reflect too) KH2's air physics.
+- Config menu (helper, `style-menu`): KH1 doesn't scroll its list, so ours is a second page (rows
+  8-12: Camera Style, then the four styles) drawn in KH1's rows' places while the cursor is past
+  row 7; KH1's rows' panels (`0x1402D5590`) are skipped then. s224's 25 pitch is gone.

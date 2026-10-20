@@ -114,7 +114,8 @@ pub unsafe fn start() {
                 // (And Wisdom Form's, as package 4: its shots, `form`.)
                 // (And Wisdom Form's spells, Fire / Blizzard / Thunder / Cure by level, as packages
                 // `form::spell_package`.)
-                let last = if super::settings::get().drive { FINAL } else { WISDOM };
+                // (The spells' packages without the forms too: base Sora's KH2 magic, `styles`.)
+                let last = if super::settings::get().drive { FINAL } else { super::form::LAST_PACKAGE };
                 let spell: Vec<Option<SpellFx>> = (1..=last)
                     .map(|level| {
                         let lib = if level == WISDOM {

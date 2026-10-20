@@ -24,6 +24,8 @@ mod menu;
 mod pose;
 mod settings;
 mod shortcuts;
+mod styles;
+mod stylecombo;
 mod probe;
 mod reflect;
 mod takeover;

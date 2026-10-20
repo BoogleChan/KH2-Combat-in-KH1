@@ -88,6 +88,11 @@ unsafe extern "system" fn exec(actor: usize, row: i32, dir: usize) {
     let base = BASE.load(Ordering::Relaxed);
     let sora = rd::<u64>(base + PARTY_RVA) as usize;
     let command = rd::<u8>(base + COMMAND_RVA);
+    // KH1's own combo (`stylecombo`, the Ground / Aerial Combo style set to KH1): its row runs.
+    if actor == sora && command == 1 && takeover::ON.load(Ordering::Relaxed) && super::stylecombo::kh1_row(actor) {
+        let f: ExecFn = std::mem::transmute(ORIG_EXEC.load(Ordering::Acquire));
+        return f(actor, row, dir);
+    }
     // Flying (KH1 has him, state 8): KH2's aerial combo instead of KH1's flying attack.
     if actor == sora && command == 1 && takeover::ON.load(Ordering::Relaxed) && rd::<i32>(actor + 0x70) == 8 {
         takeover::FLY_ATTACK.store(true, Ordering::Relaxed);
@@ -294,7 +299,10 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
         sound(4);
         return;
     }
-    if actor != sora || matches!(kind, 0 | 1) || NOT_SORAS.contains(&kind) || !super::settings::get().commands || !takeover::ON.load(Ordering::Relaxed) || !takeover::kh2_has() {
+    // (Attack is KH2's attack button, unless the combo there is KH1's: then it goes to KH1 as
+    // the other commands do, `stylecombo`.)
+    let kh1_combo = kind == 1 && super::stylecombo::kh1_here(air);
+    if actor != sora || kind == 0 || kind == 1 && !kh1_combo || NOT_SORAS.contains(&kind) || !super::settings::get().commands || !takeover::ON.load(Ordering::Relaxed) || !takeover::kh2_has() {
         return f(actor, dir);
     }
     // KH2 runs a command only when Sora can act: a spell when free, landing or in an attack's
@@ -351,7 +359,9 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     // air cast's `0x14029D7F0(actor, 0x83 + spell)` changed none of the others, the user's log).
     let look = || (rd::<i32>(actor + 0x70), rd::<u32>(actor + 0x164), rd::<u32>(actor) & 0x100_0000, pose::sora_slot(), super::probe::SORA_MOTIONS.load(Ordering::Relaxed));
     let set = look();
+    super::stylecombo::starting(kh1_combo);
     f(actor, dir);
+    super::stylecombo::starting(false);
     // Only if KH1 did something with him (a new state or motion request); else as before.
     let after = look();
     if after != set {
@@ -378,6 +388,10 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
         takeover::ITEM_COMMAND.store(kind == ITEM_COMMAND_TYPE, Ordering::Relaxed);
         takeover::command_started(sora_shots(actor), (kind == 2).then_some(((full >> 8) & 0xFF) as u8));
         takeover::hand_to_kh1(&format!("command {kind:#x} ({full:08x}){}, KH1 motion {:#x}", if air { " in the air" } else { "" }, super::probe::SORA_LAST_SLOT.load(Ordering::Relaxed)));
+        if kh1_combo {
+            super::stylecombo::started();
+            log(&format!("KH1's own {} combo (move style KH1)", if air { "aerial" } else { "ground" }));
+        }
     } else {
         if air {
             wr(actor + 0x70, before.0);
@@ -393,6 +407,8 @@ pub unsafe fn take_chosen_command() -> Option<u8> {
     let base = BASE.load(Ordering::Relaxed);
     let kind = rd::<u8>(base + COMMAND_RVA);
     match kind {
+        // (In KH1's own combo its presses stay in the record: KH1's command step chains them.)
+        1 if super::stylecombo::active() => None,
         1 => {
             wr(base + COMMAND_RVA, 0u8);
             cmd_log("Attack chosen during KH1's cast: KH2's once the spell is out".to_string());

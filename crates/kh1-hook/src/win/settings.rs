@@ -88,7 +88,13 @@ kh2_hair = on\r\n\
 drive = on\r\n\
 ; valor_left_blade: on = in Valor Form, its Keyblade in Sora's left hand (KH1's own model of it);\r\n\
 ; off = nothing of it is installed (turn it off if it misbehaves)\r\n\
-valor_left_blade = on\r\n";
+valor_left_blade = on\r\n\
+; ground_combo / air_combo / magic / air_magic: kh1 or kh2, which game's moves base Sora uses\r\n\
+; for each (Drive Forms keep their own); the Config menu switches them in game too\r\n\
+ground_combo = kh2\r\n\
+air_combo = kh2\r\n\
+magic = kh1\r\n\
+air_magic = kh1\r\n";
 
 #[derive(Debug)]
 pub struct Settings {
@@ -139,6 +145,8 @@ pub struct Settings {
     pub drive: bool,
     /// Valor's Keyblade drawn in his left hand (`valor_left_blade = on`, `leftblade`).
     pub valor_left_blade: bool,
+    /// KH2's (true) or KH1's moves per `styles::Kind` (ground combo, air combo, magic, air magic).
+    pub styles: [bool; 4],
 }
 
 static SETTINGS: OnceLock<Settings> = OnceLock::new();
@@ -214,6 +222,7 @@ pub fn get() -> &'static Settings {
             kh2_hair: on(&text, "kh2_hair", "on", true),
             drive: on(&text, "drive", "on", true),
             valor_left_blade: on(&text, "valor_left_blade", "on", true),
+            styles: [on(&text, "ground_combo", "kh2", true), on(&text, "air_combo", "kh2", true), on(&text, "magic", "kh2", false), on(&text, "air_magic", "kh2", false)],
         };
         log(&format!("settings ({path}): {s:?}"));
         s
