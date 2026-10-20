@@ -3321,3 +3321,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - The user: "comment it out" (the Gummi route skip). `gummi::install` is no longer called, so
   routes are flown whatever the ini says. The Config menu's Gummi Routes row is commented out
   (10 rows; `gummi_row` matches none). The code stays.
+
+### 2026-10-20: Stage 282 (Final Form's left Keyblade steady, apart in glide turns)
+- The user: the second Keyblade jitters while hovering, and in glide turns it goes to the first
+  Keyblade's position. Final's left blade was placed from KH2's left hand (bone 86) on KH1's
+  rebuilt left hand; that hand's angle error, over 40-120 units of float, made both. In Final
+  only, the left blade now uses the right blade's anchor (KH2's bone 178 on KH1's right hand,
+  as `final_float`), so the two keep KH2's spacing (`leftblade::note_pose`;
+  `docs/drive-model.md`). Valor is unchanged.

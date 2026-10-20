@@ -123,6 +123,29 @@ final form glide and in final form jump should do damage".
   KH2's weapon root only, so the blade's own turn was lost. They now follow bone 2
   (`KH2_BLADE`), matched against bone 2 of base Sora's held idle. Bone 2 is not animated in the
   other motions, so those look as before. Valor still follows the root.
+- **Where the left one hangs from.** The user: "when sora hovers on the ground, the
+  second keyblade follows him but it jitters a little. also, when gliding and turning, the
+  second keyblade goes to the same position as the first keyblade".
+  - The data is not the cause. `W_EX010_ULTF_L` has its own clip for every motion
+    `W_EX010_ULTF_R` has (0..19, 40, 53, the casts, 151..154, 181..183, 205..208), and no two
+    are the same. The body's motion 139 has no clip in either hand's set; both then play
+    motion 0, as `kh2_rig` does for any weapon (what KH2 does there is not checked).
+  - KH2's own spacing (`kh2-anim/examples/final_blades`, blade bone 2 in the body's space):
+
+    | Motion | Apart | Left blade from the left hand |
+    |---|---|---|
+    | Idle (0) | 64..80 | about 38 |
+    | Glide (205) | 140, one on each side | about 95 |
+    | Banked turns (206, 207) | about 35, both on one side of him | about 115, across his body |
+  - The cause: each Keyblade was put on KH1's hand of its side, by its KH2 hand bone. KH1's
+    hands are rebuilt from KH2's bones, not copied, so each turns a little differently from
+    KH2's. A Keyblade floating 40 to 120 units from its hand swings by that difference. The
+    left hand's wobble showed as the jitter, and in a turn the two hands' differences came to
+    the 35 units between the blades.
+  - Now, in Final Form, `note_pose` hangs the left Keyblade from KH2's right-hand bone, on
+    KH1's right hand, as `final_float` hangs the right one. The two keep KH2's spacing exactly,
+    and the left is as steady as the right. Valor's Keyblades are held, so each still hangs from
+    its own hand.
 - **The attacks.** Final's weapon motions carry their own attack triggers (range trigger 10,
   group 2 on bone 2, three spheres of radius 60):
 

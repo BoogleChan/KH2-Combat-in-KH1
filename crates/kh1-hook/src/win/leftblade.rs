@@ -671,6 +671,8 @@ fn scaled(m: Mat4, k: f32) -> Mat4 {
 ///   relation (both T-poses facing +z, same axes). The turn from KH2's right weapon root to KH1's
 ///   grip (280, as `pose` drew it: KH1's grip, `flip_weapons`, teeth up) is then the same for the
 ///   left, and the chain keeps the right one's shape.
+/// - Final Form's floating left Keyblade is put on KH1's right hand instead, by KH2's right hand
+///   bone, as the right one is: the two keep KH2's spacing.
 pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: &[Mat4], to_world: &Mat4, ratio: f32) {
     if !INSTALLED.load(Ordering::Relaxed) || !SHOWN.load(Ordering::Relaxed) || !super::form::two_blades() || MESH.load(Ordering::Relaxed) == 0 {
         return;
@@ -709,13 +711,28 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
     let rel = |kh2_hand: usize, root: Mat4| scaled(kh2_body[kh2_hand].inverse() * root, k);
     let right_root = kh1[RIGHT_HAND] * offset(RIGHT_HAND, sr) * rel(sr, right);
     let turn = right_root.inverse() * kh1[GRIP];
-    let left_blade = kh1[LEFT_HAND] * offset(LEFT_HAND, sl) * rel(sl, left);
+    // Final Form's float is put where KH2 has it from the right Keyblade's hand, as the right one
+    // is (`final_float`), not from KH1's left hand: so the two keep KH2's own spacing and the left
+    // is as steady as the right (the user: "when sora hovers on the ground, the second keyblade
+    // follows him but it jitters a little. also, when gliding and turning, the second keyblade
+    // goes to the same position as the first keyblade"). KH1's hands are rebuilt from KH2's
+    // bones, not copied, so each turns a little differently from KH2's; a Keyblade 40 to 120
+    // units from its hand swings by that, and the left hand's wobble showed as a jitter. In a
+    // banked glide turn (206, 207) KH2 puts both on one side of him, about 35 units
+    // apart, the left one 115 units from its hand across his body: the two hands' differences
+    // there came to the 35 units, and the left landed on the right.
+    let hand = if super::form::in_final() { RIGHT_HAND } else { LEFT_HAND };
+    let left_blade = if hand == RIGHT_HAND {
+        kh1[RIGHT_HAND] * offset(RIGHT_HAND, sr) * rel(sr, left)
+    } else {
+        kh1[LEFT_HAND] * offset(LEFT_HAND, sl) * rel(sl, left)
+    };
     let grip = left_blade * turn;
-    let from_hand = (grip.w_axis - kh1[LEFT_HAND].w_axis).truncate().length();
+    let from_hand = (grip.w_axis - kh1[hand].w_axis).truncate().length();
     // (Final Form's floats away from his hand.)
     let reach = if super::form::in_final() { 400.0 } else { 40.0 };
     if !grip.is_finite() || from_hand > reach {
-        log_n(&N, 5, || format!("left grip {from_hand:.0} units from the left hand: not drawn this frame"));
+        log_n(&N, 5, || format!("left grip {from_hand:.0} units from the hand it hangs from: not drawn this frame"));
         return;
     }
     let inv_grip = kh1[GRIP].inverse();
@@ -723,7 +740,7 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
     for (i, m) in out.iter_mut().enumerate() {
         *m = grip * inv_grip * kh1[GRIP + i];
     }
-    log_n(&N, 3, || format!("left grip posed, {from_hand:.1} units from the left hand"));
+    log_n(&N, 3, || format!("left grip posed, {from_hand:.1} units from the {} hand", if hand == RIGHT_HAND { "right" } else { "left" }));
     // (Final's left blade bone as drawn, for the effects on its weapon anchor.)
     if super::form::in_final() {
         note_final_blade(true, *to_world * unit(left_blade));
