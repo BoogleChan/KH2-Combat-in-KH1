@@ -3287,3 +3287,8 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - Anti's ledge hang: "sora should be hanging from his foot, so he should be significantly lower
   in this hang animation". The pose's topmost point (his gripping foot) now goes where KH1's
   hands hold the ledge, not his hands.
+
+### 2026-10-20: Stage 278 (no limits in any Drive Form)
+- The user: "sora should not be able to use limits in ANY drive form including anti form". The
+  Valor / Final refusal of KH1's specials (`combat::command`, and `exec` for their attack rows)
+  now covers every form. Wisdom's spells, items and the context commands still run.

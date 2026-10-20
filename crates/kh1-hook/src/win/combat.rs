@@ -158,10 +158,13 @@ unsafe extern "system" fn exec(actor: usize, row: i32, dir: usize) {
     // command step runs as attack rows; `command` refuses them, this in case one comes another
     // way).
     // (Anti Form too: none of KH1's specials.)
-    if actor == sora && command != 1 && (super::form::two_blades() || super::form::in_anti()) {
+    // (Every Drive Form: no KH1 limits in any, the user: "sora should not be able to use limits in
+    // ANY drive form including anti form"; Wisdom's spells and items still run, as before.)
+    let limit = super::form::in_form() && !matches!(command, 1 | 2 | ITEM_COMMAND_TYPE);
+    if actor == sora && command != 1 && (super::form::two_blades() || super::form::in_anti() || limit) {
         static N: AtomicU32 = AtomicU32::new(0);
         if N.fetch_add(1, Ordering::Relaxed) < 30 {
-            log(&format!("KH1 attack row {row} for command {command:#x} refused: not in {}", if super::form::in_anti() { "Anti Form" } else { "Valor Form" }));
+            log(&format!("KH1 attack row {row} for command {command:#x} refused: not in a Drive Form"));
         }
         let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
         sound(4);
@@ -383,10 +386,12 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     // (Not the field's context commands, talking and examining: the user, "please let sora be
     // allowed to talk to people and interact with objects in drive forms"; the log: Talk, command
     // 0x4, refused in Final Form.)
-    if actor == sora && super::form::two_blades() && !matches!(kind, 0 | 1 | 2 | ITEM_COMMAND_TYPE) && !NOT_SORAS.contains(&kind) && !context_command(base, kind) {
+    // (In every Drive Form now, the user: "sora should not be able to use limits in ANY drive form
+    // including anti form".)
+    if actor == sora && super::form::in_form() && !matches!(kind, 0 | 1 | 2 | ITEM_COMMAND_TYPE) && !NOT_SORAS.contains(&kind) && !context_command(base, kind) {
         static N: AtomicU32 = AtomicU32::new(0);
         if N.fetch_add(1, Ordering::Relaxed) < 30 {
-            log(&format!("command {kind:#x} ({full:08x}) refused: not in Valor Form"));
+            log(&format!("command {kind:#x} ({full:08x}) refused: no limits in a Drive Form"));
         }
         let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
         sound(4);
