@@ -115,7 +115,7 @@ pub unsafe fn start() {
                 // (And Wisdom Form's spells, Fire / Blizzard / Thunder / Cure by level, as packages
                 // `form::spell_package`.)
                 // (The spells' packages without the forms too: base Sora's KH2 magic, `styles`.)
-                let last = if super::settings::get().drive { FINAL } else { super::form::LAST_PACKAGE };
+                let last = if super::settings::get().drive { ANTI } else { super::form::LAST_PACKAGE };
                 let spell: Vec<Option<SpellFx>> = (1..=last)
                     .map(|level| {
                         let lib = if level == WISDOM {
@@ -124,6 +124,8 @@ pub unsafe fn start() {
                             valor_library(kh2, &common)
                         } else if level == FINAL {
                             form_library(kh2.final_form.as_ref(), "Final Form", &common)
+                        } else if level == ANTI {
+                            form_library(kh2.anti.as_ref(), "Anti Form", &common)
                         } else if level > WISDOM {
                             form_spell_library(level, &common)
                         } else {
@@ -255,6 +257,20 @@ pub const VALOR: u8 = super::form::LAST_PACKAGE + 1;
 /// Final Form's (`P_EX100_ULTF.a.us`), after Valor's (stage 231).
 pub const FINAL: u8 = VALOR + 1;
 
+/// Anti Form's (`P_EX100_HTLF.a.us`), after Final's (the user: "I want you to add anti form").
+pub const ANTI: u8 = FINAL + 1;
+
+/// The form package now: Final's in Final, Anti's in Anti, else Valor's.
+fn form_package() -> u8 {
+    if super::form::in_final() {
+        FINAL
+    } else if super::form::in_anti() {
+        ANTI
+    } else {
+        VALOR
+    }
+}
+
 fn valor_library(kh2: &super::pose::Kh2, common: &[u8]) -> Option<Library> {
     form_library(kh2.valor.as_ref(), "Valor Form", common)
 }
@@ -286,7 +302,7 @@ pub fn form_event(motion: u16, el: i16) {
     // (Each element's anchor logged once: which bone, which weapon point.)
     {
         static SEEN: Mutex<Vec<(u8, i16)>> = Mutex::new(Vec::new());
-        let pkg = if super::form::in_final() { FINAL } else { VALOR };
+        let pkg = form_package();
         if let (Ok(mut seen), Some(sp)) = (SEEN.lock(), s.spell.get(pkg as usize - 1).and_then(|p| p.as_ref())) {
             if !seen.contains(&(pkg, el)) && seen.len() < 64 {
                 seen.push((pkg, el));
@@ -299,11 +315,13 @@ pub fn form_event(motion: u16, el: i16) {
             }
         }
     }
-    // (Final Form's own package in Final, else Valor's.)
-    let pkg = if super::form::in_final() { FINAL } else { VALOR };
+    // (Final Form's own package in Final, Anti's in Anti, else Valor's.)
+    let pkg = form_package();
     let Some(sp) = s.spell.get_mut(pkg as usize - 1).and_then(|p| p.as_mut()) else { return };
     let ends = sp.fx.library().element(el as u16).is_some_and(|e| e.flags & ENDS_WITH_MOTION != 0);
-    match sp.fx.start(el as u16, &mut |c| form_bone(c, tip)) {
+    // (Anti holds no Keyblade: its elements' anchors are Sora's own bones, `bone`.)
+    let anti = pkg == ANTI;
+    match sp.fx.start(el as u16, &mut |c| if anti { bone(c, tip) } else { form_bone(c, tip) }) {
         Some(h) => {
             unsafe { super::kh2sound::spell_element(pkg, el as u16) };
             s.form_running.push((spell_handle(pkg, h), motion, ends));

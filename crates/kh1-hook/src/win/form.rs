@@ -31,6 +31,21 @@
 //! did for valor, just default it to kingdom key"). Not in the Drive list: a secret button
 //! code on the pad (`pad`) asks for it, as the Drive list would. Its magic is Wisdom's (the user:
 //! "bring it to final form, with final form's animations"): `Kind::magic_sub`, `formmagic`.
+//! (Since s271 Final is in the Drive list and the code asks for Anti Form.)
+//!
+//! Anti Form (the user: "that cheat code we were using ... I want you to add anti form. I want
+//! 1:1 combat parity. I dont want it to cost any MP to enter, and I dont want sora to be able to
+//! revert out of it"): reached only by the secret code (`pad`), never from the Drive list
+//! (`Kind::EVERY`, not `Kind::ALL`). `P_EX100_HTLF` (moveset 6): its own moveset, motions, combo
+//! rows, movement numbers, effects and sounds, no Keyblade (KH2's Anti holds none). As KH2's:
+//! - no magic, items, summons or KH1 specials (`combat`), no guard (no motion 42 in its set), no
+//!   growth ability (00battle `fmlv`'s Anti rows give none, so `growth_up` doesn't apply);
+//! - 1.5 times the damage taken (`hurt`, `character_core::drive::DriveParams::anti_damage`);
+//! - no Revert: the Drive row greyed and refused (`usable`, `choose`, `drive`).
+//! Free to enter (`cost_mp` 0), it runs on Sora's MP as every form here does (the user: "Drive
+//! forms in this mod run out when you're out of MP, so sora will revert when he is out of MP"):
+//! the same drain (`after_step`), the same 2 extra bars (`valorstats::DRIVE_MP`), and out of MP
+//! (or knocked out) back to Sora.
 
 use super::{log, pose};
 use character_core::{Abilities, Character, EventKind};
@@ -57,12 +72,21 @@ pub const REVERT_ELEMENTS: [i16; 13] = [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 
 /// The motion id the revert's effects and sound are started under (no motion of Sora's has it).
 pub const REVERT_FX: u16 = u16::MAX - 2;
 /// MP to change (KH1's payment takes hundredths of a bar from 100 up): Valor and Wisdom 1 (the
-/// user: "have valor and wisdom forms cost 1 MP"), Final 3.
+/// user: "have valor and wisdom forms cost 1 MP"), Final 3, Anti none (the user: "I dont want it
+/// to cost any MP to enter").
 fn cost_mp(kind: Kind) -> i32 {
     match kind {
         Kind::Valor | Kind::Wisdom => 1,
         Kind::Final => 3,
+        Kind::Anti => 0,
     }
+}
+
+/// Whether `have` MP lets form `kind` start: its cost and some left to run on; a form that costs
+/// nothing (Anti) starts at any MP (its `valorstats::DRIVE_MP` bars are its first to run on).
+fn mp_enough(have: i32, kind: Kind) -> bool {
+    let cost = cost_mp(kind);
+    cost == 0 || have > cost
 }
 /// The form's level (KH1 has no form experience): Lv 1, 40 s of battle.
 const LEVEL: u32 = 1;
@@ -80,17 +104,21 @@ pub enum Kind {
     Valor,
     Wisdom,
     Final,
+    /// Only by the secret code (`pad`), never in the Drive list.
+    Anti,
 }
 
 impl Kind {
     /// The Drive list's (Final too now, the user: "put it into the drive menu").
     pub const ALL: [Kind; 3] = [Kind::Valor, Kind::Wisdom, Kind::Final];
-    const EVERY: [Kind; 3] = [Kind::Valor, Kind::Wisdom, Kind::Final];
+    /// Every form (Anti too, the secret code's).
+    const EVERY: [Kind; 4] = [Kind::Valor, Kind::Wisdom, Kind::Final, Kind::Anti];
     pub fn name(self) -> &'static str {
         match self {
             Kind::Valor => "Valor Form",
             Kind::Wisdom => "Wisdom Form",
             Kind::Final => "Final Form",
+            Kind::Anti => "Anti Form",
         }
     }
     fn code(self) -> u8 {
@@ -105,6 +133,7 @@ impl Kind {
             Kind::Valor => kh2.valor.as_ref(),
             Kind::Wisdom => kh2.wisdom.as_ref(),
             Kind::Final => kh2.final_form.as_ref(),
+            Kind::Anti => kh2.anti.as_ref(),
         }
     }
     /// With a second Keyblade (Valor's slot's).
@@ -113,14 +142,14 @@ impl Kind {
     }
     /// KH2's magic sub offset in the form (`docs/drive-model.md`: + 10 in Wisdom, + 30 in Final;
     /// 03system `magi` and the spells' ATKP rows have subs 30..35 for Final), for a form that casts
-    /// as Wisdom does (`formmagic`); `None` for one that can't cast (Valor).
+    /// as Wisdom does (`formmagic`); `None` for one that can't cast (Valor, Anti).
     /// (Final: the user, "lets try to incorporate our rules, logic, and process from wisdom forms'
     /// magic, and bring it to final form, with final form's animations". KH2 has no spell files
     /// of Final's own: MAGC's rows are the same as Sora's, and the form's moveset gives the
     /// motions under its ids, `P_EX100_ULTF`'s E36x / E37x.)
     pub fn magic_sub(self) -> Option<i32> {
         match self {
-            Kind::Valor => None,
+            Kind::Valor | Kind::Anti => None,
             Kind::Wisdom => Some(10),
             Kind::Final => Some(30),
         }
@@ -171,6 +200,11 @@ pub fn in_final() -> bool {
     current() == Some(Kind::Final)
 }
 
+/// In Anti Form (no magic, items, summons or specials, no Revert; 1.5 times the damage).
+pub fn in_anti() -> bool {
+    current() == Some(Kind::Anti)
+}
+
 /// The form he is in, if it casts as Wisdom does (Wisdom, Final: `Kind::magic_sub`): its Fire,
 /// Blizzard and Thunder KH2's (`formmagic`), its Cure, Gravity, Stop and Aero KH1's on its own
 /// cast motions (`takeover::command_started`, `pose::follow`).
@@ -198,9 +232,9 @@ const CODE_GAP_MS: u64 = 1500;
 static CODE_STATE: std::sync::Mutex<(u16, usize, Option<std::time::Instant>)> = std::sync::Mutex::new((0, 0, None));
 static CODE_DONE: AtomicBool = AtomicBool::new(false);
 
-/// The pad as pressed, every read (`probe::pad`): the secret code for Final Form (the user: a
-/// button sequence, "in that exact sequence, put them into final form").
-#[allow(dead_code)]
+/// The pad as pressed, every read (`probe::pad`): the secret code, once for Final Form (the user:
+/// a button sequence, "in that exact sequence, put them into final form"), now for Anti Form
+/// (the user: "that cheat code we were using ... I want you to add anti form").
 pub fn pad(buttons: u16) {
     let Ok(mut g) = CODE_STATE.try_lock() else { return };
     let (held, at, last) = &mut *g;
@@ -222,7 +256,7 @@ pub fn pad(buttons: u16) {
         if *at == CODE.len() {
             *at = 0;
             CODE_DONE.store(true, Ordering::Relaxed);
-            log("Final Form: the secret code entered");
+            log("Anti Form: the secret code entered");
         }
     }
 }
@@ -284,31 +318,37 @@ pub fn accept_now() -> bool {
     !busy() && (super::takeover::with_kh2(|c, _| c.can_change_form()).unwrap_or(false) || !in_form() && super::takeover::kh1_cut_window())
 }
 
-/// Whether form `kind`'s entry can be chosen now (`drive`'s menu): reverting in a form, else MP
-/// for it and KH2 having Sora, its data loaded, and what the form itself needs (Valor's second
-/// Keyblade, `valor`).
+/// Whether form `kind`'s entry can be chosen now (`drive`'s menu): reverting in a form (not in
+/// Anti Form, which has no Revert), else MP for it and KH2 having Sora, its data loaded, and what
+/// the form itself needs (Valor's second Keyblade, `valor`).
 pub unsafe fn usable(sora: usize, kind: Kind) -> bool {
     if busy() {
         return false;
     }
     if in_form() {
-        return true;
+        // (The user: "I dont want sora to be able to revert out of it".)
+        return !in_anti();
     }
-    pose::kh2().is_some_and(|k| kind.data(k).is_some()) && (super::takeover::kh2_has() || super::takeover::kh1_cut_window()) && sora > 0x10000 && mp(sora) > cost_mp(kind) && own_needs(kind).is_ok()
+    pose::kh2().is_some_and(|k| kind.data(k).is_some()) && (super::takeover::kh2_has() || super::takeover::kh1_cut_window()) && sora > 0x10000 && mp_enough(mp(sora), kind) && own_needs(kind).is_ok()
 }
 
 /// What a form needs besides MP: Valor its second Keyblade (`valor::keyblade`).
 unsafe fn own_needs(kind: Kind) -> Result<(), String> {
     match kind {
         Kind::Valor => super::valor::keyblade().map(|_| ()).ok_or_else(|| "no Keyblade for the second hand (one Sora owns that isn't equipped)".into()),
-        Kind::Wisdom | Kind::Final => Ok(()),
+        Kind::Wisdom | Kind::Final | Kind::Anti => Ok(()),
     }
 }
 
-/// Chosen from the Drive list (`drive::chosen`). Returns why not, if refused.
+/// Chosen from the Drive list (`drive::chosen`), or Anti Form by the secret code. Returns why
+/// not, if refused.
 pub unsafe fn choose(sora: usize, kind: Kind) -> Result<&'static str, String> {
     if busy() {
         return Err("a change is under way".into());
+    }
+    if in_anti() {
+        // No Revert in Anti Form (the user: "I dont want sora to be able to revert out of it").
+        return Err("Anti Form has no Revert".into());
     }
     if in_form() {
         REQUEST.store(2, Ordering::Relaxed);
@@ -323,7 +363,7 @@ pub unsafe fn choose(sora: usize, kind: Kind) -> Result<&'static str, String> {
         return Err("KH1 has Sora".into());
     }
     let have = mp(sora);
-    if have <= cost_mp(kind) {
+    if !mp_enough(have, kind) {
         return Err(format!("MP {have}: it costs {} and needs some left to run on", cost_mp(kind)));
     }
     WANT.store(kind.code(), Ordering::Relaxed);
@@ -397,7 +437,8 @@ fn form_abilities(sora: &Abilities, form: &Character, kind: Kind) -> Abilities {
         combo_master: sora.combo_master,
         one_swing_on_miss: sora.one_swing_on_miss,
         // Each form's growth ability (Valor High Jump, Wisdom Quick Run, Final Glide) one level
-        // above base Sora's, MAX at most (`growth_up`).
+        // above base Sora's, MAX at most (`growth_up`). Anti has none (00battle `fmlv`'s Anti
+        // rows give no ability at any level), so none of Sora's growth abilities either.
         high_jump: if kind == Kind::Valor { growth_up(sora.high_jump) } else { 0 },
         quick_run: if kind == Kind::Wisdom { growth_up(sora.quick_run) } else { 0 },
         aerial_dodge: 0,
@@ -440,15 +481,16 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
         revert(d, ch, anim, kh2, "knocked out");
         return;
     }
-    // The secret code (`pad`): Final Form, as if chosen from the Drive list (KH2 must be able to
-    // change him now, as for the list: `accept_now`).
+    // The secret code (`pad`): Anti Form (it asked for Final Form until s271), as if chosen from
+    // the Drive list (KH2 must be able to change him now, as for the list: `accept_now`: free,
+    // jumping, falling, landing or at a move's end; not in a form).
     if CODE_DONE.swap(false, Ordering::Relaxed) {
         if d.form.is_some() || d.change.is_some() || !ch.can_change_form() {
-            log("Final Form: not now (in a form, changing, or mid-move)");
+            log("Anti Form: not now (in a form, changing, or mid-move)");
         } else {
-            match choose(actor, Kind::Final) {
-                Ok(_) => log("Final Form: asked for by the secret code"),
-                Err(e) => log(&format!("Final Form: refused ({e})")),
+            match choose(actor, Kind::Anti) {
+                Ok(_) => log("Anti Form: asked for by the secret code"),
+                Err(e) => log(&format!("Anti Form: refused ({e})")),
             }
         }
     }
@@ -456,7 +498,7 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
         1 if d.form.is_none() && d.change.is_none() => {
             let Some(kind) = Kind::from_code(WANT.load(Ordering::Relaxed)) else { return };
             // (Taken on the frame it was pressed in, `accept_now`; in the air too, held there.)
-            if mp(actor) <= cost_mp(kind) {
+            if !mp_enough(mp(actor), kind) {
                 log(&format!("Drive: MP {} short of {} by now", mp(actor), cost_mp(kind)));
                 return;
             }
@@ -466,7 +508,10 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
                 return;
             }
             let before = mp(actor);
-            super::reflect::pay_mp(actor, cost_mp(kind) * 100);
+            // (Anti: nothing paid, the user: "I dont want it to cost any MP to enter".)
+            if cost_mp(kind) > 0 {
+                super::reflect::pay_mp(actor, cost_mp(kind) * 100);
+            }
             super::valorstats::drive_started();
             heal_full(actor);
             // KH1's "Give me strength!" (the user: "add the battle quote from kh1 where he says
@@ -477,7 +522,8 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
             CHANGING.store(true, Ordering::Relaxed);
             log(&format!("Drive: {} (MP {before} -> {}), Sora's Drive motion{}", kind.name(), mp(actor), if air { ", held in the air" } else { "" }));
         }
-        2 if d.form.is_some() => {
+        // (Never in Anti Form, which has no Revert: `choose` refuses it already.)
+        2 if d.form.as_ref().is_some_and(|f| f.kind != Kind::Anti) => {
             revert(d, ch, anim, kh2, "the Revert command");
             return;
         }
@@ -529,6 +575,13 @@ unsafe fn arrive(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
         Kind::Valor => ("High Jump", lv.0.high_jump, lv.1.high_jump),
         Kind::Wisdom => ("Quick Run", lv.0.quick_run, lv.1.quick_run),
         Kind::Final => ("Glide", lv.0.glide, lv.1.glide),
+        Kind::Anti => {
+            log(&format!(
+                "Anti Form: entered free; yellow MP drained 1 every {DRAIN_FRAMES} frames of battle (half as fast out of it), back to Sora out of MP; no growth ability, no guard ({}), no Revert, 1.5x damage taken",
+                if lv.1.guard { "it has a guard motion!" } else { "no motion 42" }
+            ));
+            return;
+        }
     };
     log(&format!("{} (Lv{LEVEL}): yellow MP drained 1 every {DRAIN_FRAMES} frames of battle (half as fast out of it), {growth} level {form_lv} (Sora's {sora_lv}, one above, 4 = MAX)", kind.name()));
 }
@@ -575,6 +628,8 @@ pub fn abilities(d: &mut Drive, ch: &mut Character) {
                 Kind::Valor => own.high_jump = growth_up(f.sora.high_jump),
                 Kind::Wisdom => own.quick_run = growth_up(f.sora.quick_run),
                 Kind::Final => own.glide = growth_up(f.sora.glide),
+                // (No growth ability of its own.)
+                Kind::Anti => {}
             }
             f.own = own.clone();
             ch.abilities = own;
@@ -583,6 +638,9 @@ pub fn abilities(d: &mut Drive, ch: &mut Character) {
 }
 
 /// After KH2's step: the look (`tint`), the MP the form uses up, its end.
+///
+/// (Anti Form too, though it cost nothing to enter: the user, "Drive forms in this mod run out
+/// when you're out of MP, so sora will revert when he is out of MP".)
 ///
 /// The form's gauge is Sora's MP (the user: "drive forms consume mp over time"), drained the
 /// way KH1 takes a cost under one bar (the user: "drain yellow mp incrementally, when the value
@@ -598,6 +656,8 @@ pub unsafe fn after_step(d: &mut Drive, actor: usize, battle: bool) {
             Kind::Wisdom => Some(super::tint::Look::Wisdom),
             Kind::Valor => Some(super::tint::Look::Valor),
             Kind::Final => Some(super::tint::Look::Final),
+            // (Shadow Sora's look, the user: "make sora look like shadow sora in this form".)
+            Kind::Anti => Some(super::tint::Look::Anti),
         }),
     );
     // Valor's second Keyblade's Strength and MP (and back to Sora's own after).
@@ -650,11 +710,12 @@ pub fn takes(d: &Drive, e: &EventKind) -> bool {
     d.form.is_some() && matches!(e, EventKind::Effect(_))
 }
 
-/// A frame trigger 1 of the form's motion: Wisdom's shots, Valor's own elements.
+/// A frame trigger 1 of the form's motion: Wisdom's shots, Valor's (Final's, Anti's) own
+/// elements.
 pub fn effect(motion: u16, n: i16) {
     if in_wisdom() {
         super::formmagic::effect(n);
-    } else if in_valor() || in_final() {
+    } else if in_valor() || in_final() || in_anti() {
         super::kh2fx::form_event(motion, n);
     }
 }

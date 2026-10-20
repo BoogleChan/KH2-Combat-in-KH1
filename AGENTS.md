@@ -3209,3 +3209,24 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   record 0x80 and word 0x1FC. btltbl's records 0x7E.. are empty, and no record names a word
   above 0x173. Argument 0x12. It costs 3 MP (`form::cost_mp`, unchanged).
 - The secret code is off: `probe::pad` no longer calls `form::pad`, which stays in the code.
+
+### 2026-10-20: Stage 272 (Anti Form by the secret code)
+- The user: the code should give Anti Form, "I want 1:1 combat parity. I dont want it to cost
+  any MP to enter, and I dont want sora to be able to revert out of it. make sora look like
+  shadow sora in this form (the miniboss from neverland)". Also: "Drive forms in this mod run
+  out when you're out of MP, so sora will revert when he is out of MP" (helpers,
+  `docs/drive-model.md`, `docs/kh1-tint.md`).
+- Gameplay (`form::Kind::Anti`, not in the Drive list): `P_EX100_HTLF` (moveset 6), with its own
+  moveset, combo rows, physics, effect archive and sounds, and no weapon (its body's hit shapes
+  clash; KH1's Keyblade is hidden).
+  - No guard and no growth ability, as in KH2. He takes 1.5× damage (KH2's exe constant).
+  - Magic, Reflect, items, summons, KH1's specials, the Drive row and Revert are all refused,
+    with "can't", and greyed.
+  - It is free to enter (even at 0 MP). It drains MP as the other forms do (with their +2
+    bars) and reverts when the MP is gone; a knockout also reverts him.
+  - Talking and examining stay allowed (s263).
+- Look (`tint::Look::Anti`): every texture (body, pockets `-1c2`, and the face's eye and mouth
+  frames `-2c0` / `-2c1`, found through the remastered model's patch list) near-black with a
+  faint blue-violet sheen, its shading kept. There are no yellow eyes: KH1's Shadow Sora has
+  none (KH Wiki). `ANTI_EYES` turns them on.
+- Not tested in game.

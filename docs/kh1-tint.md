@@ -179,3 +179,56 @@ Sleeves are light and grey, so they are coloured ("colourize": hue and saturatio
 brightness × 0.85 kept) only where texels are light and unsaturated (the black trim and the
 zipper rail stay); the belt and lining are blue, hue-shifted within their regions; the shoes'
 yellow (hue 48° ± 26°) only where bright (≥ 0.42), so the dark brown beside them stays.
+
+## Anti Form: Shadow Sora's look
+
+The user: "make sora look like shadow sora in this form (the miniboss from neverland)".
+
+What KH1's Shadow Sora is, and what could not be checked here:
+
+- KH1 draws him as a pitch-black silhouette of Sora. The KH wiki (khwiki.com, "Shadow Sora")
+  says he does **not** have the glowing yellow eyes other Heartless have. It mentions no aura
+  beyond his vanishing now and then. Whether KH1 adds a dark aura or particle effect around him is
+  **not checked**: his model, motion and effect files are in packages not available here (only
+  `kh1_first.hed` is local, without its `.pkg`), and the exe names no model for him (model names
+  come from the game's data, not the code).
+- So it is **not established** whether he is his own model with black textures or Sora's model
+  drawn black. Either way the result is a black Sora, so the mod darkens Sora's own textures
+  rather than loading his.
+
+The look (`tint::Look::Anti`, op `Shadow`): every texel of every Sora texture becomes hue 260°
+(blue-violet) at saturation 0.5 with brightness `0.03 + 0.10 × v`. So it reads as black, the folds
+and seams still faintly there, with a dark sheen. Alpha is kept, so hair edges stay as they were.
+It covers more textures than the other looks:
+
+| texture | what | found by |
+|---|---|---|
+| `-1c0`, `-1c1`, `-1c3` | face/skin/hair, clothes, shoes | mesh table entries 0, 1, 3 (as before) |
+| `-1c2` (1024×512) | the shorts' pockets | mesh table entry 2 |
+| `-2c0` (320×2816) | the eyes' animation frames (22 frames of 320×128: open, blinking, closed) | the model's texture-animation patches |
+| `-2c1` (192×1920) | the mouth's frames | the same |
+
+### The face's eye and mouth frames
+
+The face mesh doesn't sample `-1c0` directly. Each draw, KH1 refreshes a per-object copy of it
+(`0x1401D4C70`: copyTexture `0x1400F81C0` from the source's `+0x70`), then pastes the current eye
+and mouth frames onto that copy (`0x140104450`, which also reads the frame sheet's `+0x70`). A
+black `-1c0` alone would show Sora's skin-coloured eyes and mouth on a black face, so the frame
+sheets are swapped too.
+
+Where they are: the remastered model data behind the model header's `+0x14` (the object whose `+0`
+is the mesh table `tint.rs` already reads) holds the texture-animation patches: a count at `+0x20`
+and 32-byte records at `+0x28` (`0x1401DB370` indexes them). Each record's `+0x18` is the
+`Axa::EntryTex` it pastes from. Its name ends `…_mdls2c0.dds` / `…_mdls2c1.dds` (KH1's own code
+compares these names for Hercules' `xa_he_1000_mdls2c0.dds`). `tint::frames_texture` finds them
+by that name. The records are filled per draw into `0x142432270` (by slot), but the model's own
+array is stable.
+
+The eyes on `-1c0` were located by plotting mesh 0's vertices by bone (as for the sleeves). Both
+eyes are on the head bone (150) at u 0.01..0.30 × v 0.115..0.195. A glowing-yellow-eyes variant
+is in `tint.rs` behind `ANTI_EYES`, off because KH1's Shadow Sora has none. When on, the irises
+(hue 220° ± 40°, any brightness, so the pupil too) and the whites in that region and on every
+`-2c0` frame become yellow (hue 52°, brightness 0.8..1).
+
+Not checked in game: that the patch records' `+0x18` is set for Sora on PC and that the names
+match. `form tint (Anti): …mdls2c0.dds ready` in the log confirms both.

@@ -110,6 +110,21 @@ unsafe extern "system" fn hurt(actor: usize, out: usize) -> usize {
     if ready.is_empty() {
         return f(actor);
     }
+    // Anti Form takes 1.5 times the damage (KH2's exe, `character_core::drive::DriveParams::
+    // anti_damage`, `docs/drive-model.md`; the user: "I want 1:1 combat parity"): each attack's
+    // damage (not drains or heals, damage types 9..12) raised, rounded up, before KH1 applies it.
+    // A record evaded or guarded below is marked no-effect and deals none anyway.
+    if super::form::in_anti() {
+        let k = character_core::drive::DriveParams::default().anti_damage;
+        for &r in &ready {
+            let d = rd::<i32>(r + 8);
+            if rd::<u8>(r) & NO_EFFECT == 0 && (rd::<u32>(r + 0xC) >> 6) & 0xF < 9 && d > 0 {
+                let up = (d as f32 * k).ceil() as i32;
+                wr(r + 8, up);
+                note(format!("Anti Form: damage {d} -> {up}"));
+            }
+        }
+    }
     let kind_of: unsafe extern "system" fn(usize, usize) -> u32 = std::mem::transmute(base + KIND_RVA);
     let me = rd::<[f32; 3]>(actor + 0x10);
     let frame = takeover::GAME_FRAME.load(Ordering::Relaxed);

@@ -2,7 +2,8 @@
 //! with KH2's own model, his Drive Forms with their KH2 models, and his Keyblade with KH2's model
 //! of the same Keyblade where KH2 has one (`docs/kh1-kh2-model.md`).
 //!
-//! - **Load** (a thread at start): `obj/P_EX100.mdlx` and the forms' (`_BTLF`, `_MAGF`, `_ULTF`)
+//! - **Load** (a thread at start): `obj/P_EX100.mdlx` and the forms' (`_BTLF`, `_MAGF`, `_ULTF`,
+//!   `_HTLF`)
 //!   from the KH2 install (the same files `pose` reads), parsed by `kh2_formats::mdlx`; and which
 //!   model each KH2 Keyblade has: `03system.bin`'s `item` (its weapon number) and `went` (base
 //!   Sora's weapon objects by number), `00objentry.bin` (the object's model), named by
@@ -68,8 +69,8 @@ enum Weapon {
 struct Library {
     install: kh2_data::Install,
     source: kh2_data::Source,
-    /// Base Sora, then Valor, Wisdom, Final.
-    bodies: [Option<Arc<Loaded>>; 4],
+    /// Base Sora, then Valor, Wisdom, Final, Anti.
+    bodies: [Option<Arc<Loaded>>; 5],
     /// KH2's Keyblades: name (lower case) → model name.
     keyblades: Vec<(String, String)>,
     /// By model name.
@@ -221,8 +222,8 @@ pub fn load() {
             let install = kh2_data::Install::locate(&exe).map_err(|e| format!("KH2 install: {e}"))?;
             let source = if install.has_backup() { kh2_data::Source::Backup } else { kh2_data::Source::Live };
             let read = |name: &str| install.read_any(source, name).map_err(|e| format!("{name}: {e}"));
-            let mut bodies: [Option<Arc<Loaded>>; 4] = [None, None, None, None];
-            for (i, name) in ["P_EX100", "P_EX100_BTLF", "P_EX100_MAGF", "P_EX100_ULTF"].iter().enumerate() {
+            let mut bodies: [Option<Arc<Loaded>>; 5] = [None, None, None, None, None];
+            for (i, name) in ["P_EX100", "P_EX100_BTLF", "P_EX100_MAGF", "P_EX100_ULTF", "P_EX100_HTLF"].iter().enumerate() {
                 match read(&format!("obj/{name}.mdlx")).and_then(|b| Loaded::new(name, &b)) {
                     Ok(l) => {
                         log(&format!(
@@ -283,6 +284,7 @@ fn body(lib: &Library) -> Option<Arc<Loaded>> {
         Some(Kind::Valor) => 1,
         Some(Kind::Wisdom) => 2,
         Some(Kind::Final) => 3,
+        Some(Kind::Anti) => 4,
         None => 0,
     };
     lib.bodies[i].clone().or_else(|| lib.bodies[0].clone())
@@ -345,7 +347,7 @@ unsafe fn left_weapon(base: usize) -> Option<u8> {
     match super::form::current()? {
         Kind::Final => Some(super::valor::FINAL_KEYBLADE),
         Kind::Valor => super::equip::valor_keyblade(base),
-        Kind::Wisdom => None,
+        Kind::Wisdom | Kind::Anti => None,
     }
 }
 
@@ -468,7 +470,8 @@ pub unsafe fn hide(params: usize) -> Option<Hide> {
     if N.fetch_add(1, Ordering::Relaxed) < 3 {
         log(&format!("KH2 model: KH1's Sora held back (Keyblades ours {ours:#b})"));
     }
-    Some(masked(params, ours & 1 != 0))
+    // (Anti Form holds no Keyblade: KH1's is shrunk away though none of ours replaces it.)
+    Some(masked(params, ours & 1 != 0 || super::form::in_anti()))
 }
 
 /// `pose`: the pause menu's copy of Sora (`instance`), KH1's menu animation on KH2's skeleton

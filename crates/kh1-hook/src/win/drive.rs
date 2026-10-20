@@ -84,6 +84,17 @@ pub unsafe fn revert_row(actor: usize) -> bool {
     if !super::form::in_form() {
         return false;
     }
+    // Anti Form: no Revert (the user: "I dont want sora to be able to revert out of it"); the row
+    // is greyed (`fill`), and refused with KH1's "can't" if run all the same.
+    if super::form::in_anti() {
+        let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base() + SOUND_RVA);
+        sound(4);
+        static A: AtomicU32 = AtomicU32::new(0);
+        if A.fetch_add(1, Ordering::Relaxed) % 30 == 0 {
+            log("Revert refused: Anti Form has none");
+        }
+        return true;
+    }
     if !super::form::accept_now() {
         static N: AtomicU32 = AtomicU32::new(0);
         if N.fetch_add(1, Ordering::Relaxed) % 30 == 0 {
@@ -183,6 +194,26 @@ pub unsafe fn fill(actor: usize, _flags: usize) {
         if rd::<u8>(top + 0x14 + 1) == 2 {
             for off in [4usize, 8] {
                 wr(top + off, rd::<u32>(top + off) | 2);
+            }
+        }
+    }
+    // In Anti Form, Magic and Items greyed and blocked too, and Summon (the magic list's last
+    // entry, the fourth row on page 1): KH2's Anti uses none of them, as Valor has no magic.
+    // Page 2's Drive row is greyed below (no form `usable`: no Revert in Anti).
+    if super::form::in_anti() {
+        let top = base + MENU_RVA;
+        for (i, id) in [(1usize, 2u8), (2, 3)] {
+            if rd::<u8>(top + 0x14 + i) == id {
+                for off in [4usize, 8] {
+                    wr(top + off, rd::<u32>(top + off) | 1 << i);
+                }
+            }
+        }
+        let magic = base + MAGIC_MENU_RVA;
+        let n = rd::<i32>(magic + 0x10);
+        if (1..=15).contains(&n) && matches!(rd::<u8>(magic + 0x14 + n as usize - 1), SUMMON | SUMMON_OUT) {
+            for off in [4usize, 8] {
+                wr(magic + off, rd::<u32>(magic + off) | 1 << (n - 1));
             }
         }
     }

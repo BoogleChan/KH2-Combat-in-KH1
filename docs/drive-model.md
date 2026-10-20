@@ -186,6 +186,63 @@ bring it to final form, with final form's animations".
 - **Unchecked in game:** all of it. In particular, whether Final's 60 fps cast clips line up
   with KH1's cast timing for the KH1 spells.
 
+## Anti Form in the KH1 port (Data + exe notes above; the rules ours where marked)
+
+The user: "I want you to add anti form. I want 1:1 combat parity. I dont want it to cost any MP
+to enter, and I dont want sora to be able to revert out of it." Then: "Drive forms in this mod
+run out when you're out of MP, so sora will revert when he is out of MP".
+
+- **How he gets it (ours).** Only by the secret button code (`form::pad`, read in `probe::pad`).
+  It is never in the Drive list. The code is taken when KH2 could change him (free, jumping,
+  falling, landing or at a move's end) and he isn't in a form or changing. KH2's Anti roll (the
+  counter above) isn't used.
+- **Its data (Data, checked on extracted files).** `P_EX100_HTLF`, moveset 6:
+  - the same 256-bone skeleton as Sora's (`pose::load_form` checks this);
+  - no weapon sets (`wmst` has none for moveset 6), so it holds no Keyblade. Its attack windows
+    are on its body's own shapes (groups 1, 10, 13);
+  - `prty`: run 16, jump 185, turn 0.26;
+  - 13 combo rows. Rows 11 (motion 173) and 12 (motion 161) are kind 0, reached only by id;
+  - motion 40 (Aerial Recovery) but no motion 42 (the guard's), so no guard;
+  - its own sounds (bank 503, frame-trigger sounds) and frame-trigger effects from its own
+    archive (`obj/P_EX100_HTLF.a.us`, `kh2fx::ANTI`).
+- **Growth (Data).** 00battle `fmlv`'s Anti rows give no ability at any level, so it has no
+  growth ability. None of Sora's growth abilities carry over, as in every form, and the
+  one-level-up rule (`form::growth_up`) doesn't apply. His support abilities carry over as in
+  the other forms.
+- **What it can't do (exe: the command's form mask, as Valor's magic).** No magic, items,
+  summons or Drive / Revert. In the port, KH1's specials (Sonic Blade, Strike Raid ...) are
+  refused too, as KH2's Limits and reaction commands are. All of them get KH1's "can't" sound:
+  - `combat::command` and `exec` refuse the command;
+  - `combat::spell_not_yet` refuses the menu entry and the menu stays open;
+  - `drive::fill` greys Magic, Items, Summon and the Drive row.
+  **Ours:** the field's context commands (talking, examining) stay, as in every form (the
+  user's earlier rule for Drive Forms).
+- **Damage taken (exe notes, `DriveParams::anti_damage`).** 1.5 times. This is a constant in
+  the executable, not in the data. `hurt` raises each attack's damage in KH1's hit record
+  (`+8`) by 1.5, rounded up, before KH1 applies it. Drains and heals are left alone.
+- **Entering and its end (ours, the user's rules).**
+  - It costs no MP and needs none (`form::cost_mp` 0, `mp_enough`).
+  - Otherwise it changes as the other forms do: Sora's Drive motion, HP to full, "Give me
+    strength!", and the arrival.
+  - It runs on Sora's MP as every form here does: the same yellow-MP drain (`form::after_step`,
+    one unit every `DRAIN_FRAMES` frames of battle, half as fast out of it) and the same
+    `valorstats::DRIVE_MP` bars added while it lasts.
+  - Out of MP, it reverts. A KO reverts at once.
+  - Revert can't end it: the Drive row is greyed, and `form::choose` and `drive::revert_row`
+    refuse it.
+  - KH2's own end (its 6-bar form gauge, hits draining it) isn't modelled. KH1 has no Drive
+    gauge.
+- **Look.** Shadow Sora's look comes from `tint` (separate work). KH1's Keyblade is shrunk
+  away on his draw (`leftblade::queue`, `model::hide`). With KH2's player model, the HTLF body
+  is drawn.
+- **Unchecked in game:** all of it. In particular:
+  - whether the HTLF effect archive exists on the install;
+  - Square standing: KH2's exe tries row 11 for it, but our controller ties that to the guard
+    ability, so motion 173 (a short invulnerable move with no attack or guard window) isn't
+    played;
+  - what reaches row 12 (motion 161) in KH2;
+  - whether `+8` in KH1's hit record is the final damage.
+
 ## Not modelled
 
 - Form keyblade stats (forms deal Sora's base damage).

@@ -157,10 +157,11 @@ unsafe extern "system" fn exec(actor: usize, row: i32, dir: usize) {
     // Valor Form: no KH1 attack row run for a command other than Attack (its specials, which the
     // command step runs as attack rows; `command` refuses them, this in case one comes another
     // way).
-    if actor == sora && command != 1 && super::form::two_blades() {
+    // (Anti Form too: none of KH1's specials.)
+    if actor == sora && command != 1 && (super::form::two_blades() || super::form::in_anti()) {
         static N: AtomicU32 = AtomicU32::new(0);
         if N.fetch_add(1, Ordering::Relaxed) < 30 {
-            log(&format!("KH1 attack row {row} for command {command:#x} refused: not in Valor Form"));
+            log(&format!("KH1 attack row {row} for command {command:#x} refused: not in {}", if super::form::in_anti() { "Anti Form" } else { "Valor Form" }));
         }
         let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
         sound(4);
@@ -304,6 +305,21 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     // Our Reflect (magic, spell byte 7, which KH1 has no spell for): KH2's, never KH1's.
     // A Drive form (page 2's Drive list, `drive`).
     let arg = ((full >> 8) & 0xFF) as u8;
+    // Anti Form: only Attack (the user: "I want 1:1 combat parity"; KH2's Anti can't use magic,
+    // items, summons, Limits or Revert): magic (Reflect and L1's shortcuts too), items, KH1's
+    // specials, summons and the Drive list (its Revert: "I dont want sora to be able to revert
+    // out of it") refused with KH1's "can't", as Valor refuses its own. The party's commands
+    // and the field's context commands (talking, examining) stay, as in every form (the user,
+    // "please let sora be allowed to talk to people and interact with objects in drive forms").
+    if actor == sora && super::form::in_anti() && !matches!(kind, 0 | 1) && !NOT_SORAS.contains(&kind) && !context_command(base, kind) {
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 30 {
+            log(&format!("command {kind:#x} ({full:08x}) refused: not in Anti Form"));
+        }
+        let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
+        sound(4);
+        return;
+    }
     // KH1 has him for its jump or glide (`stylejump`): a command (magic, an item, a Drive) is
     // KH2's, after KH2 takes him back (it waits for that, `resume_command`).
     // (KH1's roll, `styleroll`, too: KH2's once the roll is over.)
@@ -1565,7 +1581,8 @@ impl Strikes {
         for h in &out.hitboxes {
             let shapes = anim.attack_shapes(h.group, h.weapon);
             // (The right Keyblade's swing: KH1's blade; Valor's left one keeps KH2's shapes.)
-            let on_blade = if h.weapon == 0 { sweep.as_ref() } else { None };
+            // (Anti Form holds no Keyblade: its attacks are its body's own shapes, KH2's.)
+            let on_blade = if h.weapon == 0 && !super::form::in_anti() { sweep.as_ref() } else { None };
             let vol = self.volumes.entry((h.swing, h.weapon)).or_default();
             let before: Vec<[f32; 3]> = vol.previous().to_vec();
             let swept = vol.update(&shapes);
@@ -2246,6 +2263,18 @@ unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
         return false;
     }
     let (kind, arg, sub) = (rd::<u8>(record + 6), rd::<u8>(record + 7), rd::<i8>(record + 8));
+    // Anti Form: no magic (the Drive list and its Revert are magic records too), items or
+    // summons (Summon, command 6, and the summon-out 0x4F; the summons themselves type 6): KH1's
+    // "can't", the menu stays (`drive::fill` greys them; this in case one runs all the same).
+    if super::form::in_anti() && (matches!(kind, 2 | ITEM_COMMAND_TYPE | 6) || matches!(id, 6 | 0x4F)) {
+        let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
+        sound(4);
+        static A: AtomicU32 = AtomicU32::new(0);
+        if A.fetch_add(1, Ordering::Relaxed) % 30 == 0 {
+            cmd_log(format!("command {id:#x} (type {kind:#x}) refused: not in Anti Form"));
+        }
+        return true;
+    }
     // In one of KH1's moves at its cut frame (`takeover::kh1_cut_window`: KH1 Fire from frame
     // 49): KH1's menu takes nothing while Sora can't act (`0x1402912F0`: its can-act test lets
     // only plain spells through; the user: Attack only came out when Fire ended, the Drive list

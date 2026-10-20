@@ -17,6 +17,11 @@
 //!
 //! The pixels: the HD texture file KH1 keeps in memory (`+0x68`, a DDS), else read from the PKG
 //! (the model's remastered assets, `Kh1Install::read_remastered`), recoloured in the background.
+//!
+//! Anti Form (the user: "make sora look like shadow sora in this form (the miniboss from
+//! neverland)"): every texture of Sora's darkened to a near-black with a faint blue-violet sheen,
+//! its shading kept, the shorts' pockets (`-1c2`) and the face's animated eye and mouth frames
+//! (`-2c0`, `-2c1`, pasted onto the face each frame) included.
 
 use super::addr::Rva;
 use super::{log, pose};
@@ -34,10 +39,30 @@ const TEX_DDS: usize = 0x68;
 const TEX_GPU: usize = 0x70;
 const TEX_W: usize = 0x7C;
 const TEX_H: usize = 0x7E;
-/// The slots recoloured (mesh table entries 0 and 1: `-1c0`, the collar; `-1c1`, the clothes;
-/// 3: `-1c3`, the shoes (the user: "soras shoes should turn from yellow to blue in this form";
-/// every texel of it is on a leg or foot bone, `docs/kh1-tint.md`).
-const SLOTS: [usize; 3] = [0, 1, 3];
+/// Where a swapped texture is found on Sora's model.
+#[derive(Clone, Copy)]
+enum Tex {
+    /// A mesh-table entry's source texture.
+    Mesh(usize),
+    /// A texture-animation frame sheet (its name ends `mdls<tag>.<ext>`): KH1 pastes a frame of
+    /// it onto the face's copy each draw (`docs/kh1-tint.md`).
+    Frames(&'static [u8]),
+}
+
+/// The textures that can be swapped, in the order `ops` numbers them (`k`), with their PKG
+/// asset: mesh table entries 0 and 1 (`-1c0`, the collar; `-1c1`, the clothes), 3 (`-1c3`, the
+/// shoes; the user: "soras shoes should turn from yellow to blue in this form"; every texel of
+/// it is on a leg or foot bone, `docs/kh1-tint.md`), and for Anti also entry 2 (`-1c2`, the
+/// shorts' pockets) and the face's eye and mouth frames (`-2c0`, `-2c1`).
+const TEXTURES: [(Tex, &str); 6] = [
+    (Tex::Mesh(0), "-1c0"),
+    (Tex::Mesh(1), "-1c1"),
+    (Tex::Mesh(3), "-1c3"),
+    (Tex::Mesh(2), "-1c2"),
+    (Tex::Frames(b"mdls2c0."), "-2c0"),
+    (Tex::Frames(b"mdls2c1."), "-2c1"),
+];
+const NTEX: usize = TEXTURES.len();
 const YELLOW_HUE: f32 = 48.0;
 /// (Wide enough for the orange where the yellow shades off; only bright texels, so the dark
 /// brown beside the shoes stays.)
@@ -60,6 +85,20 @@ const WHITE_LO: f32 = 0.5;
 const WHITE_HI: f32 = 0.97;
 const BLACK_LO: f32 = 0.04;
 const BLACK_HI: f32 = 0.2;
+/// Anti's Shadow Sora: brightness 0..1 to this range at this hue and saturation (pitch black,
+/// the folds still faintly there, a blue-violet sheen).
+const SHADOW_HUE: f32 = 260.0;
+const SHADOW_SAT: f32 = 0.5;
+const SHADOW_LO: f32 = 0.03;
+const SHADOW_HI: f32 = 0.13;
+/// Glowing yellow eyes for Anti. Off: KH1's Shadow Sora is a featureless black silhouette,
+/// without the yellow eyes other Heartless have (`docs/kh1-tint.md`); on, the irises and whites
+/// of `-1c0`'s eyes (`EYES`) and of every `-2c0` frame glow yellow instead.
+const ANTI_EYES: bool = false;
+const GLOW_HUE: f32 = 52.0;
+/// The eyes on `-1c0` (both, with the lids; all on the head bone, found by plotting mesh 0).
+const EYES: [f32; 4] = [0.01, 0.115, 0.30, 0.195];
+const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
 /// Regions of `-1c1` (u0, v0, u1, v1; texture fractions), found by plotting the remastered mesh
 /// 1's vertices by bone on the texture (`docs/kh1-tint.md`): the jacket's sleeves (the cream
@@ -69,12 +108,14 @@ const SLEEVES: [[f32; 4]; 2] = [[0.035, 0.415, 0.236, 0.85], [0.236, 0.415, 0.21
 const BELT: [f32; 4] = [0.035, 0.07, 0.57, 0.14];
 const HOOD_LINING: [f32; 4] = [0.755, 0.72, 1.0, 1.0];
 
-/// A form's look (`form`): Wisdom's blue, Valor's red, Final's white.
+/// A form's look (`form`): Wisdom's blue, Valor's red, Final's white, Anti's Shadow Sora.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Look {
     Wisdom,
     Valor,
     Final,
+    /// (`form` maps Anti Form here; until it does, nothing names it.)
+    Anti,
 }
 
 /// One recolouring.
@@ -89,9 +130,12 @@ enum Op {
     /// Saturated texels near hue `from` (as `Shift`) made grey: brightness `lo + (hi - lo) × v`
     /// (white with its shading kept, or black); within `rect` if given.
     Grey { from: f32, width: f32, min_v: f32, lo: f32, hi: f32, rect: Option<[f32; 4]> },
+    /// Every texel given hue `to` at saturation `sat`, brightness `lo + (hi - lo) × v` (Shadow
+    /// Sora's black); within `eyes` if given, the eyes' irises and whites glowing yellow instead.
+    Shadow { to: f32, sat: f32, lo: f32, hi: f32, eyes: Option<[f32; 4]> },
 }
 
-/// What each look does to each slot (`SLOTS` order); none: that slot isn't swapped.
+/// What each look does to each texture (`TEXTURES` order); none: that one isn't swapped.
 fn ops(look: Look, k: usize) -> Vec<Op> {
     let shift = |from, width, to| Op::Shift { from, width, to, min_v: 0.0, rect: None };
     let shoes = |to| Op::Shift { from: YELLOW_HUE, width: YELLOW_WIDTH, to, min_v: YELLOW_MIN_V, rect: None };
@@ -126,6 +170,17 @@ fn ops(look: Look, k: usize) -> Vec<Op> {
             white(BLUE_HUE, BLUE_WIDTH, 0.0),
         ],
         (Look::Final, 2) => vec![white(YELLOW_HUE, YELLOW_WIDTH, YELLOW_MIN_V), white(RED, RED_WIDTH, 0.0), white(BLUE_HUE, BLUE_WIDTH, 0.0)],
+        // Anti (the user: "make sora look like shadow sora in this form (the miniboss from
+        // neverland)"): all of him black, the face's eye frames too (else KH1 would paste
+        // Sora's blue eyes onto the black face).
+        (Look::Anti, _) => {
+            let eyes = match TEXTURES[k].1 {
+                "-1c0" => Some(EYES),
+                "-2c0" => Some(WHOLE),
+                _ => None,
+            };
+            vec![Op::Shadow { to: SHADOW_HUE, sat: SHADOW_SAT, lo: SHADOW_LO, hi: SHADOW_HI, eyes: eyes.filter(|_| ANTI_EYES) }]
+        }
         _ => Vec::new(),
     }
 }
@@ -139,20 +194,20 @@ struct Pixels {
     bgra: Vec<u8>,
 }
 
-/// The slots' original pixels from the PKG (`None`: not read).
-static FROM_PKG: [OnceLock<Option<Arc<Pixels>>>; 3] = [OnceLock::new(), OnceLock::new(), OnceLock::new()];
+/// The textures' original pixels from the PKG (`None`: not read).
+static FROM_PKG: [OnceLock<Option<Arc<Pixels>>>; NTEX] = [const { OnceLock::new() }; NTEX];
 
 struct Swap {
-    /// Per slot: the source texture swapped (its address), KH1's GPU texture to put back, and
-    /// the look it wears.
-    swapped: [Option<(usize, u64, Look)>; 3],
+    /// Per texture: the source texture swapped (its address), KH1's GPU texture to put back,
+    /// and the look it wears.
+    swapped: [Option<(usize, u64, Look)>; NTEX],
     /// Our GPU texture for a source texture and a look (made once each).
     ours: Option<HashMap<(usize, Look), u64>>,
     /// Those we couldn't make (not tried again).
     failed: Vec<(usize, Look)>,
 }
 
-static SWAP: Mutex<Swap> = Mutex::new(Swap { swapped: [None, None, None], ours: None, failed: Vec::new() });
+static SWAP: Mutex<Swap> = Mutex::new(Swap { swapped: [None; NTEX], ours: None, failed: Vec::new() });
 
 unsafe fn rd<T: Copy>(p: usize) -> T {
     std::ptr::read_unaligned(p as *const T)
@@ -200,6 +255,7 @@ fn apply(p: &mut Pixels, op: Op) -> usize {
         Op::Shift { rect, .. } => rect,
         Op::Colourize { rect, .. } => Some(rect),
         Op::Grey { rect, .. } => rect,
+        Op::Shadow { .. } => None,
     };
     let [u0, v0, u1, v1] = rect.unwrap_or([0.0, 0.0, 1.0, 1.0]);
     let (x0, x1) = ((u0 * w as f32) as usize, ((u1 * w as f32).ceil() as usize).min(w));
@@ -230,6 +286,23 @@ fn apply(p: &mut Pixels, op: Op) -> usize {
                     let k = ((0.3 - s) / 0.1).clamp(0.0, 1.0) * ((v - 0.3) / 0.15).clamp(0.0, 1.0);
                     // (A little darker: the cream is near white, and a pale tint read as washed out.)
                     (k, rgb(to, sat, v * 0.85))
+                }
+                Op::Shadow { to, sat, lo, hi, eyes } => {
+                    let dark = rgb(to, sat, lo + (hi - lo) * v);
+                    // An eye texel: the iris (blue, any brightness: the pupil too) or the white.
+                    let (u, t) = ((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32);
+                    let e = match eyes {
+                        Some([u0, v0, u1, v1]) if u >= u0 && u < u1 && t >= v0 && t < v1 => {
+                            let dh = (hue - 220.0).rem_euclid(360.0);
+                            let iris = ((40.0 - dh.min(360.0 - dh)) / 10.0).clamp(0.0, 1.0) * ((s - 0.25) / 0.1).clamp(0.0, 1.0);
+                            let white = ((0.25 - s) / 0.1).clamp(0.0, 1.0) * ((v - 0.55) / 0.1).clamp(0.0, 1.0);
+                            iris.max(white)
+                        }
+                        _ => 0.0,
+                    };
+                    let glow = rgb(GLOW_HUE, 0.85, 0.8 + 0.2 * v);
+                    let mix = |a: f32, z: f32| a * (1.0 - e) + z * e;
+                    (1.0, (mix(dark.0, glow.0), mix(dark.1, glow.1), mix(dark.2, glow.2)))
                 }
             };
             if k <= 0.0 {
@@ -292,8 +365,8 @@ pub fn install() {
                 return;
             }
         };
-        for (k, slot) in SLOTS.iter().enumerate() {
-            let asset = format!("-1c{slot}.dds");
+        for (k, (_, asset)) in TEXTURES.iter().enumerate() {
+            let asset = format!("{asset}.dds");
             let p = match install.read_remastered(kh1_data::Source::Live, MODEL, &asset) {
                 Ok((name, bytes)) => match dds_bgra(&bytes) {
                     Some(p) => {
@@ -315,9 +388,19 @@ pub fn install() {
     });
 }
 
-/// Sora's model's source texture for mesh-table entry `entry` (`docs/kh1-tint.md`), if it is an
-/// HD texture.
-unsafe fn source_texture(actor: usize, entry: usize) -> Option<usize> {
+/// Sora's model's source texture for `TEXTURES[k]` (`docs/kh1-tint.md`), if it is an HD
+/// texture.
+unsafe fn source_texture(actor: usize, k: usize) -> Option<usize> {
+    let p = remastered(actor)?;
+    match TEXTURES[k].0 {
+        Tex::Mesh(entry) => mesh_texture(p, entry),
+        Tex::Frames(tag) => frames_texture(p, tag),
+    }
+}
+
+/// The remastered model data behind Sora's model header `+0x14` (its mesh table at `+0`, its
+/// texture-animation patches at `+0x20` / `+0x28`).
+unsafe fn remastered(actor: usize) -> Option<usize> {
     let inst = pose::ptr(rd::<u32>(actor + 0x15C));
     if inst < 0x10000 || !super::crash::readable(inst + 8) {
         return None;
@@ -330,9 +413,14 @@ unsafe fn source_texture(actor: usize, entry: usize) -> Option<usize> {
     if header < 0x10000 || !super::crash::readable(header + 0x20) || rd::<u32>(header + 0x10) != 0x9696_9696 {
         return None;
     }
-    // The remastered table behind `+0x14`: its count at `+4`, entries after a skip given by `+8`.
     let p = pose::ptr(rd::<u32>(header + 0x14));
-    let t = if p > 0x10000 && super::crash::readable(p + 8) { rd::<u64>(p) as usize } else { 0 };
+    (p > 0x10000 && super::crash::readable(p + 8)).then_some(p)
+}
+
+/// Mesh-table entry `entry`'s source texture.
+unsafe fn mesh_texture(p: usize, entry: usize) -> Option<usize> {
+    // The remastered table at `+0`: its count at `+4`, entries after a skip given by `+8`.
+    let t = rd::<u64>(p) as usize;
     if t < 0x10000 || !super::crash::readable(t + 0x10) {
         return None;
     }
@@ -356,6 +444,23 @@ unsafe fn source_texture(actor: usize, entry: usize) -> Option<usize> {
         return None;
     }
     Some(src)
+}
+
+/// The texture-animation frame sheet named `…<tag>…` (`mdls2c0.`: the eyes): the model's patches
+/// (`+0x20` count, `+0x28` 32-byte records; KH1's `0x1401DB370`), each naming the `EntryTex` it
+/// pastes from at `+0x18`.
+unsafe fn frames_texture(p: usize, tag: &[u8]) -> Option<usize> {
+    if !super::crash::readable(p + 0x30) {
+        return None;
+    }
+    let n = rd::<u32>(p + 0x20) as usize;
+    let patches = rd::<u64>(p + 0x28) as usize;
+    if n == 0 || n > 64 || patches < 0x10000 || !super::crash::readable(patches) || !super::crash::readable(patches + 0x20 * n - 1) {
+        return None;
+    }
+    (0..n).map(|i| rd::<u64>(patches + 0x20 * i + 0x18) as usize).find(|&t| {
+        t >= 0x10000 && super::crash::readable(t + 0x98) && rd::<u32>(t + 0x10) == TEX_MAGIC && rd::<[u8; 32]>(t + 0x14).windows(tag.len()).any(|w| w == tag)
+    })
 }
 
 #[repr(C)]
@@ -412,6 +517,7 @@ unsafe fn ours_for(s: &mut Swap, k: usize, src: usize, look: Look) -> Option<u64
         Look::Wisdom => b"kh2combat_wisdom_blue\0",
         Look::Valor => b"kh2combat_valor_red\0",
         Look::Final => b"kh2combat_final_white\0",
+        Look::Anti => b"kh2combat_anti_shadow\0",
     };
     let t = create(r, &desc, p.bgra.as_ptr(), label.as_ptr(), 0);
     if t < 0x10000 {
@@ -432,9 +538,13 @@ pub unsafe fn refresh(actor: usize, look: Option<Look>) {
         return;
     }
     let Ok(mut s) = SWAP.try_lock() else { return };
-    for (k, &entry) in SLOTS.iter().enumerate() {
-        let src = source_texture(actor, entry);
+    for k in 0..NTEX {
         let want = look.filter(|l| !ops(*l, k).is_empty());
+        // (Not one this look swaps, nor swapped: nothing to look up.)
+        if want.is_none() && s.swapped[k].is_none() {
+            continue;
+        }
+        let src = source_texture(actor, k);
         if let Some((was, orig, l)) = s.swapped[k] {
             if want != Some(l) || src != Some(was) {
                 let ours = s.ours.as_ref().and_then(|o| o.get(&(was, l))).copied().unwrap_or(0);

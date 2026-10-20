@@ -750,7 +750,9 @@ unsafe extern "system" fn queue(instance: usize, view: usize, params: usize, act
     } else {
         None
     };
-    let collapsed = ours.as_ref().is_some_and(|h| h.collapse).then(|| collapse_weapon(instance)).flatten();
+    // (Anti Form holds no Keyblade, as KH2's: KH1's shrunk away on his field draw, KH1's model too.)
+    let anti = first && actor != 0 && actor == super::takeover::sora_actor() && instance == super::pose::SORA_INSTANCE.load(Ordering::Relaxed) && super::form::in_anti();
+    let collapsed = (ours.as_ref().is_some_and(|h| h.collapse) || anti).then(|| collapse_weapon(instance)).flatten();
     let r = f(instance, view, ours.as_ref().map_or(params, |h| h.params.0.as_ptr() as usize), actor);
     if let Some((at, saved)) = collapsed {
         std::ptr::copy_nonoverlapping(saved.as_ptr(), at as *mut u8, saved.len());

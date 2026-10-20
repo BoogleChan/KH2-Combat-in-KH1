@@ -182,6 +182,8 @@ pub struct Kh2 {
     pub valor: Option<Form>,
     /// Final Form (`form`, stage 231: `P_EX100_ULTF`, its floating Keyblades).
     pub final_form: Option<Form>,
+    /// Anti Form (`form`, the secret code's: `P_EX100_HTLF`, no Keyblade).
+    pub anti: Option<Form>,
     roots: HashMap<u16, Vec<[f32; 3]>>,
     /// Walk and run (battle, field): ground speed in KH2 units per second, from the planted
     /// foot's travel against the hips.
@@ -632,7 +634,34 @@ pub fn load_kh2() {
             } else {
                 None
             };
-            Ok(Kh2 { rig, character: sora.character.clone(), battle: Arc::new(sora.combat.battle.clone()), magi: sora.magi.clone(), wisdom, valor, final_form, roots, ground })
+            // Anti Form (the user: "I want you to add anti form. I want 1:1 combat parity"): its
+            // own moveset, motions, combo rows, movement numbers and effect archive, the same
+            // skeleton as Sora's (`load_form` checks it), no weapon.
+            let anti = if super::settings::get().drive {
+                let t = Instant::now();
+                match load_form(&install, source, kh2_data::sora::FORMS[5], rig.skeleton.len()) {
+                    Ok(f) => {
+                        log(&format!(
+                            "KH2 Anti Form loaded: {} motions, {} combo rows, {} weapons, run {}, guard motion {}, effects {}, in {:.1}s",
+                            f.rig.motions.len(),
+                            f.character.moveset.combo_rows.len(),
+                            f.rig.weapons.len(),
+                            f.character.params.run_speed,
+                            if f.character.moveset.clips.contains_key(&character_core::motion::GUARD) { "yes" } else { "none" },
+                            if f.archive.is_some() { "read" } else { "missing" },
+                            t.elapsed().as_secs_f32()
+                        ));
+                        Some(f)
+                    }
+                    Err(e) => {
+                        log(&format!("KH2 Anti Form did not load: {e}"));
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            Ok(Kh2 { rig, character: sora.character.clone(), battle: Arc::new(sora.combat.battle.clone()), magi: sora.magi.clone(), wisdom, valor, final_form, anti, roots, ground })
         })();
         if let Err(e) = &r {
             log(&format!("KH2 Sora did not load: {e}"));
