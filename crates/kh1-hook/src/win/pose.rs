@@ -857,7 +857,8 @@ fn wanted(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
             // (KH1's own combo, `stylecombo`: KH1's swings from their first frame, not KH2's
             // last pose over them.)
             // (Nor over KH1's own dodge roll, `styleroll`: its roll from its first frame.)
-            let kh1_combo = super::stylecombo::active() || super::styleroll::active();
+            // (Nor over an item's use drawn with KH2's motion, Misc Animations.)
+            let kh1_combo = super::stylecombo::active() || super::styleroll::active() || (misc_kh2() && super::takeover::item_use_now());
             let fresh = if kh1_combo { None } else { super::takeover::POSE.try_lock().ok().and_then(|p| p.as_ref().filter(|(_, _, t)| kh2_frame || t.elapsed().as_secs_f32() < 0.15).map(|(b, w, _)| (b.clone(), w.clone()))) };
             match (fresh, s.retarget.as_ref()) {
                 (Some((b, w)), Some(r)) => {
@@ -913,6 +914,15 @@ fn decompose(v: &[Mat4]) -> Vec<(Vec3, Quat, Vec3)> {
 
 /// KH2's motion for what KH1's slot shows Sora doing; `None` leaves KH1's own animation.
 fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4>> {
+    // Misc Animations at KH2 (`styles`, base Sora): KH1 uses the item (its effect, its timing, the
+    // item's logic) and KH2's item-use motion is drawn over it (P_EX100 motion 9, A110: the
+    // right hand raised overhead at frames ~20-30 of its 50, a voice at 0 and a sound at 10; KH1's
+    // own use runs ~52 frames, `takeover::ITEM_CUT`), the user: "a setting for misc animations to
+    // be KH1 or KH2? Like item throwing animation". (Group 9: a change of KH1's slot meanwhile
+    // doesn't restart it.)
+    if misc_kh2() && super::takeover::item_use_now() {
+        return follow_play(s, slot, to_world, Some(Play::Motion { motion: KH2_ITEM_USE, field: false, looping: false, group: 9 }));
+    }
     // KH1's own combo (`stylecombo`, the move style set to KH1): KH1's swings, not KH2's drawn
     // over them.
     if super::stylecombo::active() && matches!(slot, Some(98..=104)) {
@@ -939,6 +949,14 @@ fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
         }
     }
     follow_play(s, slot, to_world, None)
+}
+
+/// KH2 Sora's item-use motion (P_EX100 motion 9, `A110`).
+const KH2_ITEM_USE: u16 = 9;
+
+/// KH2's misc animations for base Sora (the Misc Animations row at KH2, not in a form).
+fn misc_kh2() -> bool {
+    super::styles::kh2(super::styles::Kind::MiscAnims) && !super::form::in_form()
 }
 
 /// `follow` with the motion chosen by the caller (`forced`) instead of from KH1's slot.

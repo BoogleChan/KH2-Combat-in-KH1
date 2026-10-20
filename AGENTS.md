@@ -3006,3 +3006,19 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   `stylejump::JUMP`, s248's `kh1_rise`; KH1's glide keeps its strip and Square-as-jump-held),
   (3) s247's filter on KH1's action bit (it reads as Square again, as before). The Jump row at
   KH1 does nothing meanwhile (KH2's jump).
+
+### 2026-10-20: Stage 252 (Gummi Routes skip, our own; Misc Animations)
+- The user: "can you put an option in the config to skip the gummi routes?", then "no dont use
+  their script, recreate it": KH-1FM-AP-LUA's Instant Gummi (s114-s138) not restored. A helper
+  (`gummi-own`, `gummi.rs`, `docs/kh1-gummi.md`) read the executable: the world map's task
+  (`0x140219490`) starts a route through `0x14020EF10 (kind, stage)`; a cleared flight
+  (`0x14023DA40`) lands through KH1's landing list `0x140213B20 (world)`, `0x140266920 (4)`,
+  `0x14020ED90 (landing)`. With `gummi = skip` the route start is hooked to run those landing
+  calls for the chosen world (`0x140507C94`) at once; story-started flights (`0x14020EEB0`) are
+  left. Config row "Gummi Routes" (Vanilla | Skip), our last. Steam: data overrides
+  `0x507C94`→`0x506F94`, `0x50B1B4`→`0x50A4D4`.
+- The user: "a setting for misc animations to be KH1 or KH2? Like item throwing animation"
+  (helper, `misc-anims`): `styles::Kind::MiscAnims` (ini `misc_anims`, default kh1), its row
+  before Battle Quotes. At KH2, KH1's item use is drawn with KH2's motion 9 (P_EX100 A110, picked
+  by its shape: the hand overhead at 20-30, a voice at 0; unconfirmed it is KH2's item use);
+  KH1 still runs the item. Not mapped: summons, examining, picking up.

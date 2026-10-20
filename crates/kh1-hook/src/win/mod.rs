@@ -24,6 +24,7 @@ mod menu;
 mod pose;
 mod settings;
 mod shortcuts;
+mod gummi;
 mod styles;
 mod stylecombo;
 mod stylejump;
@@ -192,6 +193,7 @@ pub unsafe extern "system" fn DllMain(_inst: *mut c_void, reason: u32, _reserved
         camera::install();
         config::install();
         shortcuts::install();
+        gummi::install();
         equipmenu::install();
         reflect::install();
         drive::install();

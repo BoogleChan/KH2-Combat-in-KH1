@@ -148,3 +148,20 @@ snapped forward. `pose::on_actor`: in the game the placement's translation is hi
 whenever it is off it by 0.5..1500 (logged, 30 times). Also no stale KH2 pose (`POSE`, fresh for
 0.15 s) over KH1's roll's first frames (as for KH1's combos): KH1's roll from its first frame,
 blended in from the pose last drawn.
+
+## Misc animations
+
+`styles::Kind::MiscAnims` (ini `misc_anims`, default `kh1`; Config row "Misc Animations", before
+Battle Quotes), base Sora only. At KH2, KH1 still runs the action (its effect, its timing, the
+item's logic); only the drawn animation is KH2's (`pose::follow`, a forced `Play::Motion`, no
+stale KH2 pose over its start):
+
+- **Item use** (KH1's item command, type 3, `takeover::item_use_now`): KH2's motion 9 (`A110` in
+  P_EX100.mset; 25 frames at 30 fps = 50 game frames; the right hand rises overhead around frames
+  20-30; a voice trigger at 0 and sound 305 at 10). Picked from the moveset by its shape (no name
+  in the file); KH1's use runs ~52 frames (`ITEM_CUT` 51), so they line up without stretching.
+
+Not mapped (no clean KH2 counterpart, or not identified yet): summon calls (KH2's summons share
+the Drive change, motion 52, but KH1's summon command isn't told apart here yet), examining /
+picking up, KH1's other field actions. Guard, the dodge roll and hit reactions already have their
+own settings or are KH2's.

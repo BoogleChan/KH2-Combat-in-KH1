@@ -101,9 +101,15 @@ jump_style = kh2\r\n\
 glide_style = kh2\r\n\
 ; roll_style: kh1 or kh2, KH1's or KH2's dodge roll for base Sora\r\n\
 roll_style = kh2\r\n\
+; misc_anims: kh1 or kh2, KH1's or KH2's animations for base Sora's other actions (an item's\r\n\
+; use); KH1 runs the action either way\r\n\
+misc_anims = kh1\r\n\
 ; battle_quotes: kh1 or kh2, Sora's KH1 or KH2 battle quotes (the Config menu's row; without\r\n\
 ; this line kh2_voice decides)\r\n\
-battle_quotes = kh1\r\n";
+battle_quotes = kh1\r\n\
+; gummi: vanilla = fly the Gummi Ship between worlds; skip = land in the chosen world at once\r\n\
+; (the Config menu's Gummi Routes row switches it in game too)\r\n\
+gummi = vanilla\r\n";
 
 #[derive(Debug)]
 pub struct Settings {
@@ -156,8 +162,10 @@ pub struct Settings {
     pub drive: bool,
     /// Valor's Keyblade drawn in his left hand (`valor_left_blade = on`, `leftblade`).
     pub valor_left_blade: bool,
-    /// KH2's (true) or KH1's moves per `styles::Kind` (ground combo, air combo, magic, air magic, jump, glide, dodge roll, battle quotes).
-    pub styles: [bool; 8],
+    /// KH2's (true) or KH1's moves per `styles::Kind` (ground combo, air combo, magic, air magic, jump, glide, dodge roll, misc animations, battle quotes).
+    pub styles: [bool; 9],
+    /// Skip the Gummi Ship's flights (`gummi = skip`, `gummi.rs`).
+    pub gummi_skip: bool,
 }
 
 static SETTINGS: OnceLock<Settings> = OnceLock::new();
@@ -233,7 +241,8 @@ pub fn get() -> &'static Settings {
             kh2_hair: on(&text, "kh2_hair", "on", true),
             drive: on(&text, "drive", "on", true),
             valor_left_blade: on(&text, "valor_left_blade", "on", true),
-            styles: [on(&text, "ground_combo", "kh2", true), on(&text, "air_combo", "kh2", true), on(&text, "magic", "kh2", false), on(&text, "air_magic", "kh2", false), on(&text, "jump_style", "kh2", true), on(&text, "glide_style", "kh2", true), on(&text, "roll_style", "kh2", true), on(&text, "battle_quotes", "kh2", on(&text, "kh2_voice", "on", false))],
+            styles: [on(&text, "ground_combo", "kh2", true), on(&text, "air_combo", "kh2", true), on(&text, "magic", "kh2", false), on(&text, "air_magic", "kh2", false), on(&text, "jump_style", "kh2", true), on(&text, "glide_style", "kh2", true), on(&text, "roll_style", "kh2", true), on(&text, "misc_anims", "kh2", false), on(&text, "battle_quotes", "kh2", on(&text, "kh2_voice", "on", false))],
+            gummi_skip: on(&text, "gummi", "skip", false),
         };
         log(&format!("settings ({path}): {s:?}"));
         s

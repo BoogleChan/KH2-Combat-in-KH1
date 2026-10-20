@@ -16,12 +16,14 @@ pub enum Kind {
     Jump,
     Glide,
     DodgeRoll,
+    /// KH2's animations over KH1's own non-combat actions (an item's use), `pose::follow`.
+    MiscAnims,
     /// Sora's battle quotes (KH2's voice on KH2's moves, or KH1's): everywhere, forms too.
     BattleQuotes,
 }
 
 impl Kind {
-    pub const EVERY: [Kind; 8] = [Kind::GroundCombo, Kind::AirCombo, Kind::Magic, Kind::AirMagic, Kind::Jump, Kind::Glide, Kind::DodgeRoll, Kind::BattleQuotes];
+    pub const EVERY: [Kind; 9] = [Kind::GroundCombo, Kind::AirCombo, Kind::Magic, Kind::AirMagic, Kind::Jump, Kind::Glide, Kind::DodgeRoll, Kind::MiscAnims, Kind::BattleQuotes];
 
     /// Its ini key.
     pub fn key(self) -> &'static str {
@@ -33,6 +35,7 @@ impl Kind {
             Kind::Jump => "jump_style",
             Kind::Glide => "glide_style",
             Kind::DodgeRoll => "roll_style",
+            Kind::MiscAnims => "misc_anims",
             Kind::BattleQuotes => "battle_quotes",
         }
     }
@@ -47,6 +50,7 @@ impl Kind {
             Kind::Jump => "Jump",
             Kind::Glide => "Glide",
             Kind::DodgeRoll => "Dodge Roll",
+            Kind::MiscAnims => "Misc Animations",
             Kind::BattleQuotes => "Battle Quotes",
         }
     }
@@ -57,7 +61,7 @@ impl Kind {
 }
 
 /// KH2's (true) or KH1's, per `Kind`: combos, jump, glide and dodge roll KH2's, magic KH1's by default (as before).
-static KH2: [AtomicBool; 8] = [AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false)];
+static KH2: [AtomicBool; 9] = [AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false), AtomicBool::new(false)];
 static INIT: Once = Once::new();
 
 fn init() {

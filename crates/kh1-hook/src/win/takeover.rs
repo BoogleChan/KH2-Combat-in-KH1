@@ -744,6 +744,11 @@ static KH1_WINDOW: AtomicBool = AtomicBool::new(false);
 pub static DRIVE_CUT: AtomicBool = AtomicBool::new(false);
 /// The command KH1 runs was picked from the Items list (`combat::run_entry`).
 pub static ITEM_COMMAND: AtomicBool = AtomicBool::new(false);
+
+/// KH1 has Sora for an item's use now (an item command handed to KH1, `combat::command`).
+pub fn item_use_now() -> bool {
+    HANDOFF.load(Ordering::Relaxed) && FROM_COMMAND.load(Ordering::Relaxed) && ITEM_COMMAND.load(Ordering::Relaxed)
+}
 /// Grounded KH1 Fire: KH2 may take him from this frame (the user, frame by frame).
 const FIRE_CUT: u32 = 49;
 /// An item's use: KH2's from this frame (the user: on its frame 52 KH1's roll, guard or jump

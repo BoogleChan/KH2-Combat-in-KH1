@@ -70,7 +70,7 @@ const DECOR_RVA: Rva = Rva(0x2F0740);
 /// Our rows: 8 the camera, 9..16 the move styles (8 a page: rows 8..15, 16..) (`styles::Kind::EVERY` in order). Each:
 /// label, left value, right value, help.
 const FIRST_ROW: i32 = 8;
-const ROWS: [[u32; 4]; 9] = [
+const ROWS: [[u32; 4]; 11] = [
     [0x7F00_0001, 0x7F00_0002, 0x7F00_0003, 0x7F00_0004],
     [0x7F00_0101, 0x7F00_0002, 0x7F00_0003, 0x7F00_0102],
     [0x7F00_0103, 0x7F00_0002, 0x7F00_0003, 0x7F00_0104],
@@ -79,11 +79,13 @@ const ROWS: [[u32; 4]; 9] = [
     [0x7F00_0109, 0x7F00_0002, 0x7F00_0003, 0x7F00_010A],
     [0x7F00_010B, 0x7F00_0002, 0x7F00_0003, 0x7F00_010C],
     [0x7F00_010D, 0x7F00_0002, 0x7F00_0003, 0x7F00_010E],
+    [0x7F00_0115, 0x7F00_0002, 0x7F00_0003, 0x7F00_0116],
     [0x7F00_010F, 0x7F00_0002, 0x7F00_0003, 0x7F00_0110],
+    [0x7F00_0111, 0x7F00_0113, 0x7F00_0114, 0x7F00_0112],
 ];
 /// The camera row's help line (with the version under it).
 const HELP_ID: u32 = 0x7F00_0004;
-const STRINGS: [(u32, &str); 20] = [
+const STRINGS: [(u32, &str); 26] = [
     (0x7F00_0001, "Camera Style"),
     (0x7F00_0002, "KH1"),
     (0x7F00_0003, "KH2"),
@@ -102,17 +104,31 @@ const STRINGS: [(u32, &str); 20] = [
     (0x7F00_010C, "Choose KH1's or KH2's glide for Sora.\nDrive Forms keep their own."),
     (0x7F00_010D, "Dodge Roll"),
     (0x7F00_010E, "Choose KH1's or KH2's dodge roll for Sora.\nDrive Forms keep their own."),
+    (0x7F00_0115, "Misc Animations"),
+    (0x7F00_0116, "Choose KH1's or KH2's animations for items and other actions."),
     (0x7F00_010F, "Battle Quotes"),
     (0x7F00_0110, "Choose KH1's or KH2's battle quotes for Sora."),
+    (0x7F00_0111, "Gummi Routes"),
+    (0x7F00_0112, "Fly the Gummi Ship between worlds, or skip the flights."),
+    (0x7F00_0113, "Vanilla"),
+    (0x7F00_0114, "Skip"),
 ];
 
 /// The move style a row switches (`None`: the camera row).
+/// The Gummi Routes row (our last; Vanilla | Skip).
+fn gummi_row(row: i32) -> bool {
+    index(row) == ROWS.len() - 1
+}
+
 fn style(row: i32) -> Option<Kind> {
     Kind::EVERY.get(index(row).checked_sub(1)?).copied()
 }
 
 /// A row's value: right (KH2, true) or left (KH1).
 fn value(row: i32) -> bool {
+    if gummi_row(row) {
+        return super::gummi::SKIP.load(Ordering::Relaxed);
+    }
     match style(row) {
         Some(k) => styles::kh2(k),
         None => camera::KH2.load(Ordering::Relaxed),
@@ -121,6 +137,10 @@ fn value(row: i32) -> bool {
 
 fn toggle(row: i32) {
     let v = !value(row);
+    if gummi_row(row) {
+        super::gummi::set(v);
+        return;
+    }
     match style(row) {
         Some(k) => styles::set(k, v),
         None => {
