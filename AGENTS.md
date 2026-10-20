@@ -2966,3 +2966,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   the air (its glide): KH2 saw Square mid-rise (the rise cut from 14 to 2 a frame at ~126) and
   the Glide style's start (Square held, falling) fired at the top. With the jump held, only the
   pad's own Square counts now (logged when the bit comes with the jump).
+
+### 2026-10-20: Stage 248 (KH1's jump: its height back, no glide on the held jump)
+- The user (Jump KH1): "as soon as i jump i go into a glide. I also dont as high of a jump as i
+  should be getting because it cuts off the input to the jump button". s245 kept KH1's jump bits
+  from it all through its jump, so its jump read as released at once (a short hop). Now while
+  KH1's jump rises (its state 1, his height going up) its jump held is KH1's (held only, not the
+  presses); from the top on it isn't, so holding it doesn't glide (the glide, Glide at KH1, is on
+  Square). The glide right after the jump in s246 was also s247's Square bit.

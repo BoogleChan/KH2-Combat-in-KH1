@@ -608,8 +608,19 @@ unsafe extern "system" fn control(actor: usize, dir: usize) {
     let submenu = super::shortcuts::submenu_open();
     // (KH1's jump with KH1's glide, `stylejump`: the jump button is KH1's there, its glide.)
     let kh2_bits: u32 = if super::stylejump::kh1_keeps_jump() { 0x10_0000 } else { 0x6 | 0x10_0000 };
+    // KH1's own jump (`stylejump::JUMP`) rising (its state 1, going up): its jump held is KH1's,
+    // for its height (the user: "I also dont as high of a jump as i should be getting because it
+    // cuts off the input to the jump button"); from its top on it isn't, so holding it doesn't
+    // glide (KH1's glide is on Square here: "as soon as i jump i go into a glide").
+    let kh1_rise = super::stylejump::mode() == super::stylejump::JUMP && actor > 0x10000 && rd::<i32>(actor + 0x70) == 1 && {
+        let p = rd::<[f32; 3]>(actor + 0x10)[1];
+        let rising = RISE_Y.swap(p.to_bits(), Ordering::Relaxed);
+        p <= f32::from_bits(rising)
+    };
     let bits = |off: usize| -> u32 {
-        if off != 8 {
+        if off == 4 && kh1_rise {
+            kh2_bits & !0x6
+        } else if off != 8 {
             kh2_bits
         } else if l1_menu {
             0
@@ -662,6 +673,8 @@ unsafe fn kh1_move_done(base: usize, actor: usize) -> bool {
 
 /// KH1's move ended on a jump press: KH2 jumps at once (the press isn't taken as held over).
 static JUMP_NOW: AtomicBool = AtomicBool::new(false);
+/// Sora's height (KH1's y, down positive) on the last control step, to tell KH1's jump rising.
+static RISE_Y: AtomicU32 = AtomicU32::new(0);
 /// KH2's glide level while the Glide style is KH1's (its ability set to 0 meanwhile).
 static KH2_GLIDE_KEPT: AtomicU32 = AtomicU32::new(0);
 /// KH1's glide was tried on this hold of Square (`style_air_start`, KH1's jump).
