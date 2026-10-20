@@ -3194,3 +3194,10 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   as Valor's second Keyblade (`valorstats::deltas`: live stats each step, the menus' copy). The
   two bars are filled once as the form starts (after its cost is paid). On revert his max MP is
   KH1's own again, and his MP is kept within it.
+
+### 2026-10-20: Stage 270 (forms' growth abilities one level above Sora's)
+- The user: "have the grown abilities that are associated with each drive form ... always be one
+  level higher than the level unlocked by base sora": none to LV1, LV1 to LV2, MAX stays MAX.
+- `form::growth_up` gives Valor's High Jump, Wisdom's Quick Run and Final's Glide base Sora's
+  level + 1, MAX (4) at most. Before, each was at MAX. They follow Sora's when KH1's menu changes
+  mid-form (`form::abilities`), and the form's start log names both levels.

@@ -4,7 +4,7 @@
 //! - Sora's Drive motion (52, invulnerable) with base Sora's moveset; when it ends, the swap:
 //!   the form's moveset, motions and combo rows (`P_EX100_MAGF`, moveset 3), his facing and
 //!   lock kept, and its arrival (53). Its abilities: Sora's support abilities, not his action
-//!   or growth ones, and the form's own growth ability, Quick Run, at MAX (the user);
+//!   or growth ones, and the form's own growth ability, Quick Run, one level above Sora's (the user);
 //! - the form runs on Sora's MP (the user): its yellow part drained bit by bit, a blue bar
 //!   broken into it when it runs out (KH1's own payment; `after_step`); out of MP, or on the
 //!   Revert command (the Drive row itself in the form), back to Sora, at once, in the air too:
@@ -371,6 +371,15 @@ pub fn battle<'a>(d: &Drive, kh2: &'a pose::Kh2) -> &'a Arc<Battle> {
     }
 }
 
+/// A growth ability's level (0 none, 1..3, 4 MAX) in a form: one above base Sora's, MAX at most
+/// (the user: "have the grown abilities that are associated with each drive form ... always be
+/// one level higher than the level unlocked by base sora": none -> LV1, LV1 -> LV2, MAX stays
+/// MAX).
+fn growth_up(level: u8) -> u8 {
+    level.saturating_add(1).min(GROWTH_MAX)
+}
+const GROWTH_MAX: u8 = 4;
+
 /// The form's abilities (KH2's, exe): Sora's support abilities carry over, his action and
 /// growth ones don't; the form's own growth ability at its level; every combo row of the form's
 /// table unlocked.
@@ -386,13 +395,12 @@ fn form_abilities(sora: &Abilities, form: &Character, kind: Kind) -> Abilities {
         negative_combo: sora.negative_combo,
         combo_master: sora.combo_master,
         one_swing_on_miss: sora.one_swing_on_miss,
-        // (Each form's growth ability at MAX: the user, Wisdom with Quick Run MAX; Valor's High
-        // Jump the same.)
-        high_jump: if kind == Kind::Valor { 4 } else { 0 },
-        quick_run: if kind == Kind::Wisdom { 4 } else { 0 },
+        // Each form's growth ability (Valor High Jump, Wisdom Quick Run, Final Glide) one level
+        // above base Sora's, MAX at most (`growth_up`).
+        high_jump: if kind == Kind::Valor { growth_up(sora.high_jump) } else { 0 },
+        quick_run: if kind == Kind::Wisdom { growth_up(sora.quick_run) } else { 0 },
         aerial_dodge: 0,
-        // (Final's growth ability: Glide.)
-        glide: if kind == Kind::Final { 4 } else { 0 },
+        glide: if kind == Kind::Final { growth_up(sora.glide) } else { 0 },
         dodge_roll: 0,
         ..sora.clone()
     };
@@ -509,18 +517,19 @@ unsafe fn arrive(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     if ch.clip_exists(ARRIVE_MOTION) {
         ch.play_held(ARRIVE_MOTION, true);
     }
+    let lv = (sora.clone(), own.clone());
     d.form = Some(InForm { kind, left: 0, sora, own, logged_s: 0 });
     CURRENT.store(kind.code(), Ordering::Relaxed);
     IN_FORM.store(true, Ordering::Relaxed);
     if kind.two_blades() {
         super::valor::started();
     }
-    let growth = match kind {
-        Kind::Valor => "High Jump",
-        Kind::Wisdom => "Quick Run",
-        Kind::Final => "Glide",
+    let (growth, sora_lv, form_lv) = match kind {
+        Kind::Valor => ("High Jump", lv.0.high_jump, lv.1.high_jump),
+        Kind::Wisdom => ("Quick Run", lv.0.quick_run, lv.1.quick_run),
+        Kind::Final => ("Glide", lv.0.glide, lv.1.glide),
     };
-    log(&format!("{} (Lv{LEVEL}): yellow MP drained 1 every {DRAIN_FRAMES} frames of battle (half as fast out of it), {growth} MAX", kind.name()));
+    log(&format!("{} (Lv{LEVEL}): yellow MP drained 1 every {DRAIN_FRAMES} frames of battle (half as fast out of it), {growth} level {form_lv} (Sora's {sora_lv}, one above, 4 = MAX)", kind.name()));
 }
 
 /// Back to Sora: what played is cut, he is free with his movement (the user: on the ground
@@ -560,6 +569,12 @@ pub fn abilities(d: &mut Drive, ch: &mut Character) {
             own.finishing_plus = f.sora.finishing_plus;
             own.negative_combo = f.sora.negative_combo;
             own.combo_master = f.sora.combo_master;
+            // (Its growth ability follows Sora's: one level above.)
+            match f.kind {
+                Kind::Valor => own.high_jump = growth_up(f.sora.high_jump),
+                Kind::Wisdom => own.quick_run = growth_up(f.sora.quick_run),
+                Kind::Final => own.glide = growth_up(f.sora.glide),
+            }
             f.own = own.clone();
             ch.abilities = own;
         }
