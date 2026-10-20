@@ -2837,3 +2837,8 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - Config menu (helper, `style-menu`): KH1 doesn't scroll its list, so ours is a second page (rows
   8-12: Camera Style, then the four styles) drawn in KH1's rows' places while the cursor is past
   row 7; KH1's rows' panels (`0x1402D5590`) are skipped then. s224's 25 pitch is gone.
+
+### 2026-10-19: Stage 237 (the style rows' names)
+- The Config rows read as the user wrote them: "Base Combo", "Aerial Base Combo", "Magic",
+  "Aerial Magic" (were "Ground Combo", "Aerial Combo"). The ini keys stay `ground_combo` /
+  `air_combo`.

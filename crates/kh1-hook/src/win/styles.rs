@@ -31,8 +31,8 @@ impl Kind {
     /// Its Config menu label.
     pub fn label(self) -> &'static str {
         match self {
-            Kind::GroundCombo => "Ground Combo",
-            Kind::AirCombo => "Aerial Combo",
+            Kind::GroundCombo => "Base Combo",
+            Kind::AirCombo => "Aerial Base Combo",
             Kind::Magic => "Magic",
             Kind::AirMagic => "Aerial Magic",
         }
