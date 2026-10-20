@@ -290,7 +290,7 @@ unsafe fn sora_in(save: usize, slot: i32) -> bool {
 
 /// During a Valor pick whose preview has put another Keyblade in Sora's weapon byte: (his own
 /// weapon, the hovered one). For the stats shown then (`valorstats::add`).
-pub unsafe fn valor_preview() -> Option<(u8, u8)> {
+pub unsafe fn valor_preview() -> Option<(u8, u8, u8)> {
     let own = PICK_WEAPON.load(Ordering::Relaxed) as u8;
     if own == 0 {
         return None;
@@ -298,7 +298,13 @@ pub unsafe fn valor_preview() -> Option<(u8, u8)> {
     let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
     let save = super::menu::save_block(base)?;
     let now = rd::<u8>(save + WEAPON);
-    (now != own && now != 0).then_some((own, now))
+    // (Sora's own, the one KH1's preview has in his byte (a hover behind, or still his own), and
+    // the one under the cursor: s223 took the byte for the hovered one and did nothing when it
+    // was his own, the stats then his with his own Keyblade alone, the user: "the strength cap
+    // is at 70 again".)
+    let hovered = LOGGED_HOVER.load(Ordering::Relaxed);
+    let hovered = if (1..=255).contains(&hovered) { hovered as u8 } else { now };
+    (now != 0).then_some((own, now, hovered))
 }
 
 /// Sora's own weapon while a Valor pick's preview may hold another in his weapon byte; the

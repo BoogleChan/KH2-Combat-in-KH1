@@ -80,10 +80,14 @@ pub unsafe fn add(member: i32, out: usize) {
     // came out as that Keyblade's alone in his hand; he keeps his own, so it is added (the stats
     // shown are Valor's: both). (The user: "when hovering over keyblades in the valor form slots,
     // it'll cap strength at 70".)
-    if let Some((own, hovered)) = super::equipmenu::valor_preview() {
+    if let Some((own, in_byte, hovered)) = super::equipmenu::valor_preview() {
         let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
-        let s = super::equip::weapon_strength(base, own).unwrap_or(0) as i32;
-        let m = super::equip::weapon_mp(base, own).unwrap_or(0) as i32;
+        let st = |w: u8| super::equip::weapon_strength(base, w).unwrap_or(0) as i32;
+        let mp = |w: u8| super::equip::weapon_mp(base, w).unwrap_or(0) as i32;
+        // KH1 counted the Keyblade in his byte; the stats shown are Valor's: his own and the
+        // hovered one.
+        let s = st(own) + st(hovered) - st(in_byte);
+        let m = mp(own) + mp(hovered) - mp(in_byte);
         let before = rd::<i32>(out + STRENGTH);
         wr(out + STRENGTH, (before + s).clamp(0, STRENGTH_CAP));
         let max = (rd::<i32>(out + MAX_MP) + m).max(0);

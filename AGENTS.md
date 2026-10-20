@@ -3069,3 +3069,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   `player_model`, default kh1. No lighting yet; KH1's Keyblade while KH1 animates him; nothing
   seen in game. The model-queue hook is always installed now (`valor_left_blade` only gates the
   second Keyblade).
+
+### 2026-10-20: Stage 258 (Valor pick's Strength, again)
+- The user: "the strength cap is at 70 again" (asked: the Valor Keyblade pick). KH1's preview
+  puts a Keyblade in Sora's weapon byte a hover behind, and at times still his own; s223 took
+  the byte for the hovered one and added nothing when it was his own, so the stats shown were
+  his with his own Keyblade alone. Now: KH1's figure minus the byte's Keyblade, plus his own and
+  the one under the cursor (`equipmenu::valor_preview` returns all three, the hovered row from
+  the list).
