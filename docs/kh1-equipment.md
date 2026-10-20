@@ -110,6 +110,8 @@ KH1's item table is in `btltbl.bin` (loaded by `0x14028D840`): the pointer at `0
   once out of Valor they are set back to the stats function's figures. The hooked stats function
   adds the same for Sora while he is Valor, so the pause menu's pages show it. Current MP is not
   raised by a bigger max (KH1's equipping doesn't either).
+- Final Form's second Keyblade adds the same way, from its own slot (`save + 0x489`, section 5;
+  the Kingdom Key when the slot holds none Sora may take).
 
 ## 2. The inventory (high)
 
@@ -314,8 +316,29 @@ The plan above, with these changes once the code was read closer:
   `0x140303C15`, `0x140303CA4`, `0x140304E50`, the call at `0x140304F74`); any mismatch logs and
   leaves KH1 as it is. The two code jumps go in last.
 
-Log lines (`kh1-kh2.log`, all start with "Equipment:"): the install, "Valor's Keyblade is ..
-(candidates ..)" on change, "Sora's slots N rows", "Valor row picked", "weapon list for Valor:
+- **Final Form's row** (the user: "add a section in the equipment menu for the second keyblade
+  in final form"). Sora's slots have one row per form unlocked (`form::unlocked`), Valor's
+  ("V: ") then Final's ("F: "), so rows `1..=forms` are form rows and accessory `k` is row
+  `1 + forms + k`; Valor's row is now hidden until Valor is unlocked too. With no form
+  unlocked, KH1's rows are left as they are. Final's Keyblade is kept at `save + 0x489`
+  (section 5): the same Keyblades to choose from as Valor (owned, a copy not equipped), and the
+  Kingdom Key (`0x51`, what Final always used before) when the slot holds none of them, so Final
+  is never refused; its row then shows the Kingdom Key and confirm buzzes only when no Keyblade
+  is free. The two slots may hold the same Keyblade (the forms are never on at once).
+  - The row stub reads one status byte per row (rows 1 and 2: none / a choice / refused) and
+    stores the confirmed row in the pick byte, so the list, the stored slot, the compare box
+    and the header follow the row picked.
+  - Both rows may hold the same id, so the label can't go by the item alone. The name call
+    goes through a stub that passes the slots loop's row: `0x140304F30` saves `rbx` (the
+    loop's row, `0x14030402E`) at its entry `rsp + 8`, then pushes three registers and
+    takes `0x50`, so at the name call the row is at `rsp + 0x78` (the prologue's 24 bytes are
+    checked at install; if they differ the label goes by the first row holding the item). The
+    page header's label goes by the row being picked for, else the cursor's row.
+  - The compare box needs nothing new: the second Keyblade adds alike in both forms, and the
+    box's "now" is worked out from the row's Keyblade (`0x142E9AA5C`, set from the row picked).
+
+Log lines (`kh1-kh2.log`, all start with "Equipment:"): the install, "form rows [Valor ..,
+Final ..] (candidates ..)" on change, "Sora's slots N rows", "Valor row picked", "weapon list for Valor:
 [..] -> [..]", "Valor's Keyblade stored: .." or "not stored", "Sora's row N is accessory slot K".
 
 To test in the game:
@@ -332,8 +355,16 @@ To test in the game:
    buzzes.
 6. Sora with 7 or 8 accessory slots (9 / 10 rows): scrolling, the last accessory, its help.
 7. Steam build: the same, and the install line without "some patches failed".
+8. Final unlocked: an "F: <Keyblade>" row under the V row (the Kingdom Key on a save that never
+   set it); picking works as on the V row and stores Final's own Keyblade; both rows may show
+   the same Keyblade, each with its own label. The compare box: the row's own Keyblade shows no
+   change, the others the change from it. Enter Final: that Keyblade in his left hand, its
+   Strength and MP in the Status page. Equip the F row's Keyblade as Sora's weapon: the F row
+   goes back to the Kingdom Key.
+9. Before Valor is unlocked (or a new game): no V or F row, the accessories right under the
+   weapon; Valor unlocked but not Final: only the V row.
 
-## 5. A spare save byte for the Valor Keyblade
+## 5. Spare save bytes for the Valor and Final Keyblades
 
 **`save + 0x488`** (and the three bytes after it):
 
@@ -346,8 +377,23 @@ To test in the game:
   record loops stop at 10 members (`0x1402E5A80`, `0x1402E6330`). (medium-high: a static scan
   can't see an access through a pointer computed elsewhere, as with `+0x847`.)
 - It travels with the save like `+0x847` (the whole block is the save data).
-- Old saves may hold anything there, so the id is checked on every read (`valor_keyblade`). If a
-  marker is wanted, `+0x489` can hold one.
+- Old saves may hold anything there, so the id is checked on every read (`valor_keyblade`).
+
+**`save + 0x489`**: Final Form's Keyblade (`equip::FINAL_OFF`), the byte after Valor's in the
+same spare four:
+
+- A scan of `.text` for every displacement `0x489`, `0x48A` and `0x48B`: none at all, from any
+  base. No absolute (rip-relative) access to the static save copy's `0x142DEA1E8..0x142DEA1EB`
+  either.
+- Wider accesses that would cover it: the dword / qword / 16-byte ones at `0x480..0x488` are all
+  other structures: actor handles at `+0x488` (`0x14028EDB1`, `0x140295F73`, `0x1402A1B11`,
+  each passed to the handle lookup `0x14038B0B0`), `0x140360311` a stack frame (`rbp`), the
+  dwords at `+0x484` (`0x1400B8xxx`) end at `0x487`. `movswl 0x486(..)` reads `0x486..0x487`.
+- New game writes nothing at `0x488..0x48B` (above), and `+0x48C` (the Dive's choice, read by
+  `form::unlocked`) is the next byte KH1 uses. (medium-high, as for `+0x488`.)
+- Checked on every read: a Keyblade Sora owns with a copy free, else the Kingdom Key
+  (`equip::final_keyblade`), written back by `valor::final_keyblade`.
+- `+0x48A / +0x48B` stay free.
 
 Not usable: `+0x840..0x843` (a u32 KH1 sets to 1), `+0x848..` (a u16 array of counters indexed
 from `+0x848`), `+0x37..+0x3B` of Sora's record (no direct use found, but the record has uses

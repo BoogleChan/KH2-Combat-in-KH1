@@ -1,5 +1,5 @@
-//! Read-only views of Sora's equipment and KH1's inventory, for Valor Form's second Keyblade
-//! (`docs/kh1-equipment.md` has KH1's side). Nothing here writes to the game.
+//! Read-only views of Sora's equipment and KH1's inventory, for Valor's and Final Form's second
+//! Keyblades (`docs/kh1-equipment.md` has KH1's side). Nothing here writes to the game.
 //!
 //! - KH1's party records are `0x74` bytes from the save block's start (member 0 is Sora); a
 //!   record's weapon is its byte `+0x36` (a KH1 item id, 0 for none), its accessory count
@@ -14,7 +14,7 @@
 //! - Sora's weapons that aren't Keyblades: `0x52..=0x55` (Dream Sword / Shield / Rod and the
 //!   wooden sword; KH1 keeps the weapon row locked while one is held, `0x1402E6C60`).
 //!
-//! Used by `equipmenu` (the Valor row in the Equipment page).
+//! Used by `equipmenu` (the Valor and Final rows in the Equipment page).
 
 #![allow(dead_code)]
 
@@ -50,6 +50,12 @@ const NOT_KEYBLADES: std::ops::RangeInclusive<u8> = 0x52..=0x55;
 /// nothing in KH1 reads or writes (see the doc). Any value read there must be checked
 /// (`valor_keyblade`), as old saves may hold anything.
 pub const VALOR_OFF: usize = 0x488;
+/// Final Form's Keyblade's id in the save: `+0x489`, the byte after Valor's (same four spare
+/// bytes; the doc's section 5). Checked on every read as Valor's (`final_keyblade`).
+pub const FINAL_OFF: usize = 0x489;
+/// Final Form's Keyblade when its slot holds none Sora may take: the Kingdom Key (item 0x51),
+/// as Final always had before it got a slot.
+pub const FINAL_DEFAULT: u8 = 0x51;
 
 unsafe fn rd<T: Copy>(p: usize) -> T {
     std::ptr::read_unaligned(p as *const T)
@@ -155,6 +161,31 @@ pub unsafe fn valor_keyblade(base: usize) -> Option<u8> {
         return Some(stored);
     }
     cands.into_iter().max_by_key(|&id| (weapon_strength(base, id).unwrap_or(0), std::cmp::Reverse(id)))
+}
+
+/// The id stored for Final (`FINAL_OFF`), if it is a Keyblade Sora owns with a copy not
+/// equipped (Valor's rule, `valor_candidates`); else the Kingdom Key (`FINAL_DEFAULT`), which
+/// Final may always use, equipped or not. Final is never refused for want of a Keyblade.
+pub unsafe fn final_keyblade(base: usize) -> u8 {
+    let stored = save(base).map(|s| rd::<u8>(s + FINAL_OFF)).unwrap_or(0);
+    if stored != 0 && valor_candidates(base).contains(&stored) {
+        stored
+    } else {
+        FINAL_DEFAULT
+    }
+}
+
+/// Final's slot as it is stored (kept by `valor::final_keyblade`), the Kingdom Key when it holds
+/// no Keyblade (an empty slot, an old save): for the model, the stats and the menu during a pick,
+/// where the free copies can't be counted (the menu's preview puts the hovered one in Sora's
+/// weapon byte).
+pub unsafe fn final_stored(base: usize) -> u8 {
+    let stored = save(base).map(|s| rd::<u8>(s + FINAL_OFF)).unwrap_or(0);
+    if is_keyblade(base, stored) {
+        stored
+    } else {
+        FINAL_DEFAULT
+    }
 }
 
 /// KH1's text for a handle (`0x14038B0B0`), 0 for none.

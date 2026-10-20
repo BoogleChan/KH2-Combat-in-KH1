@@ -1476,7 +1476,11 @@ impl Strikes {
             f & 0x800 != 0 && f & 0x0020_0000 == 0 && pose::ptr(rd::<u32>(o + 0x34)) == sora
         };
         let mut live: Vec<((u64, usize), Shape, u8, u16)> = Vec::new();
-        for g in &out.guard_boxes {
+        // Anti Form guards nothing (the user: "you shouldnt be able to guard in anti form"): its
+        // moves' guard windows (the spinning finishers 183 / 184, ATKP 455) put no guard objects;
+        // only the form change's own (52 / 53) are kept.
+        let anti_blocked = super::form::in_anti() && out.motion != super::form::DRIVE_MOTION && out.motion != super::form::ARRIVE_MOTION;
+        for g in out.guard_boxes.iter().filter(|_| !anti_blocked) {
             for (i, sh) in anim.attack_shapes(g.group, g.weapon).into_iter().take(GUARD_SHAPES).enumerate() {
                 live.push(((g.swing, i), sh, g.weapon, g.attack));
             }

@@ -345,7 +345,7 @@ unsafe fn held_weapon(base: usize) -> Option<u8> {
 /// The left Keyblade's KH1 item (Valor's, Final's), if he holds two.
 unsafe fn left_weapon(base: usize) -> Option<u8> {
     match super::form::current()? {
-        Kind::Final => Some(super::valor::FINAL_KEYBLADE),
+        Kind::Final => Some(super::equip::final_stored(base)),
         Kind::Valor => super::equip::valor_keyblade(base),
         Kind::Wisdom | Kind::Anti => None,
     }

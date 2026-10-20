@@ -3329,3 +3329,16 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   only, the left blade now uses the right blade's anchor (KH2's bone 178 on KH1's right hand,
   as `final_float`), so the two keep KH2's spacing (`leftblade::note_pose`;
   `docs/drive-model.md`). Valor is unchanged.
+
+### 2026-10-20: Stage 283 (Final Form's second Keyblade in the equipment menu; no guard in Anti Form)
+- The user: "add a section in the equipment menu for the second keyblade in final form". Final's
+  Keyblade is kept at `save + equip::FINAL_OFF` (0x489, free: `docs/kh1-equipment.md` section 5),
+  checked on read and falling back to the Kingdom Key. Sora's equipment list has one row per
+  unlocked form ("V:" then "F:"); Valor's row is now hidden until Valor is unlocked. Final's
+  model, menu stats and live stats use the slot (`equipmenu.rs`, `valor.rs`, `valorstats.rs`,
+  `model.rs`). Rows holding the same Keyblade are told apart by a stub in KH1's row drawing
+  (0x140304F30, Steam 0x307370).
+- The user: "you shouldnt be able to guard in anti form". Anti never has the guard ability
+  (`form::form_abilities`); its moves' guard windows (the spinning finishers 183 / 184, ATKP
+  455) put no KH1 guard objects (`combat::guard_step`, the form change's 52 / 53 kept) and a hit
+  in them is not guarded (`hurt.rs`).

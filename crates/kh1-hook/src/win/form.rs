@@ -482,7 +482,8 @@ const GROWTH_MAX: u8 = 4;
 /// table unlocked.
 fn form_abilities(sora: &Abilities, form: &Character, kind: Kind) -> Abilities {
     let mut a = Abilities {
-        guard: form.moveset.clips.contains_key(&character_core::motion::GUARD),
+        // (Never in Anti Form: the user, "you shouldnt be able to guard in anti form".)
+        guard: kind != Kind::Anti && form.moveset.clips.contains_key(&character_core::motion::GUARD),
         // (Sora's Aerial Recovery in the form, with its own recovery motion: the user, Wisdom and
         // Valor were "missing aerial recovery".)
         aerial_recovery: sora.aerial_recovery && form.moveset.clips.contains_key(&character_core::motion::AIR_RECOVERY),
@@ -730,12 +731,16 @@ pub unsafe fn after_step(d: &mut Drive, actor: usize, battle: bool) {
     // Valor's second Keyblade's Strength and MP (and back to Sora's own after).
     super::valorstats::step(actor);
     let Some(f) = d.form.as_mut() else { return };
-    // (Valor: its Keyblade checked every 10 frames, so a change made in the menu reaches his
-    // hand, `valor::keyblade`.)
-    if f.kind == Kind::Valor {
+    // (Valor, Final: its Keyblade checked every 10 frames, so a change made in the menu reaches
+    // his hand, `valor::keyblade` / `valor::final_keyblade`.)
+    if f.kind.two_blades() {
         static TICK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         if TICK.fetch_add(1, Ordering::Relaxed) % 10 == 0 {
-            super::valor::keyblade();
+            if f.kind == Kind::Final {
+                super::valor::final_keyblade();
+            } else {
+                super::valor::keyblade();
+            }
         }
     }
     f.left += if battle { 2 } else { 1 };

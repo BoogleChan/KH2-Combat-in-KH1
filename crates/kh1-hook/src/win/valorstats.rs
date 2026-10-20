@@ -81,16 +81,16 @@ unsafe fn wr<T: Copy>(p: usize, v: T) {
     std::ptr::write_unaligned(p as *mut T, v)
 }
 
-/// The Valor Keyblade's (item, Strength, max MP) while Sora is Valor: the slot's Keyblade
-/// (`equip::VALOR_OFF`, kept by `valor::keyblade`).
+/// The second Keyblade's (item, Strength, max MP) while Sora is Valor or Final: the form's slot's
+/// Keyblade (`equip::VALOR_OFF`, kept by `valor::keyblade`; `equip::FINAL_OFF`, kept by
+/// `valor::final_keyblade`, the Kingdom Key when it holds none).
 pub unsafe fn bonus() -> Option<(u8, i32, i32)> {
     if !super::form::two_blades() {
         return None;
     }
     let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
     let save = super::menu::save_block(base)?;
-    // (Final Form's: the Kingdom Key, `valor::FINAL_KEYBLADE`.)
-    let item = if super::form::in_final() { super::valor::FINAL_KEYBLADE } else { rd::<u8>(save + super::equip::VALOR_OFF) };
+    let item = if super::form::in_final() { super::equip::final_stored(base) } else { rd::<u8>(save + super::equip::VALOR_OFF) };
     if item == 0 || !super::equip::is_keyblade(base, item) {
         return None;
     }
@@ -133,7 +133,7 @@ pub unsafe fn add(member: i32, out: usize) {
             clamp_mp(out, max);
             static P: AtomicU32 = AtomicU32::new(0);
             if P.fetch_add(1, Ordering::Relaxed) < 30 {
-                log(&format!("Valor pick: compare box with {byte:#x} in the left hand and his own {own:#x}: Strength {before} {s:+} = {}, max MP {max}", rd::<i32>(out + STRENGTH)));
+                log(&format!("Second Keyblade pick: compare box with {byte:#x} in the left hand and his own {own:#x}: Strength {before} {s:+} = {}, max MP {max}", rd::<i32>(out + STRENGTH)));
             }
             return;
         }

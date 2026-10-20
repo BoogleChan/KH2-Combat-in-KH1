@@ -163,7 +163,8 @@ unsafe extern "system" fn hurt(actor: usize, out: usize) -> usize {
                 // The rest of Reflect's cast (before the barrier stands and after it falls): no
                 // harm all the way through (the user), not counted for the counter.
                 Fate::Evaded
-            } else if (out.guarding || !out.guard_boxes.is_empty()) && (toward.dot(fwd) > 0.0 || ch.abilities.guard_all_round || out.guard_boxes.iter().any(|g| g.weapon == 0)) {
+            } else if !super::form::in_anti() && (out.guarding || !out.guard_boxes.is_empty()) && (toward.dot(fwd) > 0.0 || ch.abilities.guard_all_round || out.guard_boxes.iter().any(|g| g.weapon == 0)) {
+                // (Never in Anti Form, which guards nothing: the user.)
                 // KH2's guard reaction by its windows' ATKP "refact self" (1 the guard repel, 2
                 // nothing: the Aerial Dodge's 406 and Aerial Recovery's 124 go on; the guard
                 // press's 161 repels); a guard on his body guards all round (`combat::guard_step`).
