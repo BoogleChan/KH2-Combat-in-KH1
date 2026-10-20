@@ -15,7 +15,7 @@ use std::sync::Mutex;
 
 const FLOOR_RAY_RVA: Rva = Rva(0x1910E0);
 /// KH1 Sora, per side: thigh, knee, ankle, sole (the bone on the ground in the bind).
-const LEGS: [[usize; 4]; 2] = [[17, 18, 19, 22], [43, 44, 45, 48]];
+pub const LEGS: [[usize; 4]; 2] = [[17, 18, 19, 22], [43, 44, 45, 48]];
 /// A sole this close to the model's ground (KH1 units) counts as planted.
 const PLANTED: f32 = 4.0;
 /// How far the floor is looked for above and below a sole, and the most a body drops.

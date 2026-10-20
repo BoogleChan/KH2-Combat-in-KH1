@@ -69,13 +69,14 @@ struct Voice {
 static QUEUE: Mutex<Vec<Voice>> = Mutex::new(Vec::new());
 /// The mixer's thread runs (started on the first sound).
 static MIXER: std::sync::Once = std::sync::Once::new();
-/// The mixer's output: 48 kHz stereo, in blocks of 5 ms, six queued (30 ms ahead at most). The
-/// mixer wakes on Windows' event as each block is done (s274 polled with a 2 ms sleep, which
-/// Windows rounds up to its 15.6 ms tick: sounds started late by a varying amount, the user: "the
-/// sound FX are also kind of jittery").
+/// The mixer's output: 48 kHz stereo, in blocks of 20 ms, four queued. The mixer wakes on
+/// Windows' event as each block is done (s274 polled with a 2 ms sleep, which Windows rounds up to
+/// its 15.6 ms tick: sounds started late by a varying amount, "kind of jittery"). s276's 5 ms
+/// blocks were shorter than Windows' own mixing period, which ran dry between them: "the sound
+/// sounds like its crackling".
 const OUT_RATE: u32 = 48_000;
-const BLOCK_FRAMES: usize = 240;
-const BLOCKS: usize = 6;
+const BLOCK_FRAMES: usize = 960;
+const BLOCKS: usize = 4;
 
 /// The mixer (its own thread): one `waveOut` device for every KH2 sound, kept open; each block,
 /// as Windows hands it back, refilled with the sounds playing (resampled to 48 kHz, each at its
@@ -93,7 +94,7 @@ fn mixer() {
         log(&format!("KH2 sound: Windows refused to open the sound device (waveOutOpen {r}): no KH2 sounds"));
         return;
     }
-    log("KH2 sound: mixer running (one device, 48 kHz stereo, 5 ms blocks, woken by its event)");
+    log("KH2 sound: mixer running (one device, 48 kHz stereo, 20 ms blocks, woken by its event)");
     let size = std::mem::size_of::<WaveHdr>() as u32;
     let mut bufs: Vec<Vec<i16>> = (0..BLOCKS).map(|_| vec![0i16; BLOCK_FRAMES * 2]).collect();
     let mut hdrs: Vec<Box<WaveHdr>> = bufs

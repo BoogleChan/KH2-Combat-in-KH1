@@ -1523,7 +1523,9 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
             // he should be significantly lower in this hang animation": the pose's topmost bone,
             // whatever it is, goes where KH1's hands hold the ledge.)
             let up = inv.transform_vector3(glam::Vec3::new(0.0, -1.0, 0.0)).normalize_or_zero();
-            let ours = pose.iter().take(SORA_BONES as usize).map(|m| m.w_axis.truncate()).filter(|p| p.is_finite()).max_by(|a, b| a.dot(up).total_cmp(&b.dot(up))).unwrap_or_default();
+            // (Of his two feet: any bone at all picked a hood string or the hidden Keyblade's, drawn
+            // up at the ledge while his foot hung far below, the user's video.)
+            let ours = super::feet::LEGS.iter().filter_map(|l| pose.get(l[2]).map(|m| m.w_axis.truncate())).filter(|p| p.is_finite()).max_by(|a, b| a.dot(up).total_cmp(&b.dot(up))).unwrap_or_default();
             let d = kh1_mid - ours;
             static N: AtomicU32 = AtomicU32::new(0);
             if N.fetch_add(1, Ordering::Relaxed) < 30 {

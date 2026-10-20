@@ -240,7 +240,9 @@ pub unsafe fn fill(actor: usize, _flags: usize) {
         wr(magic + 0x10, n + 1);
         n + 1
     };
-    let any = (0..FORMS.len()).any(|k| usable(actor, k));
+    // (Only the forms Sora has unlocked, `form::unlocked`; in a form, its Revert rows.)
+    let shown: Vec<usize> = (0..FORMS.len()).filter(|&k| super::form::in_form() || super::form::Kind::ALL.get(k).is_some_and(|&kind| super::form::unlocked(kind))).collect();
+    let any = shown.iter().any(|&k| usable(actor, k));
     let bit = 1u32 << (n - 1);
     for off in [4usize, 8] {
         let v = rd::<u32>(magic + off);
@@ -258,16 +260,16 @@ pub unsafe fn fill(actor: usize, _flags: usize) {
     // The summon list as the forms.
     let list = base + SUMMON_MENU_RVA;
     let mut grey = 0u32;
-    for (k, &(id, _, _)) in FORMS.iter().enumerate() {
-        wr(list + 0x14 + k, id);
+    for (row, &k) in shown.iter().enumerate() {
+        wr(list + 0x14 + row, FORMS[k].0);
         if !usable(actor, k) {
-            grey |= 1 << k;
+            grey |= 1 << row;
         }
     }
-    wr(list + 0x10, FORMS.len() as i32);
+    wr(list + 0x10, shown.len() as i32);
     wr(list + 4, grey);
     wr(list + 8, grey);
-    if rd::<i32>(list + 0xC) >= FORMS.len() as i32 {
+    if rd::<i32>(list + 0xC) >= shown.len() as i32 {
         wr(list + 0xC, 0i32);
     }
 }

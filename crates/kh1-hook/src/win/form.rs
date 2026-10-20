@@ -51,7 +51,7 @@ use super::{log, pose};
 use character_core::{Abilities, Character, EventKind};
 use kh2_formats::battle::Battle;
 use kh2_rig::RigAnim;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, Ordering};
 use std::sync::Arc;
 
 pub use super::formmagic::{element_sounds, package_spell, shots_step, spell_file, LAST_PACKAGE, SPELL_NAMES};
@@ -329,7 +329,50 @@ pub unsafe fn usable(sora: usize, kind: Kind) -> bool {
         // (The user: "I dont want sora to be able to revert out of it".)
         return !in_anti();
     }
-    pose::kh2().is_some_and(|k| kind.data(k).is_some()) && (super::takeover::kh2_has() || super::takeover::kh1_cut_window()) && sora > 0x10000 && mp_enough(mp(sora), kind) && own_needs(kind).is_ok()
+    unlocked(kind) && pose::kh2().is_some_and(|k| kind.data(k).is_some()) && (super::takeover::kh2_has() || super::takeover::kh1_cut_window()) && sora > 0x10000 && mp_enough(mp(sora), kind) && own_needs(kind).is_ok()
+}
+
+/// Sora's save (`menu::save_block`): his level (`+4`), the Dive to the Heart's choice (`+0x48C`,
+/// set by `0x1402835B0`; it picks his level-up table at `0x142529A10`), and Traverse Town's story
+/// progress (`+0x1504`, the worlds' bytes `menu` reads for the bosses' gifts; 0x2B and up: Guard
+/// Armor beaten, as gaithern's KH-1FM-AP-LUA reads it).
+const SAVE_LEVEL: usize = 4;
+const SAVE_CHOICE: usize = 0x48C;
+const SAVE_TT_PROGRESS: usize = 0x1504;
+const GUARD_ARMOR_BEATEN: u8 = 0x2B;
+/// The choice's values, taken in the dream weapons' order (Sword 0x52, Shield 0x53, Rod 0x54).
+const CHOSE_ROD: u8 = 2;
+/// The other "first" form's level, and Final's (the user: "for the time being, lets have final
+/// form be unlocked at level 99 ... whichever form is the opposite ... unlocked at level 98").
+const SECOND_FORM_LEVEL: u8 = 98;
+const FINAL_LEVEL: u8 = 99;
+
+/// The form is open to Sora (the Drive list's; Anti is the code's, always). The user: "if the
+/// player picked the sword or the shield as their main power in the beginning of the game, have
+/// valor form be their first drive form. it should unlock after defeating guard armor. likewise,
+/// if the player picked wand, wisdom form should be their first drive form".
+pub unsafe fn unlocked(kind: Kind) -> bool {
+    let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
+    let Some(save) = super::menu::save_block(base) else { return false };
+    if !super::crash::readable(save + SAVE_TT_PROGRESS) {
+        return false;
+    }
+    let level = rd::<u8>(save + SAVE_LEVEL);
+    let choice = rd::<u8>(save + SAVE_CHOICE);
+    let guard_armor = rd::<u8>(save + SAVE_TT_PROGRESS) >= GUARD_ARMOR_BEATEN;
+    let first = if choice == CHOSE_ROD { Kind::Wisdom } else { Kind::Valor };
+    let open = match kind {
+        Kind::Anti => true,
+        Kind::Final => level >= FINAL_LEVEL,
+        k if k == first => guard_armor || level >= SECOND_FORM_LEVEL,
+        _ => level >= SECOND_FORM_LEVEL,
+    };
+    static LAST: AtomicU32 = AtomicU32::new(u32::MAX);
+    let key = (level as u32) << 16 | (choice as u32) << 8 | guard_armor as u32;
+    if LAST.swap(key, Ordering::Relaxed) != key {
+        log(&format!("Drive forms: Dive choice {choice} ({}), level {level}, Guard Armor {}: first form {}", ["Sword", "Shield", "Rod"].get(choice as usize).unwrap_or(&"?"), if guard_armor { "beaten" } else { "not yet" }, first.name()));
+    }
+    open
 }
 
 /// What a form needs besides MP: Valor its second Keyblade (`valor::keyblade`).
@@ -358,6 +401,9 @@ pub unsafe fn choose(sora: usize, kind: Kind) -> Result<&'static str, String> {
         return Err(format!("{}'s files didn't load", kind.name()));
     }
     own_needs(kind)?;
+    if !unlocked(kind) {
+        return Err(format!("{} isn't unlocked yet", kind.name()));
+    }
     let cut = super::takeover::kh1_cut_window();
     if !super::takeover::kh2_has() && !cut {
         return Err("KH1 has Sora".into());

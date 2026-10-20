@@ -3292,3 +3292,19 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - The user: "sora should not be able to use limits in ANY drive form including anti form". The
   Valor / Final refusal of KH1's specials (`combat::command`, and `exec` for their attack rows)
   now covers every form. Wisdom's spells, items and the context commands still run.
+
+### 2026-10-20: Stage 279 (Drive Forms unlocked by the Dive's choice; crackle; Anti's hang)
+- Unlocks (`form::unlocked`; the Drive list shows only the unlocked forms). The user: "if the
+  player picked the sword or the shield ... valor form be their first drive form. it should
+  unlock after defeating guard armor. likewise, if the player picked wand, wisdom form ...
+  final form be unlocked at level 99 ... the opposite ... at level 98".
+  - The Dive to the Heart's choice is the save's `+0x48C` (set by `0x1402835B0`; it picks his
+    level-up table at `0x142529A10`). Its values are taken as 0 Sword, 1 Shield, 2 Rod (the
+    dream weapons' order), unverified; the log names the choice.
+  - Guard Armor is beaten once Traverse Town's progress byte (save `+0x1504`) reaches 0x2B, as
+    gaithern's KH-1FM-AP-LUA reads it.
+  - Final opens at level 99, the other first form at 98. Anti stays the code's.
+- The sound's crackle: s276's 5 ms blocks were shorter than Windows' own mixing period. Blocks
+  are now 20 ms, four queued, still woken by the device's event.
+- Anti's hang by his foot. s277 took the pose's topmost bone, which was a hood string (drawn up
+  at the ledge, the user's video) while his foot hung far below. It is now his higher ankle.
