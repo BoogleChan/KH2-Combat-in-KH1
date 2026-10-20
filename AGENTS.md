@@ -3186,3 +3186,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - The user: "have valor and wisdom forms cost 1 MP". The Drive cost is per form now
   (`form::cost_mp`): Valor 1, Wisdom 1, Final 3. As before, he needs more MP than the cost (some
   left for the form to drain).
+
+### 2026-10-20: Stage 269 (2 bars of MP for a Drive Form's length)
+- The user: "when entering a drive form, add 2 bars of MP for the duration of the drive form, just
+  so sora has a little more time to be in drive".
+- Every form adds `valorstats::DRIVE_MP` (2) to his max MP while it lasts, through the same path
+  as Valor's second Keyblade (`valorstats::deltas`: live stats each step, the menus' copy). The
+  two bars are filled once as the form starts (after its cost is paid). On revert his max MP is
+  KH1's own again, and his MP is kept within it.

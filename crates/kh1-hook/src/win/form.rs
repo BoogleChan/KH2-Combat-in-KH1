@@ -458,6 +458,7 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
             }
             let before = mp(actor);
             super::reflect::pay_mp(actor, cost_mp(kind) * 100);
+            super::valorstats::drive_started();
             heal_full(actor);
             // KH1's "Give me strength!" (the user: "add the battle quote from kh1 where he says
             // "give me strength" when your transforming into a drive").
