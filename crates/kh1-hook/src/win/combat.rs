@@ -22,7 +22,7 @@
 
 use super::addr::Rva;
 use super::{hook, log, pose, takeover};
-use character_core::{Character, Output, StateName, TargetInfo};
+use character_core::{Character, Output, TargetInfo};
 use combat_core::{first_overlap, AttackVolume, HitRecord, Shape};
 use kh2_formats::battle::Battle;
 use kh2_rig::RigAnim;
@@ -650,10 +650,11 @@ pub struct Strikes {
     /// KH1's Keyblade as drawn last frame (`blade_points`, KH1 world): the swing's clash sweep
     /// runs from there to now.
     blade_prev: Option<Vec<[f32; 3]>>,
-    /// The Aerial Dodge's parry: KH1's guard attack object (`parry_step`), while it plays.
-    parry: Option<usize>,
-    /// KH1's guard attack data (offset), looked for once among Sora's rows.
-    guard_data: Option<Option<i32>>,
+    /// KH2's live guard windows as KH1 guard attack objects (`guard_step`): by (window, shape),
+    /// the object and the clashed-with mask seen last frame.
+    guard_objs: HashMap<(u64, usize), (usize, u32)>,
+    /// Our two copies of a swing's attack data for them (front-only, all round), made once.
+    guard_mem: Option<(usize, u32, u32)>,
 }
 
 /// KH1's point along an actor's bone `(actor, bone, t, out)` (`0x14029C990`): for bone 0x30 (the
@@ -952,6 +953,12 @@ pub unsafe fn sora_shots(sora: usize) -> usize {
 const ATTACK_POOL_RVA: Rva = Rva(0x2DB5110);
 const ATTACK_SLOTS: usize = 0x40;
 const GUARD_PRIORITY: i32 = 100;
+/// Guard objects: the most shapes per window, and the frames between re-arms (an attack met is
+/// met again after that, as KH1's interval objects are).
+const GUARD_SHAPES: usize = 4;
+const GUARD_REARM: f32 = 10.0;
+/// A pointer to KH1's handle (`0x14038B080`).
+const TO_HANDLE_RVA: Rva = Rva(0x38B080);
 const CLANG_RVA: Rva = Rva(0x2AC4C0);
 /// KH1's attack-vs-attack meeting (`0x1402B2890 (entry, entry)`).
 const CLASH_RVA: Rva = Rva(0x2B2890);
@@ -1274,40 +1281,56 @@ impl Strikes {
         self.bodies.iter().map(|b| b.target).collect()
     }
 
-    /// KH1's guard attack data among Sora's rows (priority `+0x3C` 100, as KH1's block makes its
-    /// guard; the rows' data and priorities logged once).
-    unsafe fn guard_data(&mut self, sora: usize) -> Option<i32> {
-        if let Some(g) = self.guard_data {
-            return g;
+    /// Our attack data copies for guard objects (front-only for a Keyblade's guard, all round
+    /// for one on his body), from his swing's data with no power, no reaction, no direction
+    /// turn; their handles. Made once.
+    unsafe fn guard_mem(&mut self, sora: usize) -> Option<(usize, u32, u32)> {
+        if let Some(m) = self.guard_mem {
+            return Some(m);
         }
         let base = BASE.load(Ordering::Relaxed);
-        let mut seen = HashSet::new();
-        let mut list = Vec::new();
-        let mut found = None;
-        for i in 0..0x40 {
-            let Some(r) = row_info(sora, i) else { break };
-            if r.motion < 0 || !seen.insert(r.data) {
-                continue;
-            }
-            let d = base + ATTACK_DATA_RVA + r.data as usize;
-            let prio = rd::<i32>(d + 0x3C);
-            list.push(format!("{:#x}: priority {prio} clash type {} bone {:#x} radius {}", r.data, rd::<u32>(d + 0x38) & 7, rd::<i32>(d + 0x10), rd::<i32>(d + 0x5C)));
-            if prio == GUARD_PRIORITY && found.is_none() {
-                found = Some(r.data);
-            }
+        let rows = self.rows?;
+        let mem = super::sys::VirtualAlloc(std::ptr::null_mut(), 0x1000, 0x3000, 0x04) as usize;
+        if mem == 0 {
+            return None;
         }
-        log(&format!("Sora's KH1 attack data (for the Aerial Dodge's parry): {}; guard: {found:#x?}", list.join(" | ")));
-        self.guard_data = Some(found);
-        found
+        let to_handle: unsafe extern "system" fn(usize) -> u32 = std::mem::transmute(base + TO_HANDLE_RVA);
+        let src = base + ATTACK_DATA_RVA + rows[0].data as usize;
+        for (k, cos) in [(0usize, 0.0f32), (1, -1.0)] {
+            let d = mem + k * 0x100;
+            std::ptr::copy_nonoverlapping(src as *const u8, d as *mut u8, 0x70);
+            wr(d + 8, 0u32);
+            wr(d + 0x60, 0.0f32);
+            wr(d + 0x64, cos);
+        }
+        let (h0, h1) = (to_handle(mem), to_handle(mem + 0x100));
+        if pose::ptr(h0) != mem || pose::ptr(h1) != mem + 0x100 {
+            log(&format!("guards: our attack data's handles don't resolve ({h0:#x} {h1:#x}): no guard objects"));
+            return None;
+        }
+        let _ = sora;
+        self.guard_mem = Some((mem, h0, h1));
+        Some((mem, h0, h1))
     }
 
-    /// The Aerial Dodge's parry (the user: "aerial doge seems to be missing its parry hitbox, it
-    /// needs to be the same as kh1's block hitbox"): while it plays, a KH1 guard attack object of
-    /// Sora's (priority 100: KH1's attack-vs-attack pass, `0x1402B2890` / `0x1402B2A30`, leaves a
-    /// guard unhurt and gives the attack meeting it a clash recoil), placed on its bone each
-    /// frame; freed as the dodge ends, made again once spent. KH1's guard data from Sora's rows;
-    /// without one, his swing's data made a guard (priority 100, every clash type).
-    unsafe fn parry_step(&mut self, sora: usize, out: &Output) {
+    /// KH2's guard windows as KH2 has them: every live `Guard` window of Sora's move (the guard
+    /// press 173 and its repel 42 on the Keyblade; Aerial Dodge 202 all through and Aerial
+    /// Recovery 40 frames 0..16 on his body; any other) puts KH1 guard attack objects on the
+    /// window's shapes (the user: "aerial dodge currently has a hitbox attached to it, I only
+    /// want a guard hitbox (like the guarding animation state)"; "aerial recovery is missing its
+    /// guard hitbox, i frames and guard hitbox timing should be 1:1 with kh2").
+    ///
+    /// - A KH1 guard is an attack object of priority 100: KH1's attack-vs-attack pass
+    ///   (`0x1402B2890` / `0x1402B2A30`) leaves it unhurt and gives the attack meeting it a clash
+    ///   (the attacker's recoil, a shot turned back). Clash type 4, a pure guard: KH1's pass
+    ///   never meets it with a body (`0x1402B1A50`), so it hits nobody. No power, no reaction.
+    /// - It meets attacks whatever Sora's own state (his invulnerable frames keep him out of the
+    ///   hit pass, not his attack objects): Aerial Recovery guards through its i-frames.
+    /// - Always live (activity 3) and re-armed every `GUARD_REARM` frames, placed on its shape
+    ///   each frame, freed when its window closes.
+    /// - An attack it stops: the window's ATKP "refact self" as KH2's guard reaction
+    ///   (`Character::clash`: 1 the guard repel, 2 nothing), logged.
+    unsafe fn guard_step(&mut self, sora: usize, out: &Output, anim: &RigAnim, character: &mut Character, battle: &Battle) {
         static N: AtomicU32 = AtomicU32::new(0);
         let base = BASE.load(Ordering::Relaxed);
         let free: unsafe extern "system" fn(usize) = std::mem::transmute(base + FREE_ATTACK_RVA);
@@ -1315,70 +1338,86 @@ impl Strikes {
             let f = rd::<u32>(o);
             f & 0x800 != 0 && f & 0x0020_0000 == 0 && pose::ptr(rd::<u32>(o + 0x34)) == sora
         };
-        if !matches!(out.state, StateName::AerialDodge) {
-            if let Some(o) = self.parry.take() {
+        let mut live: Vec<((u64, usize), Shape, u8, u16)> = Vec::new();
+        for g in &out.guard_boxes {
+            for (i, sh) in anim.attack_shapes(g.group, g.weapon).into_iter().take(GUARD_SHAPES).enumerate() {
+                live.push(((g.swing, i), sh, g.weapon, g.attack));
+            }
+        }
+        // Windows closed: their objects freed.
+        let keys: HashSet<(u64, usize)> = live.iter().map(|l| l.0).collect();
+        let gone: Vec<(u64, usize)> = self.guard_objs.keys().filter(|k| !keys.contains(k)).copied().collect();
+        for k in gone {
+            if let Some((o, _)) = self.guard_objs.remove(&k) {
                 if ours(o) {
                     free(o);
                 }
             }
+        }
+        if live.is_empty() {
             return;
         }
-        if let Some(o) = self.parry {
-            if !ours(o) || rd::<u32>(o) & 0x0010_0000 != 0 {
-                if ours(o) {
-                    free(o);
+        let Some((_, front, round)) = self.guard_mem(sora) else { return };
+        for (key, sh, weapon, attack) in live {
+            let c = [sh.center[0], -sh.center[1], sh.center[2], 1.0f32];
+            let r = sh.radius.max(sh.height).clamp(10.0, 150.0);
+            let (o, last) = match self.guard_objs.get(&key) {
+                Some(&(o, m)) if ours(o) => (o, m),
+                _ => {
+                    let free_bit: unsafe extern "system" fn() -> u32 = std::mem::transmute(base + FREE_BIT_RVA);
+                    let new_attack: unsafe extern "system" fn(usize, u32, usize) -> usize = std::mem::transmute(base + NEW_ATTACK_RVA);
+                    let src = pose::ptr(if weapon == 0 { round } else { front });
+                    let o = new_attack(sora, free_bit(), src);
+                    if o < 0x10000 {
+                        continue;
+                    }
+                    // Own position (mode 0), always live (activity 3), a pure guard (clash type 4),
+                    // not spent; priority 100; no power, no reaction; its data ours (the arc).
+                    let f = (rd::<u32>(o) & !0x3 & !0xC & !0xE0000 & !0x0010_0000 & !0x200) | 0xC | (4 << 17);
+                    wr(o, f);
+                    wr(o + 0x68, GUARD_PRIORITY);
+                    wr(o + 0x2C, 0i32);
+                    wr(o + 0x30, rd::<u32>(o + 0x30) & !0x1F);
+                    wr(o + 0x50, GUARD_REARM);
+                    wr(o + 0x5C, if weapon == 0 { round } else { front });
+                    wr(o + 0x10, c);
+                    wr(o + 0x40, c);
+                    wr(o + 0x70, c);
+                    wr(o + 0x80, c);
+                    if N.fetch_add(1, Ordering::Relaxed) < 60 {
+                        log(&format!("guard: motion {}'s window (ATKP {attack}, {}) as KH1 guard object {o:#x}, radius {r:.0}", out.motion, if weapon == 0 { "on his body, all round" } else { "on the Keyblade, in front" }));
+                    }
+                    self.guard_objs.insert(key, (o, 0));
+                    (o, 0)
                 }
-                self.parry = None;
-                if N.fetch_add(1, Ordering::Relaxed) < 30 {
-                    log("Aerial Dodge parry: spent (it met an attack), made again");
-                }
-            }
-        }
-        if self.parry.is_none() {
-            let guard = self.guard_data(sora);
-            let Some(data) = guard.or_else(|| self.rows.map(|r| r[(true as usize) * 2].data)) else { return };
-            let free_bit: unsafe extern "system" fn() -> u32 = std::mem::transmute(base + FREE_BIT_RVA);
-            let new_attack: unsafe extern "system" fn(usize, u32, usize) -> usize = std::mem::transmute(base + NEW_ATTACK_RVA);
-            let o = new_attack(sora, free_bit(), base + ATTACK_DATA_RVA + data as usize);
-            if o < 0x10000 {
-                return;
-            }
-            // Live all through (activity 1), not spent; a guard's priority. Made from a swing's
-            // data: no direction (clash type 0, meeting every type KH1 lets meet), no damage.
-            let mut f = (rd::<u32>(o) & !0xC & !0x0010_0000) | 0x4;
-            if guard.is_none() {
-                f &= !0xE0000;
-                wr(o + 0x2C, 0i32);
-                wr(o + 0xC, rd::<f32>(o + 0xC).max(45.0));
-            }
-            wr(o, f);
-            wr(o + 0x68, GUARD_PRIORITY);
-            self.parry = Some(o);
-            if N.fetch_add(1, Ordering::Relaxed) < 30 {
-                log(&format!("Aerial Dodge parry: KH1 guard object {o:#x} from data {data:#x} ({}), radius {:.0}", if guard.is_some() { "KH1's guard data" } else { "his swing's, made a guard" }, rd::<f32>(o + 0xC)));
-            }
-        }
-        // On its bone (KH1's point along it, the data's two offsets: its swept segment), else
-        // round his middle.
-        if let Some(o) = self.parry {
-            let point: unsafe extern "system" fn(usize, u32, f32, *mut [f32; 4]) = std::mem::transmute(base + BONE_POINT_RVA);
-            let bone = rd::<i32>(o + 0x20);
-            let (a, b) = if bone >= 0 {
-                let (mut a, mut b) = ([0.0f32; 4], [0.0f32; 4]);
-                point(sora, bone as u32, rd::<f32>(o + 0x24), &mut a);
-                point(sora, bone as u32, rd::<f32>(o + 0x28), &mut b);
-                (a, b)
-            } else {
-                let p = rd::<[f32; 3]>(sora + 0x10);
-                let c = [p[0], p[1] - 60.0, p[2], 1.0];
-                (c, c)
             };
-            if a.iter().chain(b.iter()).all(|v| v.is_finite()) {
-                wr(o + 0x70, rd::<[f32; 4]>(o + 0x10));
-                wr(o + 0x80, rd::<[f32; 4]>(o + 0x40));
-                wr(o + 0x10, [a[0], a[1], a[2], 1.0f32]);
-                wr(o + 0x40, [b[0], b[1], b[2], 1.0f32]);
-                wr(o, rd::<u32>(o) | 0x1_0000);
+            // On its shape now (swept from last frame's).
+            wr(o + 0x70, rd::<[f32; 4]>(o + 0x10));
+            wr(o + 0x80, rd::<[f32; 4]>(o + 0x40));
+            wr(o + 0x10, c);
+            wr(o + 0x40, c);
+            wr(o + 0xC, r);
+            wr(o + 0x3C, r);
+            wr(o, rd::<u32>(o) | 0x1_0000);
+            // An attack it stopped since last frame (its clashed-with mask gained a bit).
+            let mask = rd::<u32>(o + 0x9C);
+            let new = mask & !last;
+            self.guard_objs.insert(key, (o, mask));
+            if new == 0 {
+                continue;
+            }
+            let me = rd::<[f32; 3]>(sora + 0x10);
+            let from = self.shots.iter().find(|s| rd::<u32>(s.obj + 0x54) & new != 0).map(|s| (s.owner, rd::<[f32; 3]>(s.obj + 0x10)));
+            let toward = from.map(|(_, p)| glam::Vec2::new(p[0] - me[0], p[2] - me[2]).normalize_or_zero()).filter(|v| *v != glam::Vec2::ZERO).unwrap_or_else(|| {
+                let f = rd::<[f32; 4]>(sora + 0x30);
+                glam::Vec2::new(f[0], f[2])
+            });
+            let refact = battle.attack_for_level(attack, 0, 0).map_or(2, |a| a.refact_self);
+            if refact != 2 {
+                character.clash(refact, 0, toward.to_array());
+            }
+            if N.fetch_add(1, Ordering::Relaxed) < 60 {
+                log(&format!("guard: motion {}'s guard (ATKP {attack}) stopped an attack of {:#x?} (refact self {refact})", out.motion, from.map(|f| f.0)));
             }
         }
     }
@@ -1396,8 +1435,9 @@ impl Strikes {
         self.volumes.retain(|k, _| keys.contains(k));
         self.met_shots.retain(|(sw, _)| keys.iter().any(|k| k.0 == *sw));
         let air = character.airborne();
-        // The Aerial Dodge's parry (KH1's guard object while it plays).
-        self.parry_step(sora, out);
+        // KH2's guard windows as KH1 guard objects (the Aerial Dodge's, Aerial Recovery's, the
+        // guard's).
+        self.guard_step(sora, out, anim, character, battle);
         // KH1's Keyblade as drawn, this frame and last (the user: "can you align clanks with
         // soras kh1 keyblade, it should align with the length of the keyblade as well so smaller
         // keyblades are harder to clank while longer ones clank much more easy"): the right
@@ -2041,6 +2081,8 @@ const RECORD_RVA: Rva = Rva(0x28D7D0);
 /// The menu chain's top (`[top - 8]` is the list under it), and its first slot (the top level).
 const CHAIN_RVA: Rva = Rva(0x2D54450);
 const MENU_ROOT_RVA: Rva = Rva(0x2D543F0);
+/// The Summon list (menu 3, `docs/kh1-drive.md`; on the Drive page it holds the forms).
+const SUMMON_MENU_RVA: Rva = Rva(0x5296A8);
 static ORIG_RUN_ENTRY: AtomicUsize = AtomicUsize::new(0);
 
 /// KH2's menu takes a spell only when the move playing can be cut by one; before that the
@@ -2153,6 +2195,33 @@ unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
         return true;
     }
     if !super::settings::get().commands || !takeover::ON.load(Ordering::Relaxed) || !takeover::kh2_has() || takeover::kh1_casting() {
+        return false;
+    }
+    // The Items and Summon lists as the Magic list (the user: "the item and summon sub menus
+    // should follow the same rules as the magic sub menu where if sora isn't available to input
+    // that action then the submenu doesn't go away with the confirm button"): KH2's move playing
+    // can't be cut by a command (`can_take_command`, what `command` would have made it wait
+    // for), or one KH1 refuses in the air: the press does nothing and the list stays open (no
+    // waiting command). A target list opening is let through; its own entry is the press.
+    let summon_list = base + SUMMON_MENU_RVA;
+    let from_summons = menu == summon_list || (rd::<u32>(menu) == 4 && entry_parent(base) == Some(summon_list));
+    if (kind == ITEM_COMMAND_TYPE || from_summons) && (rd::<u32>(menu) == 4 || sub <= 0) {
+        let what = if kind == ITEM_COMMAND_TYPE { "item" } else { "summon" };
+        let sora = rd::<u64>(base + PARTY_RVA) as usize;
+        // (`command`'s own air refusal, before the menu closes.)
+        if !matches!(kind, 0 | 1 | 2 | 99 | 0x47) && (takeover::kh2_airborne() || (sora > 0x10000 && rd::<i32>(sora + 0x70) == 2)) {
+            let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
+            sound(4);
+            cmd_log(format!("{what} (command {kind:#x}) refused in the air; the list stays open"));
+            return true;
+        }
+        if takeover::with_kh2(|c, _| c.can_take_command()) == Some(false) {
+            static M: AtomicU32 = AtomicU32::new(0);
+            if M.fetch_add(1, Ordering::Relaxed) % 30 == 0 {
+                cmd_log(format!("{what} (command {kind:#x}) not taken yet: KH2's move (motion {}) can't be cut by a command now; the list stays open", takeover::KH2_MOTION.load(Ordering::Relaxed)));
+            }
+            return true;
+        }
         return false;
     }
     // Only spells (Reflect's too); a target list opening is no cast.

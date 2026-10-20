@@ -329,11 +329,11 @@ fn note_play(what: impl FnOnce() -> String) {
     }
 }
 
-/// Sora's swing grunts (VTBL voice 4: clips 9..13, his combo swings' voice) and Reflect's
-/// finisher line (voice 25, clip 31), loaded whatever `kh2_voice` says (`reflect_voice`).
-pub const SWING_VOICE: i16 = 4;
+/// Reflect's finisher line (KH2's voice 25, clip 31), loaded whatever `kh2_voice` says
+/// (`reflect_voice`).
 pub const REFLECT_FINISHER_VOICE: i16 = 25;
-pub const REFLECT_VOICES: [i16; 2] = [SWING_VOICE, REFLECT_FINISHER_VOICE];
+/// (Its casts' grunts are KH1's, `kh1voice`; only the finisher's line is KH2's.)
+pub const REFLECT_VOICES: [i16; 1] = [REFLECT_FINISHER_VOICE];
 
 /// Reflect's cast voice `v` (`reflect`), whatever `kh2_voice` says: one of its clips at random.
 pub unsafe fn reflect_voice(v: i16) {

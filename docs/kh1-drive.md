@@ -205,3 +205,36 @@ target list) still open it.
   the Drive list and, in the form, the Drive row itself (it reads Revert and opens no list;
   `drive::revert_row` from `combat::run_entry`, which returns 0 before KH1's run so the list
   isn't pushed).
+
+## The Drive list's title and colour, Items / Summon like Magic, no Magic in Valor
+
+**List drawing (RE, no runtime check yet).** `0x140279700` draws each open list through
+`0x140277F40 (kind, menu, _, _, layout, x, y, alpha)` with a 0x200-byte layout per kind
+(`0x142859C60 + kind*0x200`: 0 top, 1 magic, 2 items, 3 summon `0x14285A260`, 4 targets). It
+points the text packet (`0x142853218`) at its buffer, then `0x1402769D0` draws: the background
+pair (`+0x18`, `+0x50`), for kinds other than 0 the header tab (`+0x20`, texture `+8`: no text
+call, so the word "SUMMON" is in the tab's texture), the row panels (`+0x28`, `+0x10` of them,
+0xC0 bytes; `+0x58` a second set or 0) and the names (`0x1402787B0 (cmd, x, y, bright)` ->
+`0x1402CFB20 (packet, 1, rgba, x', y', text)`, then `0x1403028F0 (start)` runs the packet when the
+list's alpha `0x142528820` isn't 0). A sprite record (`0x14027C660`): `+0..+0xC` its rectangle
+(`0x14027C2C0`, animated with `+0x60` & 0x14), `+0x20` r, g, b, a ints (four vertices 0x10 apart
+with `+0x60` & 0x20, else one), colour animated instead with `+0x60` & 0xA or & 0xC0.
+
+**Ours (`drive::list_draw`, a hook on 0x140277F40).** Kind 3 with the summon list holding the
+form ids on page 2: for that call only, every background / row panel's colour loses its hue (each
+vertex's r, g, b set to their brightest: a tint becomes white, greys and black stay), the header
+tab is swapped for a copy with no size (nothing drawn), and after it "DRIVES" is drawn as a row's
+name is, white (0x80, the list's alpha), at the tab's rectangle + the list's x (`+[0x14232E6CC]`)
+/ y; colours and the tab are put back right after. If KH1's tab texture itself is coloured (not
+tinted by vertex colour), the panels stay that colour; the log line "Drive list: title ..."
+gives the rectangle and colours seen, `TITLE_DX` / `TITLE_DY` move the title.
+
+**Items and Summon lists (`combat::spell_not_yet`).** As a spell: while KH2 has Sora and his move
+can't take a command (`can_take_command`, what `command` made such a command wait for), an item
+(command type 3, its target list too) or a summon does nothing on confirm and the list stays
+open; in the air (KH2's or KH1's air state) one is refused with the "can't" sound, the list
+open. A target list opening is let through.
+
+**Valor (`drive::fill`, every frame after KH1's fill, both pages).** The top's Magic entry (2)
+gets its greyed / blocked bit (1), as KH1 itself leaves it with no spell; page 2's Drive row is
+drawn and run from the magic list's last entry and its own bit, so Revert stays.

@@ -774,13 +774,18 @@ pub unsafe fn before_step(actor: usize, ch: &mut Character) {
             rt.started = Some(Instant::now());
         }
     }
-    // His voice, always (not `kh2_voice`'s): a grunt of his swings' on a ground or air cast, the
-    // finisher's own line on the combo's finisher (the user: "pick a few grunt sounds to play at
-    // random each time reflect is casted (pretty much the same as his base attack) then for
-    // reflect finisher can you have the voice line that says "protect!" play"). KH2's MAGC
-    // finisher voice for Reflect, 25 (Fire / Blizzard / Thunder name theirs 11 / 12 / 13).
-    let v = if finisher { magc(level).map(|r| r.voice_finisher).filter(|v| *v != 255).map_or(super::kh2sound::REFLECT_FINISHER_VOICE, |v| v as i16) } else { super::kh2sound::SWING_VOICE };
-    super::kh2sound::reflect_voice(v);
+    // His voice, always (not `kh2_voice`'s): on a ground or air cast one of his KH1 combo swing
+    // grunts at random (`kh1voice`; the user: "pick a few grunt sounds to play at random each time
+    // reflect is casted (pretty much the same as his base attack)", then "sfx is calling kh2 battle
+    // quotes but I need kh1 battle quotes"); on the combo's finisher the line "Protect!" (the
+    // user), which only KH2 has (KH1 has no Reflect): KH2's MAGC finisher voice for Reflect, 25
+    // (Fire / Blizzard / Thunder name theirs 11 / 12 / 13).
+    if finisher {
+        let v = magc(level).map(|r| r.voice_finisher).filter(|v| *v != 255).map_or(super::kh2sound::REFLECT_FINISHER_VOICE, |v| v as i16);
+        super::kh2sound::reflect_voice(v);
+    } else {
+        super::kh1voice::swing_grunt(actor);
+    }
     note(format!(
         "{} cast (level {level}): motion {motion}{}, MP {before:?} -> {:?} (its effects loaded: {})",
         NAMES[(level - 1) as usize],

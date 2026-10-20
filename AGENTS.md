@@ -2792,3 +2792,23 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   KH2 attack grunt on each cast and voice 25 (its finisher line) on the finisher.
 - Looks (helper, `form-colors`): Wisdom's sleeves blue; Valor's sleeves, belt, hood lining and
   shoes red (`tint::Look`, `docs/kh1-tint.md`).
+
+### 2026-10-19: Stage 234 (the user's 21:25 list; command menu)
+- Lock-on: s233's lower hop at a target below undone.
+- Wisdom: an Attack pressed during a KH1 spell while frozen frames hold the cut is carried
+  (`CARRY_MAX` 10 frames) and goes on into KH2's combo; Cure is KH1's Cure on KH2 Cure's motion
+  (only Fire/Blizzard/Thunder are KH2's in Wisdom), falling and ending like the other KH1 spells.
+- Forms get Aerial Recovery when the moveset has its clip; its guard and invulnerable frames come
+  from the clip's windows (KH2's frames 0-16), not a fixed rule.
+- Aerial Dodge: no invulnerability, only its Guard window (ATKP 406, a KH1 guard object).
+- Guards (helper, `guards`): KH2 Guard windows are KH1 pure guard objects (clash type 4, priority
+  100) for Aerial Dodge and Aerial Recovery.
+- Valor: Square in a combo window goes to the finisher (rows 12 ground, 38 air,
+  `square_finishers`); the left trail runs along the second Keyblade's own blade range; the form
+  effects anchor on the Keyblades, sent in Sora's facing (helper, `valor-fx`).
+- Final: air casts are KH2's own (no KH1 fall).
+- Voices (helper, `kh1-voice`): KH1's swing grunt (group 4, random) on the dodge roll; KH1's
+  "Give me strength!" (clip 37, inferred) on a Drive.
+- Command menu (helper, `cmd-menu`): the Drive list's title reads DRIVES and its panels are white
+  (list draw `0x140277F40` hooked); Items and Summons refuse a confirm Sora can't take and stay
+  open, like Magic; Magic is greyed in Valor. `docs/kh1-drive.md`.

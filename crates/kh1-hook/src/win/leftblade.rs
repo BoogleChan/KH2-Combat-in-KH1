@@ -94,6 +94,17 @@ const FX_STATE: usize = 0x14;
 const FX_OWNER: usize = 0x18;
 /// Our owner block: the actor copy, the instance copy, the matrices.
 const FAKE_SIZE: usize = 0x8000;
+/// Its weapon object (a copy of Sora's, `0x140284D40` builds his: 0x60 bytes, `+0x18` the
+/// weapon's effect data, `+0x20` its row in `btltbl.bin`'s weapon table, whose `+0x24` / `+0x28`
+/// are the blade's range along bone 0x30, `0x14029C990`): the left Keyblade's own row, so its
+/// trail spans its own blade, not the right one's (the user: "valor forms 2nd keyblade trail is
+/// not aligned with the keyblades length").
+const FAKE_WEAPON: usize = 0x700;
+const WEAPON_OBJ_SIZE: usize = 0x60;
+const OBJ_ROW: usize = 0x20;
+/// A weapon row's blade range (start, end) along bone 0x30, and the rows' size.
+const ROW_BLADE: usize = 0x24;
+const WEAPON_ROW_SIZE: usize = 0x58;
 const FAKE_INSTANCE: usize = 0x800;
 const FAKE_MATS: usize = 0x1000;
 /// Trails kept at once (one swinging, the others fading).
@@ -160,6 +171,13 @@ static STATE: Mutex<State> = Mutex::new(State { loaded: None, pending: None, fai
 /// whose body it is drawing, the user: the second Keyblade jittered as Valor fell in place).
 static KH2_LEFT: Mutex<std::collections::VecDeque<(u64, Vec<Mat4>, Instant)>> = Mutex::new(std::collections::VecDeque::new());
 
+/// KH2's left Keyblade's root (KH2 model space) of the last step, if recent (`kh2fx`'s weapon
+/// anchors for Valor's and Final's effects).
+pub fn kh2_left_root() -> Option<Mat4> {
+    let g = KH2_LEFT.try_lock().ok()?;
+    g.back().filter(|(_, _, t)| t.elapsed().as_secs_f32() < 0.5).and_then(|(_, b, _)| b.first().copied())
+}
+
 /// A body pose's signature (its bones' places, bit for bit).
 fn body_sig(body: &[Mat4]) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -193,6 +211,9 @@ static TRAIL_ID: AtomicU32 = AtomicU32::new(u32::MAX);
 /// filled this Valor.
 static FAKE: AtomicUsize = AtomicUsize::new(0);
 static FAKE_INSTANCE_H: AtomicU32 = AtomicU32::new(0);
+static FAKE_WEAPON_H: AtomicU32 = AtomicU32::new(0);
+/// The left Keyblade's weapon row (0: unknown; the right one's is used).
+static LEFT_ROW: AtomicUsize = AtomicUsize::new(0);
 static FAKE_MATS_H: AtomicU32 = AtomicU32::new(0);
 static FAKE_FILLED: AtomicBool = AtomicBool::new(false);
 /// The left weapon's trail window is open (last KH2 step).
@@ -261,8 +282,9 @@ pub unsafe fn install() {
 // ---------------------------------------------------------------------------------------------
 // Loading
 
-/// The `.wpn` file name of a Sora weapon (KH1 item id), from `btltbl.bin`'s weapon table.
-unsafe fn file_name(base: usize, item: u8) -> Option<String> {
+/// A Sora weapon's row (KH1 item id) in `btltbl.bin`'s weapon table: its `.wpn` stem first, its
+/// blade's range at `ROW_BLADE` (what his weapon object points at, `0x140284D40`).
+unsafe fn weapon_row(base: usize, item: u8) -> Option<usize> {
     if item == 0 {
         return None;
     }
@@ -276,10 +298,16 @@ unsafe fn file_name(base: usize, item: u8) -> Option<String> {
         return None;
     }
     let off = rd::<i32>(base + WEAPON_TABLE_OFFSETS_RVA);
-    let at = (base + BTLTBL_RVA).checked_add(off as usize)? + (row as usize - 1) * 0x58;
-    if off <= 0 || !readable(at, 16) {
+    if off <= 0 {
         return None;
     }
+    let at = (base + BTLTBL_RVA).checked_add(off as usize)? + (row as usize - 1) * WEAPON_ROW_SIZE;
+    readable(at, WEAPON_ROW_SIZE).then_some(at)
+}
+
+/// The `.wpn` file name of a Sora weapon (KH1 item id), from `btltbl.bin`'s weapon table.
+unsafe fn file_name(base: usize, item: u8) -> Option<String> {
+    let at = weapon_row(base, item)?;
     let stem: Vec<u8> = std::slice::from_raw_parts(at as *const u8, 16).iter().copied().take_while(|&c| c != 0).collect();
     if stem.is_empty() || !stem.iter().all(|c| c.is_ascii_alphanumeric() || *c == b'_') {
         return None;
@@ -299,6 +327,7 @@ pub unsafe fn show(item: Option<u8>) {
         return;
     };
     let base = BASE.load(Ordering::Relaxed);
+    LEFT_ROW.store(weapon_row(base, item).unwrap_or(0), Ordering::Relaxed);
     let Ok(mut st) = STATE.try_lock() else { return };
     // A load that never answered: given up (its buffer is kept, never reused).
     if let Some((it, buf, since)) = st.pending {
@@ -806,13 +835,14 @@ unsafe fn fill_owner() -> bool {
             return false;
         }
         let to_handle: unsafe extern "system" fn(usize) -> u32 = std::mem::transmute(base + TO_HANDLE_RVA);
-        let (ih, mh) = (to_handle(fake + FAKE_INSTANCE), to_handle(fake + FAKE_MATS));
-        if super::pose::ptr(ih) != fake + FAKE_INSTANCE || super::pose::ptr(mh) != fake + FAKE_MATS {
-            log_n(&N, 3, || format!("trail: handles of its owner don't resolve ({ih:#x} {mh:#x}): no trail"));
+        let (ih, mh, wh) = (to_handle(fake + FAKE_INSTANCE), to_handle(fake + FAKE_MATS), to_handle(fake + FAKE_WEAPON));
+        if super::pose::ptr(ih) != fake + FAKE_INSTANCE || super::pose::ptr(mh) != fake + FAKE_MATS || super::pose::ptr(wh) != fake + FAKE_WEAPON {
+            log_n(&N, 3, || format!("trail: handles of its owner don't resolve ({ih:#x} {mh:#x} {wh:#x}): no trail"));
             TRAIL_HOOKED.store(false, Ordering::Relaxed);
             return false;
         }
         FAKE_INSTANCE_H.store(ih, Ordering::Relaxed);
+        FAKE_WEAPON_H.store(wh, Ordering::Relaxed);
         FAKE_MATS_H.store(mh, Ordering::Relaxed);
         FAKE.store(fake, Ordering::Relaxed);
         log_n(&N, 3, || format!("trail: its owner made at {fake:#x}"));
@@ -821,6 +851,18 @@ unsafe fn fill_owner() -> bool {
     std::ptr::copy_nonoverlapping(inst as *const u8, (fake + FAKE_INSTANCE) as *mut u8, INSTANCE_SIZE);
     std::ptr::write_unaligned((fake + ACTOR_INSTANCE) as *mut u32, FAKE_INSTANCE_H.load(Ordering::Relaxed));
     std::ptr::write_unaligned((fake + FAKE_INSTANCE + INST_WORLD) as *mut u32, FAKE_MATS_H.load(Ordering::Relaxed));
+    // Its weapon object: Sora's, with the left Keyblade's row (its blade's range) and effect data.
+    let obj = super::pose::ptr(rd::<u32>(sora + ACTOR_WEAPON));
+    let row = LEFT_ROW.load(Ordering::Relaxed);
+    if row != 0 && readable(obj, WEAPON_OBJ_SIZE) {
+        std::ptr::copy_nonoverlapping(obj as *const u8, (fake + FAKE_WEAPON) as *mut u8, WEAPON_OBJ_SIZE);
+        std::ptr::write_unaligned((fake + FAKE_WEAPON + OBJ_ROW) as *mut u64, row as u64);
+        let fx = EFFECTS.load(Ordering::Relaxed);
+        if fx != 0 {
+            std::ptr::write_unaligned((fake + FAKE_WEAPON + OBJ_EFFECTS) as *mut u64, fx as u64);
+        }
+        std::ptr::write_unaligned((fake + ACTOR_WEAPON) as *mut u32, FAKE_WEAPON_H.load(Ordering::Relaxed));
+    }
     // (The weapon bones too: a rigid copy of his right hand's Keyblade, so the trail is KH1's
     // right one exactly, on the left grip.)
     for i in 0..SORA_BONES {
@@ -971,7 +1013,17 @@ unsafe fn trail_step(valor: bool, motion: u16, frame: u32, either: bool) {
     // (KH1 clears this bit on its own trail too, `0x1402BFD70`.)
     std::ptr::write_unaligned((effect + FX_STATE) as *mut u32, rd::<u32>(effect + FX_STATE) & !0x20);
     trails.push(Trail { effect, fading: false, logged: 0 });
-    log_n(&N, 12, || format!("trail {effect:#x} made at motion {motion} frame {frame} (id {id:#x}, {whose} look)"));
+    // Each Keyblade's blade range along bone 0x30 (its weapon row's), the left one's on our owner.
+    let blade = |o: usize| -> String {
+        let row = if readable(o + OBJ_ROW, 8) { rd::<u64>(o + OBJ_ROW) as usize } else { 0 };
+        if readable(row + ROW_BLADE, 8) {
+            format!("{:.2}..{:.2}", rd::<f32>(row + ROW_BLADE + 4), rd::<f32>(row + ROW_BLADE))
+        } else {
+            "?".into()
+        }
+    };
+    let left_obj = super::pose::ptr(rd::<u32>(fake + ACTOR_WEAPON));
+    log_n(&N, 12, || format!("trail {effect:#x} made at motion {motion} frame {frame} (id {id:#x}, {whose} look; blade right {}, left {})", blade(obj), blade(left_obj)));
 }
 
 /// Our trails ended at once (their effect data is about to go: another Keyblade, or released).

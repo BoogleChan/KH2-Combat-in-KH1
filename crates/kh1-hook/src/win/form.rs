@@ -356,7 +356,9 @@ pub fn battle<'a>(d: &Drive, kh2: &'a pose::Kh2) -> &'a Arc<Battle> {
 fn form_abilities(sora: &Abilities, form: &Character, kind: Kind) -> Abilities {
     let mut a = Abilities {
         guard: form.moveset.clips.contains_key(&character_core::motion::GUARD),
-        aerial_recovery: false,
+        // (Sora's Aerial Recovery in the form, with its own recovery motion: the user, Wisdom and
+        // Valor were "missing aerial recovery".)
+        aerial_recovery: sora.aerial_recovery && form.moveset.clips.contains_key(&character_core::motion::AIR_RECOVERY),
         combo_plus: sora.combo_plus,
         air_combo_plus: sora.air_combo_plus,
         finishing_plus: sora.finishing_plus,
@@ -436,6 +438,9 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
             let before = mp(actor);
             super::reflect::pay_mp(actor, COST);
             heal_full(actor);
+            // KH1's "Give me strength!" (the user: "add the battle quote from kh1 where he says
+            // "give me strength" when your transforming into a drive").
+            super::kh1voice::give_me_strength(actor);
             d.change = Some(0);
             d.changing_to = Some(kind);
             CHANGING.store(true, Ordering::Relaxed);
@@ -469,6 +474,12 @@ unsafe fn arrive(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     let sora = ch.abilities.clone();
     let own = form_abilities(&sora, &f.character, kind);
     swap(ch, anim, &f.character, &f.rig, own.clone());
+    // Valor: Square in a combo goes into its finisher, row 12 (155) on the ground, 38 (183) in the
+    // air (its kind-0 rows, reached only by id; the user: "valor forms ability to go into a
+    // finisher by pressing square during a combo").
+    if kind == Kind::Valor {
+        ch.square_finishers = Some((12, 38));
+    }
     // (s220 showed Valor's stance in place of its landing, whose clip is Sora's own; the user,
     // s229: "valor form is currently missing kh2's landing animation": KH2's landing plays.)
     super::kh2fx::owner_gone();

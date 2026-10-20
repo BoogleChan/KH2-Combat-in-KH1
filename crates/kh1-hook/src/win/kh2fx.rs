@@ -282,11 +282,27 @@ pub fn form_event(motion: u16, el: i16) {
     let Ok(mut g) = STATE.lock() else { return };
     let Some(s) = g.as_mut() else { return };
     let tip = s.tip_local;
+    // (Each element's anchor logged once: which bone, which weapon point.)
+    {
+        static SEEN: Mutex<Vec<(u8, i16)>> = Mutex::new(Vec::new());
+        let pkg = if super::form::in_final() { FINAL } else { VALOR };
+        if let (Ok(mut seen), Some(sp)) = (SEEN.lock(), s.spell.get(pkg as usize - 1).and_then(|p| p.as_ref())) {
+            if !seen.contains(&(pkg, el)) && seen.len() < 64 {
+                seen.push((pkg, el));
+                if let Some(e) = sp.fx.library().element(el as u16) {
+                    log(&format!(
+                        "KH2 effect: form package {pkg} element {el} (motion {motion}): anchor {:#06x}, flags {:#x}, at {:.0?}, turned {:.2?}",
+                        e.bone, e.flags, e.translation, e.rotation
+                    ));
+                }
+            }
+        }
+    }
     // (Final Form's own package in Final, else Valor's.)
     let pkg = if super::form::in_final() { FINAL } else { VALOR };
     let Some(sp) = s.spell.get_mut(pkg as usize - 1).and_then(|p| p.as_mut()) else { return };
     let ends = sp.fx.library().element(el as u16).is_some_and(|e| e.flags & ENDS_WITH_MOTION != 0);
-    match sp.fx.start(el as u16, &mut |c| bone(c, tip)) {
+    match sp.fx.start(el as u16, &mut |c| form_bone(c, tip)) {
         Some(h) => {
             unsafe { super::kh2sound::spell_element(pkg, el as u16) };
             s.form_running.push((spell_handle(pkg, h), motion, ends));
@@ -452,6 +468,51 @@ fn bone(code: u16, tip_local: Vec3) -> Option<Mat4> {
         }
     })
     .flatten()
+}
+
+/// A form's element anchor (Valor's, Final's: two Keyblades). KH2's weapon anchors
+/// (`0x1403B43D0`): 0x4003 / 0x4004 the tip of weapon 0 / 1 (an odd code the first, an even the
+/// second), 0x4005 / 0x4006 its root, 0x4007 / 0x4008 halfway (× 0.5, `0x14062399C`); `bone`
+/// sent every weapon code to the right hand's tip. Here the point is that Keyblade's (its root
+/// from KH2's weapon bones of the step, the tip at the right one's tip-from-root, the same model),
+/// turned with Sora's facing, as the object root (the user: "valor forms grounded finisher
+/// effect should spawn in front of the keyblades and its direction its sent should be the same
+/// as where sora is facing"). Other codes as `bone`.
+fn form_bone(code: u16, tip_local: Vec3) -> Option<Mat4> {
+    if !(0x4003..=0x4008).contains(&code) {
+        return bone(code, tip_local);
+    }
+    let second = (code - 1) & 1 == 1;
+    let along = match code {
+        0x4003 | 0x4004 => 1.0,
+        0x4005 | 0x4006 => 0.0,
+        _ => 0.5,
+    };
+    let _ = tip_local;
+    let right_root = {
+        let g = super::takeover::POSE.try_lock().ok()?;
+        *g.as_ref()?.1.first()?
+    };
+    // The tip in a Keyblade root's frame: `TIP_BIND` is W_EX010's collision point in the weapon
+    // skeleton's own bind (its root there at (-59.7, 108, -2.5): the tip 78 along it), the same
+    // model in both hands.
+    static TIP_IN_ROOT: std::sync::OnceLock<Option<Vec3>> = std::sync::OnceLock::new();
+    let tip_in_root = (*TIP_IN_ROOT.get_or_init(|| {
+        let w = super::pose::kh2()?.rig.weapons.first()?;
+        let root = *kh2_anim::Pose::bind(&w.skeleton).bones.first()?;
+        let t = root.inverse().transform_point3(TIP_BIND);
+        log(&format!("KH2 effects: the Keyblade's tip {:.1?} from its root (weapon anchors)", t));
+        Some(t)
+    }))?;
+    let root = if second { super::leftblade::kh2_left_root()? } else { right_root };
+    let point_model = root.transform_point3(tip_in_root * along);
+    super::pose::kh2_pose(|_, w| {
+        // The object root's turn (Sora's facing, KH2's object axes as for 0x4000) at the point.
+        let obj = *w * Mat4::from_scale(Vec3::new(1.0, -1.0, -1.0));
+        let mut m = obj;
+        m.w_axis = w.transform_point3(point_model).extend(1.0);
+        m
+    })
 }
 
 /// A KH2 controller event (from `takeover`, each frame KH2 has Sora).

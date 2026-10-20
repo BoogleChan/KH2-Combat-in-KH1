@@ -172,6 +172,18 @@ pub unsafe fn fill(actor: usize, _flags: usize) {
     if !on() || base == 0 {
         return;
     }
+    // In Valor Form the top's Magic row greyed and blocked, on both pages (the user: "when in
+    // valor form magic command menu should be unselectable"). KH1 keeps the same bit (1) set
+    // when Sora has no spell, so the list doesn't open; page 2's Drive row is drawn from the
+    // magic list's own bit (`fill` below), so Revert stays usable.
+    if super::form::in_valor() {
+        let top = base + MENU_RVA;
+        if rd::<u8>(top + 0x14 + 1) == 2 {
+            for off in [4usize, 8] {
+                wr(top + off, rd::<u32>(top + off) | 2);
+            }
+        }
+    }
     if !PAGE2.load(Ordering::Relaxed) || rd::<u32>(base + SUMMON_OUT_RVA) & 8 != 0 || !ensure_records(base) {
         return;
     }
@@ -268,6 +280,153 @@ unsafe extern "system" fn step() -> u64 {
     f()
 }
 
+/// KH1's list draw (`0x140277F40 (kind, menu, _, _, layout, x, y, alpha)`, called by
+/// `0x140279700` per open list: kind 3 the summon list with its layout `0x14285A260`); it sets
+/// the text packet pointer, then draws through `0x1402769D0`: the layout's background panels
+/// (`+0x18`, `+0x50`), its header tab (`+0x20`, a sprite record whose texture carries the word
+/// "SUMMON"), its row panels (`+0x28`, `+0x10` of them, 0xC0 bytes each; `+0x58` a second
+/// set or none) and the rows' names.
+const LIST_DRAW_RVA: Rva = Rva(0x277F40);
+/// `mov [rsp+8], rbx; mov [rsp+0x10], rbp` (both executables).
+const LIST_DRAW_PROLOGUE: [u8; 10] = [0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10];
+const SUMMON_LAYOUT_RVA: Rva = Rva(0x285A260);
+/// Added to the list's x by `0x140277F40`.
+const LIST_X_RVA: Rva = Rva(0x232E6CC);
+/// A sprite record's rectangle (`0x14027C2C0 (record, &[x0, y0, x1, y1])`, its animated one too).
+const RECT_RVA: Rva = Rva(0x27C2C0);
+/// The text packet: `0x1402CFB20 (packet, 1, rgba, x, y, text) -> packet`, then
+/// `0x1403028F0 (start)` runs it when the list is shown (`0x1402787B0`, a row's name, does the same).
+const TEXT_RVA: Rva = Rva(0x2CFB20);
+const TEXT_RUN_RVA: Rva = Rva(0x3028F0);
+const PACKET_RVA: Rva = Rva(0x2853218);
+/// `0x1402787B0`'s alpha scale (the list's alpha times this).
+const TEXT_ALPHA_RVA: Rva = Rva(0x3B31F8);
+/// The Drive list's title (the user: "the text in the sub menu says "SUMMON" when it needs to say
+/// "DRIVES" lets change the color of that sub menu as well to be white").
+const TITLE: &str = "DRIVES";
+/// Where the title sits in the header tab's rectangle (`0x1402CFB20` adds its own 0x10, 2, as for
+/// a row's name in its panel).
+const TITLE_DX: i32 = 0;
+const TITLE_DY: i32 = 0;
+static TITLE_TEXT: OnceLock<usize> = OnceLock::new();
+static ORIG_LIST_DRAW: AtomicUsize = AtomicUsize::new(0);
+/// The header tab's stand-in while the Drive list draws: its record with no size.
+static BLANK_HEADER: OnceLock<usize> = OnceLock::new();
+
+/// The Drive list is the summon list's contents now.
+unsafe fn drive_list_shown(base: usize, menu: usize) -> bool {
+    PAGE2.load(Ordering::Relaxed)
+        && menu == base + SUMMON_MENU_RVA
+        && rd::<u32>(base + SUMMON_OUT_RVA) & 8 == 0
+        && rd::<u8>(menu + 0x14) == FORMS[0].0
+}
+
+/// A sprite record's colour without its hue: each vertex's red, green and blue as their
+/// brightest (`0x14027C660`: `+0x20` r, g, b, a ints, four vertices at 0x10 apart when `+0x60`
+/// has 0x20, else the first for all; with 0xA or 0xC0 there the colour is animated, not these).
+/// The old colour is pushed to `saved` to be put back. `false`: animated, left as it is.
+unsafe fn whiten(rec: usize, saved: &mut Vec<(usize, [i32; 16])>) -> bool {
+    if rec < 0x10000 {
+        return true;
+    }
+    let flags = rd::<u32>(rec + 0x60);
+    if flags & 0xA == 0xA || flags & 0xC0 == 0xC0 {
+        return false;
+    }
+    let old = rd::<[i32; 16]>(rec + 0x20);
+    saved.push((rec, old));
+    let n = if flags & 0x20 != 0 { 4 } else { 1 };
+    for v in 0..n {
+        let p = rec + 0x20 + v * 0x10;
+        let m = rd::<i32>(p).max(rd::<i32>(p + 4)).max(rd::<i32>(p + 8));
+        for c in 0..3 {
+            wr(p + c * 4, m);
+        }
+    }
+    true
+}
+
+unsafe extern "system" fn list_draw(kind: i32, menu: usize, a3: i32, a4: i32, layout: usize, x: i32, y: i32, alpha: f32) -> u64 {
+    let f: unsafe extern "system" fn(i32, usize, i32, i32, usize, i32, i32, f32) -> u64 = std::mem::transmute(ORIG_LIST_DRAW.load(Ordering::Acquire));
+    let base = base();
+    if kind != 3 || !on() || base == 0 || layout != base + SUMMON_LAYOUT_RVA || !drive_list_shown(base, menu) {
+        return f(kind, menu, a3, a4, layout, x, y, alpha);
+    }
+    let header = rd::<u64>(layout + 0x20) as usize;
+    let rows = rd::<u64>(layout + 0x28) as usize;
+    let rows2 = rd::<u64>(layout + 0x58) as usize;
+    let n = rd::<i32>(layout + 0x10);
+    if header < 0x10000 || rows < 0x10000 || !(1..=16).contains(&n) {
+        static BAD: AtomicBool = AtomicBool::new(false);
+        if !BAD.swap(true, Ordering::Relaxed) {
+            log(&format!("Drive list: summon layout not as expected (header {header:#x}, rows {rows:#x}, {n}): drawn as KH1's"));
+        }
+        return f(kind, menu, a3, a4, layout, x, y, alpha);
+    }
+    // The header's place, for the title.
+    let rect_of: unsafe extern "system" fn(usize, *mut [i32; 4]) = std::mem::transmute(base + RECT_RVA);
+    let mut rect = [0i32; 4];
+    rect_of(header, &mut rect);
+    // White: every panel's colour without its hue, for this draw only.
+    let mut saved = Vec::with_capacity(2 * n as usize + 2);
+    let mut animated = 0;
+    for rec in [rd::<u64>(layout + 0x18) as usize, rd::<u64>(layout + 0x50) as usize] {
+        animated += !whiten(rec, &mut saved) as u32;
+    }
+    for k in 0..n as usize {
+        animated += !whiten(rows + k * 0xC0, &mut saved) as u32;
+        if rows2 > 0x10000 {
+            animated += !whiten(rows2 + k * 0xC0, &mut saved) as u32;
+        }
+    }
+    // The tab with "SUMMON" on it: a copy with no size (drawn as nothing), its colour clear.
+    let blank = *BLANK_HEADER.get_or_init(|| {
+        let b = Box::leak(vec![0u8; 0xC0 + 16].into_boxed_slice()).as_ptr() as usize;
+        (b + 15) & !15
+    });
+    std::ptr::copy_nonoverlapping(header as *const u8, blank as *mut u8, 0xC0);
+    wr(blank, [0i32; 4]);
+    wr(blank + 0x60, rd::<u32>(blank + 0x60) & !(0x10 | 0x80 | 0x08));
+    for v in 0..4 {
+        wr(blank + 0x2C + v * 0x10, 0i32);
+    }
+    wr(layout + 0x20, blank as u64);
+    let r = f(kind, menu, a3, a4, layout, x, y, alpha);
+    wr(layout + 0x20, header as u64);
+    for (rec, old) in saved.iter().rev() {
+        wr(rec + 0x20, *old);
+    }
+    // The title, as `0x1402787B0` draws a row's name: white, the list's alpha.
+    if alpha != 0.0 {
+        if let Some(&text) = TITLE_TEXT.get() {
+            let a = (alpha * rd::<f32>(base + TEXT_ALPHA_RVA)).clamp(0.0, 255.0) as u8;
+            let colour = u32::from_le_bytes([0x80, 0x80, 0x80, a]);
+            let lx = x.wrapping_add(rd::<i32>(base + LIST_X_RVA)) + rect[0] + TITLE_DX;
+            let ly = y + rect[1] + TITLE_DY;
+            let tx = (lx.wrapping_add(0x710).wrapping_shl(4) >> 4) - 0x700;
+            let ty = (ly.wrapping_add(0x742).wrapping_shl(4) >> 4) - 0x740;
+            let draw: unsafe extern "system" fn(usize, i32, u32, i32, i32, usize) -> usize = std::mem::transmute(base + TEXT_RVA);
+            let run: unsafe extern "system" fn(usize) = std::mem::transmute(base + TEXT_RUN_RVA);
+            let start = rd::<u64>(base + PACKET_RVA) as usize;
+            if start > 0x10000 {
+                let end = draw(start, 1, colour, tx, ty, text);
+                wr(base + PACKET_RVA, end as u64);
+                run(start);
+            }
+        }
+    }
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    if !LOGGED.swap(true, Ordering::Relaxed) {
+        log(&format!(
+            "Drive list: title \"{TITLE}\" at header rect {rect:?} + list ({}, {y}); header tab hidden; {} panels whitened, {animated} animated (kept); colours before: {:?}",
+            x.wrapping_add(rd::<i32>(base + LIST_X_RVA)),
+            saved.len(),
+            saved.iter().take(4).map(|(_, c)| [c[0], c[1], c[2], c[3]]).collect::<Vec<_>>()
+        ));
+    }
+    r
+}
+
 /// The battle-menu fill when neither `shortcuts` nor `reflect` hooked it.
 static ORIG_FILL: AtomicUsize = AtomicUsize::new(0);
 unsafe extern "system" fn fill_hook(a: usize, b: usize) {
@@ -320,6 +479,11 @@ pub unsafe fn install() {
         // (Reflect's word asks ours first.)
     } else {
         ORIG_WORD.store(base + super::reflect::WORD_RVA, Ordering::Release);
+    }
+    // The Drive list's title and colour (only a look: without it the list reads "SUMMON").
+    let _ = TITLE_TEXT.set(Box::leak(super::menu::encode(TITLE).into_boxed_slice()).as_ptr() as usize);
+    if hook::install(base + LIST_DRAW_RVA, &LIST_DRAW_PROLOGUE, list_draw as *const () as usize, &ORIG_LIST_DRAW, "list draw (Drive title)").is_none() {
+        log("Drive: the list draw wasn't as expected: the Drive list keeps KH1's summon title");
     }
     ON.store(true, Ordering::Release);
     static N: AtomicU32 = AtomicU32::new(0);

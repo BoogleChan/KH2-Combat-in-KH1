@@ -17,6 +17,7 @@ mod fx12;
 mod hook;
 mod hurt;
 mod kh2fx;
+mod kh1voice;
 mod kh2sound;
 mod leftblade;
 mod menu;

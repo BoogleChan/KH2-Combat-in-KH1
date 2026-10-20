@@ -524,3 +524,33 @@ hand would be wrong.
 3. Check in the log: `trail windows of W_EX010_BTLF_L for N motions` at start, then for each
    Valor swing `trail ... made at motion M frame F`, then `ended`. In the game, check that the
    ribbon follows the left blade, not the right one.
+
+## 9. The left trail's length, and the forms' weapon-anchored effects
+
+### The blade's range [high, from the code]
+
+- Sora's weapon object (actor `+0x14C`, one of nine 0x60-byte objects at `0x14296BBE0`, built by
+  `0x140284D40`): `+0x00` its model instance, `+0x18` the `.wpn`'s effect data, `+0x20` a pointer
+  to the weapon's row in `btltbl.bin`'s weapon table (0x58 bytes a row, the item record's `+6`
+  row number; `+0` its `.wpn` stem, `+0x24` / `+0x28` the blade's end / start along bone 0x30,
+  `+0x30` Strength, `+0x38` MP).
+- A trail point along bone 0x30 (`0x14029C990`) maps `t` into that range, so the trail spans the
+  owner's weapon's blade. The left trail's owner (a copy of Sora's actor) copied his weapon
+  handle, so it spanned the right Keyblade's blade (the user: "not aligned with the keyblades
+  length"). It now has its own weapon object (a copy of his, at the owner block's `+0x700`, its
+  handle from `0x14038B080`) with `+0x20` the left Keyblade's row and `+0x18` its effect data.
+  Both blades' ranges are logged at each left trail made.
+
+### KH2's weapon anchors [high, KH2's `0x1403B43D0`]
+
+- An effect element's bone code 0x4003 / 0x4004 is the tip of the player's weapon 0 / 1
+  (`(code - 1) & 1`), from the weapon model's type-0xF collision point and an offset along its
+  x; 0x4005 / 0x4006 the weapon point itself; 0x4007 / 0x4008 half the offset (× 0.5,
+  `0x14062399C`).
+- Ours (`kh2fx::form_bone`, Valor's and Final's packages only): the point on that Keyblade from
+  KH2's weapon bones of the step (the left one's from `leftblade::kh2_left_root`), the tip at
+  W_EX010's collision point taken from the weapon skeleton's bind (78 along its root), turned
+  with Sora's facing as the object root (the user: the grounded finisher's effect "should spawn
+  in front of the keyblades and its direction its sent should be the same as where sora is
+  facing"). Every form element's anchor, flags and offset are logged once: if Valor's finisher
+  elements (154's 16, 155's 13..15) turn out to use another anchor, the log says which.

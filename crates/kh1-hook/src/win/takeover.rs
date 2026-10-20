@@ -132,6 +132,11 @@ pub static FLY_ATTACK: AtomicBool = AtomicBool::new(false);
 static FLY_PRESS: AtomicBool = AtomicBool::new(false);
 /// The same for an Attack pressed during KH1's own move (`ATTACK_AFTER`), on the ground.
 static FLY_PRESS_GROUND: AtomicBool = AtomicBool::new(false);
+/// Frames an Attack carried out of a KH1 move may wait for KH1 to let him act (it holds him a
+/// frame or two after a cut: the press was dropped there and he stood in idle, the user: "when I
+/// try to go for an attack after I use a kh1 exclusive magic it just resets me to idle").
+static CARRY_FRAMES: AtomicU32 = AtomicU32::new(0);
+const CARRY_MAX: u32 = 10;
 /// KH1's own move ended with him in the air: KH2 starts falling.
 static AIR_START: AtomicBool = AtomicBool::new(false);
 /// KH1's fall: its gravity (units per 60 Hz frame², `0x1403EAB54`) and fastest fall per frame
@@ -553,7 +558,7 @@ pub fn command_started(shots: usize, spell: Option<u8>) {
     let fc = spell.filter(|_| super::form::in_wisdom()).and_then(|sp| {
         let air = AIR_CAST.try_lock().ok().is_some_and(|a| a.is_some());
         let level = unsafe { super::reflect::kh1_spell_level(sp) };
-        let motion = super::formmagic::kh1_spell_motion(level, air);
+        let motion = super::formmagic::kh1_spell_motion(sp, level, air);
         let form = pose::kh2()?.wisdom.as_ref()?;
         let clip = form.character.moveset.clips.get(&motion)?;
         let react = clip.first(|k| matches!(k, character_core::WindowKind::AllowReactionCommand)).unwrap_or(clip.length);
@@ -1044,7 +1049,9 @@ unsafe fn takeover(actor: usize) -> bool {
             if form_cast.is_some() && !falling {
                 *HANDOFF_SLIDE.lock().unwrap() = FORM_CAST.try_lock().ok().and_then(|f| f.map(|f| f.v));
             }
-            FLY_PRESS_GROUND.store(ATTACK_AFTER.swap(false, Ordering::Relaxed), Ordering::Relaxed);
+            let carried = ATTACK_AFTER.swap(false, Ordering::Relaxed);
+            FLY_PRESS_GROUND.store(carried, Ordering::Relaxed);
+            CARRY_FRAMES.store(if carried { CARRY_MAX } else { 0 }, Ordering::Relaxed);
             HANDOFF.store(false, Ordering::Relaxed);
             KH1_WINDOW.store(false, Ordering::Relaxed);
             ITEM_COMMAND.store(false, Ordering::Relaxed);
@@ -1267,6 +1274,13 @@ unsafe fn takeover(actor: usize) -> bool {
     let g = d.character.params.gravity;
     d.character.air_magic_gravity = if g > 0.0 { super::settings::get().air_cast_fall * KH1_FALL_ACCEL / g } else { 1.0 };
     d.character.air_magic_fall_max = Some(KH1_FALL_MAX);
+    // Final Form: KH2's own (its cast motions' no-gravity frames, KH2's gravity), as KH2 has it
+    // (the user: "aerial final form reflect is not 1:1 physics wise with kh2").
+    if super::form::in_final() {
+        d.character.air_magic_falls = false;
+        d.character.air_magic_gravity = 1.0;
+        d.character.air_magic_fall_max = None;
+    }
     d.character.glide_button = if super::settings::get().glide_on_square && !FLEW.load(Ordering::Relaxed) { character_core::GlideButton::Action } else { character_core::GlideButton::Jump };
     if d.last_state.is_none() {
         // (Re)starting: face where KH1 had him facing.
@@ -1289,7 +1303,7 @@ unsafe fn takeover(actor: usize) -> bool {
     // (Square stays KH2's with a submenu open: only the L1 shortcut menu uses it; spec 3.2.)
     let action = action_raw && !l1_menu;
     // KH1's Attack command (Cross with Attack chosen in the menu) is KH2's attack button.
-    let attack = combat::take_press() | FLY_PRESS.swap(false, Ordering::Relaxed) | FLY_PRESS_GROUND.swap(false, Ordering::Relaxed);
+    let attack = combat::take_press() | FLY_PRESS.swap(false, Ordering::Relaxed);
     // A spell chosen and waiting for the move's window goes first: an Attack pressed meanwhile
     // doesn't take that window from it (the user: in a second finisher, magic then Attack, and
     // the Attack overrode the magic).
@@ -1345,10 +1359,36 @@ unsafe fn takeover(actor: usize) -> bool {
         }
         d.last_state = None;
         d.held = (true, true);
+        // (A carried Attack waits these frames too, `CARRY_MAX` at most.)
+        if FLY_PRESS_GROUND.load(Ordering::Relaxed) && CARRY_FRAMES.fetch_sub(1, Ordering::Relaxed) <= 1 {
+            FLY_PRESS_GROUND.store(false, Ordering::Relaxed);
+        }
         drop_pose();
         return false;
     }
-    let (stick, jump, action, attack) = if frozen { ([0.0, 0.0], false, false, false) } else { (stick, jump, action, attack) };
+    // An Attack carried out of a KH1 move's cut: KH2's on the first frame KH1 lets him act (else
+    // dropped after `CARRY_MAX`), whatever waits (it was the cut's own press).
+    let carried_attack = if FLY_PRESS_GROUND.load(Ordering::Relaxed) {
+        if frozen {
+            if CARRY_FRAMES.fetch_sub(1, Ordering::Relaxed) <= 1 {
+                FLY_PRESS_GROUND.store(false, Ordering::Relaxed);
+                log("an Attack carried out of KH1's move: dropped (KH1 held him too long)");
+            }
+            false
+        } else {
+            FLY_PRESS_GROUND.store(false, Ordering::Relaxed);
+            true
+        }
+    } else {
+        false
+    };
+    let (stick, jump, action, attack) = if frozen { ([0.0, 0.0], false, false, false) } else { (stick, jump, action, attack || carried_attack) };
+    if carried_attack {
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 30 {
+            log(&format!("an Attack carried out of KH1's move: KH2's now ({:?})", d.character.state_name()));
+        }
+    }
     let input = Input {
         stick,
         jump: Button { pressed: jump && !d.held.0, held: jump },
@@ -1798,6 +1838,11 @@ unsafe fn takeover(actor: usize) -> bool {
     STEPPING.store(n, Ordering::Relaxed);
     KH2_STEPS.store(n >= STEPS_AFTER, Ordering::Relaxed);
     if d.last_state != Some(out.state) {
+        // KH1's own grunt as KH2's dodge roll starts (a random one of his first swing's, the user:
+        // "Sora is missing a kh1 quote for when he activates dodge roll").
+        if out.state == StateName::DodgeRoll {
+            super::kh1voice::dodge_roll(actor);
+        }
         if d.logged < 400 {
             d.logged += 1;
             log(&format!("KH2 has Sora: {:?} (motion {}), height above floor {above:.1}, KH1 slot {:?}, KH1 state {}, flags {:08x}; {}", out.state, out.motion, slot, rd::<i32>(actor + 0x70), rd::<u32>(actor), pose::weapon_report()));

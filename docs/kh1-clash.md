@@ -32,14 +32,40 @@ Confidence: **Checked (exe)** read from KH1's code; **Ours** a choice of the mod
   ray, not KH2's shapes (those reached far beside the blade: clinks "at random moments").
 - Each clank is logged with where along the blade it touched (0% the blade's start, 100% its tip).
 
-## The Aerial Dodge's parry (Checked + Ours)
+## KH2's guard windows as KH1 guards (Checked + Ours)
 
-- KH1's attack-vs-attack pass meets attack objects, not the actor: an actor flag that keeps Sora
-  out of the hit pass (0x40, his dodges' untouchability) doesn't keep his own attack objects out.
-- A guard is an attack object of priority 100 (`0x1402B2A30`: the guard side is unhurt, 0x10; the
-  attack meeting it gets a clash record, kind 6 / 7, its owner recoils).
-- While KH2's Aerial Dodge plays, Sora has such an object: KH1's guard attack data from his rows
-  (the first with priority 100, logged), else his swing's data made a guard (priority 100, clash
-  type 0, no power, radius at least 45). Live all through (activity 1), placed each frame on its
-  bone at the data's two offsets (its swept segment), freed when the dodge ends and made again
-  once spent.
+KH2's clips mark their guards as `Guard` windows (an ATKP, a shape group, body or Keyblade).
+From the user's KH2 data:
+
+| motion | window | frames | ATKP | refact self |
+|---|---|---|---|---|
+| 202 Aerial Dodge | Guard, group 6 (body) | all of it; no Invulnerable window, no hitbox | 406 (kind 2, power 0) | 2 (nothing) |
+| 40 Aerial Recovery | Guard, group 6 (body), and Invulnerable | 0..16 both | 124 (kind 3, power 0) | 2 |
+| 173 guard press | Guard, group 2 (Keyblade) | 6..37 | 161 (kind 2, power 0) | 1 (guard repel) |
+| 42 guard repel | Guard, group 2 (Keyblade) | 0..40 | 162 (kind 2, power 0) | 2 |
+
+- KH1's attack-vs-attack pass meets attack objects, not the actor: Sora's untouchable flag (0x40,
+  his i-frames) keeps him out of the hit pass but not his own attack objects. A guard is an
+  attack object of priority 100: the guard side is unhurt (`0x1402B2A30` returns 0x10 at once)
+  and the attack meeting it gets a clash (its owner a kind 6 / 7 recoil record, a free-standing
+  shot turned back); the guard's clashed-with mask `+0x9C` gains that attack's hit bit.
+- Clash types 1, 2 and 4 are pure guards: KH1's pass never meets them with a body
+  (`0x1402B1A50`), so they hit nobody. Types 1..4 are directional (`0x1402B24B0`): the owner's
+  facing, turned by the data's `+0x60`, within the cosine at `+0x64` of the direction to the other.
+- Activity (flags bits 2..3): 1 is live only while `0x142867CDC` bit 0; 3 re-arms on an interval
+  (`+0x50` frames, `0x1402B11F0` clears the hit-once and clashed-with marks of its bit).
+
+Ours (`combat::guard_step`): every live KH2 `Guard` window puts a KH1 guard object on each of its
+shapes (up to 4): clash type 4, priority 100, no power, no reaction, its own position (mode 0) set
+to the shape each frame, activity 3 re-armed every 10 frames, attack data our copy of a swing's
+(arc: all round for a body guard, cosine -1; in front for a Keyblade guard, cosine 0). Freed when
+the window closes. An attack it stops (its `+0x9C` gained a bit) plays KH2's guard reaction by the
+window's refact self (1 the repel, 2 nothing), logged. So Aerial Dodge is a guard only (no hitbox
+on enemies), and Aerial Recovery guards on KH2's frames, through its i-frames.
+
+`hurt`'s own guard (an attack that reaches his body during a guard window) uses the same refact
+self, and a body guard is all round.
+
+Left to the controller (not this lane): KH2's Aerial Dodge has no invulnerable frames (ours gives
+10..16 by level, `AIR_DODGE_STAR`), and Aerial Recovery's are its window 0..16 (ours `f <= 16`,
+one frame more).

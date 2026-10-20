@@ -148,8 +148,18 @@ unsafe extern "system" fn hurt(actor: usize, out: usize) -> usize {
                 // The rest of Reflect's cast (before the barrier stands and after it falls): no
                 // harm all the way through (the user), not counted for the counter.
                 Fate::Evaded
-            } else if (out.guarding || !out.guard_boxes.is_empty()) && (toward.dot(fwd) > 0.0 || ch.abilities.guard_all_round) {
-                ch.clash(1, 1, toward.to_array());
+            } else if (out.guarding || !out.guard_boxes.is_empty()) && (toward.dot(fwd) > 0.0 || ch.abilities.guard_all_round || out.guard_boxes.iter().any(|g| g.weapon == 0)) {
+                // KH2's guard reaction by its windows' ATKP "refact self" (1 the guard repel, 2
+                // nothing: the Aerial Dodge's 406 and Aerial Recovery's 124 go on; the guard
+                // press's 161 repels); a guard on his body guards all round (`combat::guard_step`).
+                let refact = super::pose::kh2()
+                    .and_then(|k| out.guard_boxes.iter().filter_map(|g| k.battle.attack_for_level(g.attack, 0, 0)).map(|a| a.refact_self).min())
+                    .unwrap_or(1);
+                if refact == 2 {
+                    ch.clash(2, 0, toward.to_array());
+                } else {
+                    ch.clash(1, 1, toward.to_array());
+                }
                 Fate::Guarded
             } else if matches!(kind, 6 | 7) {
                 // An attack clash (KH1's recoil): KH2's recoil (not its guard repel).

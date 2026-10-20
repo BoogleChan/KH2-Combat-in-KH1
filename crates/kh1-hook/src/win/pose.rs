@@ -860,7 +860,7 @@ fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
     // (gravity, stop) should use the normal thunder/cure wisdom form animation but still cast
     // their respected magic"): Gravity Thunder's, Stop and Aero Cure's; the air ones in the air.
     if super::form::in_wisdom() {
-        if let Some(spell @ 4..=6) = super::takeover::kh1_spell_now() {
+        if let Some(spell @ 3..=6) = super::takeover::kh1_spell_now() {
             let air = super::takeover::air_cast().is_some();
             let motion = match (spell, air) {
                 (4, false) => 62,

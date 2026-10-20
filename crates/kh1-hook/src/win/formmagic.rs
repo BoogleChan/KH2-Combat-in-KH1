@@ -233,7 +233,10 @@ pub fn end_all() {
 /// A KH1 spell chosen (`combat::command`, magic `spell`): in the form, KH2's. Returns whether
 /// it was taken (else KH1 casts its own).
 pub unsafe fn spell_chosen(actor: usize, spell: u8) -> bool {
-    if spell > 3 || !super::form::in_wisdom() || !super::takeover::kh2_has() || !super::settings::get().drive {
+    // (Fire, Blizzard, Thunder; Cure is KH1's own on the form's Cure motion, as Gravity, Stop and
+    // Aero are: the user, "wisdom form currently casts kh2 cure, it needs to be kh1 cure with kh2s
+    // cures animation".)
+    if spell > 2 || !super::form::in_wisdom() || !super::takeover::kh2_has() || !super::settings::get().drive {
         return false;
     }
     let level = super::reflect::kh1_spell_level(spell);
@@ -297,13 +300,15 @@ pub unsafe fn before_step(actor: usize, ch: &mut Character) {
 
 /// The form's own cast motion for a KH1 spell it has no KH2 version of (Gravity, Stop, Aero):
 /// Thunder's (MAGC) at that level, ground or air (the user: "the same logic as thunder").
-pub fn kh1_spell_motion(level: u8, air: bool) -> u16 {
-    let m = magc(2, level.clamp(1, 3));
+pub fn kh1_spell_motion(spell: u8, level: u8, air: bool) -> u16 {
+    // Gravity on Thunder's motion; Cure, Stop and Aero on Cure's (`pose::follow` shows the same).
+    let thunder = spell == 4;
+    let m = magc(if thunder { 2 } else { 3 }, level.clamp(1, 3));
     let pick = |v: i16| (v >= 0).then_some(v as u16);
     if air {
-        m.and_then(|m| pick(m.air_motion)).unwrap_or(64)
+        m.and_then(|m| pick(m.air_motion)).unwrap_or(if thunder { 64 } else { 67 })
     } else {
-        m.and_then(|m| pick(m.ground_motion)).unwrap_or(62)
+        m.and_then(|m| pick(m.ground_motion)).unwrap_or(if thunder { 62 } else { 65 })
     }
 }
 

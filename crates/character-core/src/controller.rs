@@ -368,9 +368,6 @@ const FINISHER_END: u32 = 6;
 
 /// Physics tick length in frames: KH2 recomputes velocities at 30 Hz.
 const DT: f32 = 2.0;
-/// How close (sideways, past its radius) a target below him must be for an air swing's hop to
-/// shrink toward it (`try_attack`).
-const LOW_TARGET_REACH: f32 = 150.0;
 const DEAD_ZONE: f32 = 0.1;
 
 /// One controllable character.
@@ -399,6 +396,10 @@ pub struct Character {
     /// character's own `fall_max`). A host can give KH1's (its air spells fall at KH1's gravity
     /// and speed: the KH1 port).
     pub air_magic_fall_max: Option<f32>,
+    /// Square in a combo (its combo or finisher window) goes into this finisher row, on the ground
+    /// and in the air (`(ground, air)` row ids), if set: a host's form (the KH1 port's Valor, the
+    /// user: "valor forms ability to go into a finisher by pressing square during a combo").
+    pub square_finishers: Option<(u8, u8)>,
     /// The air cast playing holds as Final Form's air Reflect does (`hold_air_cast`): frames of
     /// no gravity from its start, no drift; then a plain fall.
     cast_hold: Option<u32>,
@@ -551,6 +552,7 @@ impl Character {
             air_magic_falls: false,
             air_magic_gravity: 1.0,
             air_magic_fall_max: None,
+            square_finishers: None,
             cast_hold: None,
             facing: 0.0,
             vel_h: [0.0; 2],
@@ -1382,7 +1384,9 @@ impl Character {
         // finisher; at the end the press does nothing and the Attack button's finisher is next.
         // (It was always there: Horizontal Slash hops, so Sora could spam it forever in the air,
         // the user.)
-        let square = SQUARE_MOVES.iter().any(|m| Some(m.0) == wanted);
+        // (A form's Square finisher, `square_finishers`, is a finisher whatever its row id.)
+        let form_finisher = wanted.is_some_and(|id| self.square_finishers.is_some_and(|(g, a)| id == g || id == a));
+        let square = SQUARE_MOVES.iter().any(|m| Some(m.0) == wanted) && !form_finisher;
         let forced = wanted
             .and_then(|id| self.moveset.combo_rows.iter().find(|r| r.id == id))
             .filter(|r| condition(r, &sit))
@@ -1431,15 +1435,7 @@ impl Character {
             let (height, speed) = match target {
                 Some(t) => {
                     let extra = if row.flag & FLAG_JUMP_ADJUST != 0 { self.params.jump_height } else { 0.0 };
-                    let mut h = t.dy.clamp(row.jump_min, (row.jump_max + extra).max(row.jump_min));
-                    // A target just below and close, in the air: the hop no higher than reaches it
-                    // (the row's least less how far below it is), so he doesn't climb away from it
-                    // swing after swing (the KH1 port's user: "when sora is locked on to an entity
-                    // that is just below him and close can you have his base aerial attacks not give
-                    // him as much air time").
-                    if self.airborne && t.dy < 0.0 && (t.distance - t.radius).max(0.0) < LOW_TARGET_REACH {
-                        h = (row.jump_min + t.dy).max(0.0);
-                    }
+                    let h = t.dy.clamp(row.jump_min, (row.jump_max + extra).max(row.jump_min));
                     let up = uptime(h, self.params.gravity).max(1.0);
                     let s = ((t.distance - t.radius).max(0.0) / up).clamp(row.speed_min, row.speed_max.max(row.speed_min));
                     (h, s)
@@ -2033,11 +2029,8 @@ impl Character {
                 }
             }
             ActionKind::AerialDodge => {
-                // Invulnerable at the start (the user: like Aerial Recovery; KH2's own dodge has
-                // none): 10 / 12 / 14 / 16 frames by level.
-                if (f as f32) < AIR_DODGE_STAR + 2.0 * self.abilities.aerial_dodge.min(4) as f32 {
-                    fo.invulnerable = true;
-                }
+                // No invulnerability (KH2's dodge has none; its clip's Guard window guards it all
+                // through, the KH1 port's user: "I only want a guard hitbox").
                 // The glide button mid-dodge: straight into Glide.
                 if self.glide_button == GlideButton::Action && input.action.pressed {
                     let me = std::mem::replace(&mut self.mode, Mode::Free);
@@ -2131,9 +2124,8 @@ impl Character {
                 // Aerial Recovery's own motion (exe, `docs/aerial-recovery.md`): invulnerable to
                 // frame 16, control back at frame 24, then the fall.
                 if act.motion == motion::AIR_RECOVERY {
-                    if f <= 16 {
-                        fo.invulnerable = true;
-                    }
+                    // (Its i-frames are its clip's own Invulnerable window, 0..16, frame for frame,
+                    // KH2's: the KH1 port's user, "i frames and guard hitbox timing should be 1:1".)
                     if f >= 24 {
                         finished = true;
                     }
@@ -2224,6 +2216,17 @@ impl Character {
                 // "during a midair combo with Square". The first whose ability is equipped and
                 // whose row's conditions pass (a finisher's: the combo's end) is taken.
                 if input.action.pressed && (combo_open || finisher_open) {
+                    if let Some((ground, air)) = self.square_finishers {
+                        let row = if self.airborne { air } else { ground };
+                        if self.moveset.combo_rows.iter().any(|r| r.id == row) {
+                            self.mode = Mode::Action(act.clone());
+                            self.forced_row = Some(row);
+                            if self.try_attack(input, env) {
+                                return true;
+                            }
+                            self.forced_row = None;
+                        }
+                    }
                     for (row, ability, air) in SQUARE_MOVES {
                         if air != self.airborne || !self.abilities.equipped.contains(&ability) {
                             continue;
