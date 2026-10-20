@@ -134,3 +134,17 @@ during its roll at all (else an Attack comes after it, by the hand-back's rules)
 - Battle Quotes (KH1 | KH2, ini `battle_quotes`, default from `kh2_voice`): every KH2 motion voice
   is loaded and played only with it at KH2, so the row switches in game. On every form too. It
   is on a third Config page (our rows go 8 to a page).
+
+### Dodge Roll at KH1: the model on Sora (roll-decouple)
+
+The user (s244): "soras model decouples when inputting a kh1 dodge roll". The log: during KH1's
+roll, and on KH2's first frames after it, the skeleton pass's placement (KH1's model matrix, its
+translation at actor `+0x260`) sat off his position (`+0x10`): KH1's per-frame motion update
+(`0x14029CF10`, from the actor loop `0x1402965A0`) builds that matrix with its motion's root
+compensation (the roll moves the actor, the matrix is pulled back by the root's travel and the
+roll's root bone puts him back), and at the roll's end the pull lingers for some frames. KH2's
+pose drawn there (and the pose we last drew, blending into KH1's) sat up to ~300 behind him, then
+snapped forward. `pose::on_actor`: in the game the placement's translation is his position
+whenever it is off it by 0.5..1500 (logged, 30 times). Also no stale KH2 pose (`POSE`, fresh for
+0.15 s) over KH1's roll's first frames (as for KH1's combos): KH1's roll from its first frame,
+blended in from the pose last drawn.

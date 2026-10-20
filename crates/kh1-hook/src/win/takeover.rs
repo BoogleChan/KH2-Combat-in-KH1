@@ -593,7 +593,7 @@ unsafe extern "system" fn control(actor: usize, dir: usize) {
         // act again KH1 clears its action flag inside its own step and then read a jump or Square
         // as its own jump, high jump or dodge roll, the user. Those presses are KH2's when it
         // takes him back.)
-        && (!HANDOFF.load(Ordering::Relaxed) || kh1_move_done(base, actor) || kh1_air_free(base, actor) || FROM_COMMAND.load(Ordering::Relaxed))
+        && (!HANDOFF.load(Ordering::Relaxed) || kh1_move_done(base, actor) || kh1_air_free(base, actor) || FROM_COMMAND.load(Ordering::Relaxed) || super::stylejump::active())
         && kh1_borrows(actor);
     // With L1 down (KH1's shortcuts) or a submenu open, the presses are KH1's (a shortcut, backing
     // out): only the held and repeat bits go then. A jump held while L1 came down was KH1's held
@@ -1204,8 +1204,12 @@ unsafe fn takeover(actor: usize) -> bool {
         // input or none (the user: its frame 52 gave KH1's roll, guard or jump).
         let cut_frame = if command && !done { kh1_cut_frame(state) } else { None };
         let in_cut = cut_frame.is_some_and(|(f, _)| frames + 1 >= f);
-        KH1_WINDOW.store(in_cut, Ordering::Relaxed);
-        let drive_cut = in_cut && DRIVE_CUT.swap(false, Ordering::Relaxed);
+        // (KH1's own combo, `stylecombo`: a Drive may be chosen all through it, KH2 taking him out
+        // of it to change, the user: "if sora is inputting his kh1 attacks he is unable to select
+        // drive (it is blacked out)".)
+        let combo_drive = super::stylecombo::active() && !super::form::in_form();
+        KH1_WINDOW.store(in_cut || combo_drive, Ordering::Relaxed);
+        let drive_cut = (in_cut || combo_drive) && DRIVE_CUT.swap(false, Ordering::Relaxed);
         let item_end = in_cut && cut_frame.is_some_and(|(_, item)| item);
         let last = slot == 3 && !in_cut;
         // (KH1's own combo plays as in KH1: none of the spell cuts, `stylecombo`.)

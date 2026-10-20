@@ -2222,7 +2222,8 @@ unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
         return true;
     }
     if takeover::kh1_cut_window() {
-        if kind == 1 {
+        // (Not in KH1's own combo, whose window is open for a Drive only: its Attack is KH1's.)
+        if kind == 1 && !super::stylecombo::active() {
             takeover::ATTACK_AFTER.store(true, Ordering::Relaxed);
             cmd_log("Attack in KH1's move's cut window: KH2 takes him for the combo".to_string());
             return true;

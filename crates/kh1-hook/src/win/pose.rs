@@ -290,6 +290,45 @@ unsafe fn from_param(world: usize) -> Option<Mat4> {
     affine(&m).then_some(m)
 }
 
+/// `m` moved onto Sora's position (`+0x10`) when KH1's placement is off it (the game, not the
+/// viewer modes; a gap from half a unit to 1500).
+unsafe fn on_actor(m: Mat4) -> Mat4 {
+    if MODE.load(Ordering::Relaxed) != 0 {
+        return m;
+    }
+    // (Only over KH1's roll and just after it: elsewhere KH1's placement is its own, a ledge, a
+    // ride, the water.)
+    static LAST_ROLL: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+    let recent = match LAST_ROLL.try_lock() {
+        Ok(mut g) => {
+            if super::styleroll::active() {
+                *g = Some(Instant::now());
+            }
+            g.is_some_and(|t| t.elapsed().as_secs_f32() < 0.6)
+        }
+        Err(_) => false,
+    };
+    if !recent {
+        return m;
+    }
+    let a = super::takeover::sora_actor();
+    if a < 0x10000 || !super::crash::readable(a + 0x10) {
+        return m;
+    }
+    let p = Vec3::from(rd::<[f32; 3]>(a + 0x10));
+    let gap = (p - m.w_axis.truncate()).length();
+    if !p.is_finite() || !(0.5..1500.0).contains(&gap) {
+        return m;
+    }
+    static N: AtomicU32 = AtomicU32::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) < 30 {
+        log(&format!("placement {gap:.1} off Sora's position (KH1 slot {:?}): drawn at his position", SLOT_NOW.load(Ordering::Relaxed)));
+    }
+    let mut m = m;
+    m.w_axis = p.extend(1.0);
+    m
+}
+
 fn close(a: &Mat4, b: &Mat4, units: f32) -> bool {
     (a.w_axis - b.w_axis).length() < units && (a.x_axis - b.x_axis).length() < 0.05 && (a.y_axis - b.y_axis).length() < 0.05 && (a.z_axis - b.z_axis).length() < 0.05
 }
@@ -802,7 +841,8 @@ fn wanted(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
             let kh2_frame = super::takeover::kh2_frame();
             // (KH1's own combo, `stylecombo`: KH1's swings from their first frame, not KH2's
             // last pose over them.)
-            let kh1_combo = super::stylecombo::active();
+            // (Nor over KH1's own dodge roll, `styleroll`: its roll from its first frame.)
+            let kh1_combo = super::stylecombo::active() || super::styleroll::active();
             let fresh = if kh1_combo { None } else { super::takeover::POSE.try_lock().ok().and_then(|p| p.as_ref().filter(|(_, _, t)| kh2_frame || t.elapsed().as_secs_f32() < 0.15).map(|(b, w, _)| (b.clone(), w.clone()))) };
             match (fresh, s.retarget.as_ref()) {
                 (Some((b, w)), Some(r)) => {
@@ -1193,6 +1233,12 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
         (_, _, None, Some(last)) => last,
         _ => return,
     };
+    // (KH1's own placement can lag his position: KH1's roll moves the actor and pulls its model
+    // matrix back by the roll's root travel, its root bone putting him back, and at the roll's
+    // end that pull lingers for some frames. KH2's poses, and the pose we last drew blending into
+    // KH1's, sat up to ~300 behind him there, then snapped: the user, "soras model decouples when
+    // inputting a kh1 dodge roll". The placement is his position.)
+    let to_world = on_actor(to_world);
     if !s.checked && s.calls >= 30 && !ours {
         s.checked = true;
         let chain = mat(world) * mat(local + 0x40) * mat(local + 0x80) * mat(local + 0xC0);

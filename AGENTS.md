@@ -2930,3 +2930,18 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   our page scrolls when it has more (`SCROLL`): Down on its last place / Up on its first moves
   our rows instead of the cursor (KH1's list masks: up `0x10000010`, down `0x40000040`, set at
   `0x1402ED1E0`). Battle Quotes is the 9th, scrolled in below Dodge Roll.
+
+### 2026-10-20: Stage 245 (the user's s244 list: KH1 roll, glide, jump, Drive in KH1 combos)
+- KH1 roll (helper, `roll-decouple`): "soras model decouples". KH1's placement (model matrix
+  `+0x260`) lags his position (`+0x10`) over its roll and some frames after (its root
+  compensation, `0x14029CF10`, read, not confirmed); our draws sat up to ~300 behind him, then
+  snapped. Over KH1's roll and 0.6 s after it the drawn placement is his position
+  (`pose::on_actor`, logged), and no stale KH2 pose is drawn over the roll's start.
+- KH1 jump / glide (`stylejump`) hand-offs strip KH1's jump and Square (they weren't: KH1 had him in
+  states 1 / 2 / 21 without its can-act, so `strip` was off): no KH1 glide on the jump button in
+  KH1's jump ("still able to do a normal kh1 glide by pressing the jump button"); in KH1's glide
+  Square held is its jump held, so the glide holds ("go into the normal kh1 glide for a second
+  then get forced out": KH1 ended it after 8 frames, seeing jump up).
+- Drive in KH1's own combo: "unable to select drive (it is blacked out)". The cut window
+  (`KH1_WINDOW`) is open all through a KH1 combo for a Drive (KH2 takes him to change); its Attack
+  stays KH1's (`combat::run_entry`).
