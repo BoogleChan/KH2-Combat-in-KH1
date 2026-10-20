@@ -70,7 +70,7 @@ const DECOR_RVA: Rva = Rva(0x2F0740);
 /// Our rows: 8 the camera, 9..16 the move styles (8 a page: rows 8..15, 16..) (`styles::Kind::EVERY` in order). Each:
 /// label, left value, right value, help.
 const FIRST_ROW: i32 = 8;
-const ROWS: [[u32; 4]; 12] = [
+const ROWS: [[u32; 4]; 11] = [
     [0x7F00_0001, 0x7F00_0002, 0x7F00_0003, 0x7F00_0004],
     [0x7F00_0101, 0x7F00_0002, 0x7F00_0003, 0x7F00_0102],
     [0x7F00_0103, 0x7F00_0002, 0x7F00_0003, 0x7F00_0104],
@@ -80,7 +80,8 @@ const ROWS: [[u32; 4]; 12] = [
     [0x7F00_010B, 0x7F00_0002, 0x7F00_0003, 0x7F00_010C],
     [0x7F00_010D, 0x7F00_0002, 0x7F00_0003, 0x7F00_010E],
     [0x7F00_0115, 0x7F00_0002, 0x7F00_0003, 0x7F00_0116],
-    [0x7F00_0117, 0x7F00_0002, 0x7F00_0003, 0x7F00_0118],
+    // (Player Model, off for now, s259, the user: "comment it out for now":)
+    // [0x7F00_0117, 0x7F00_0002, 0x7F00_0003, 0x7F00_0118],
     [0x7F00_010F, 0x7F00_0002, 0x7F00_0003, 0x7F00_0110],
     [0x7F00_0111, 0x7F00_0113, 0x7F00_0114, 0x7F00_0112],
 ];
@@ -124,8 +125,24 @@ fn gummi_row(row: i32) -> bool {
 }
 
 fn style(row: i32) -> Option<Kind> {
-    Kind::EVERY.get(index(row).checked_sub(1)?).copied()
+    ROW_KINDS.get(index(row)).copied().flatten()
 }
+
+/// Each row's move style (`ROWS` in order; `None`: the camera and Gummi rows).
+const ROW_KINDS: [Option<Kind>; 11] = [
+    None,
+    Some(Kind::GroundCombo),
+    Some(Kind::AirCombo),
+    Some(Kind::Magic),
+    Some(Kind::AirMagic),
+    Some(Kind::Jump),
+    Some(Kind::Glide),
+    Some(Kind::DodgeRoll),
+    Some(Kind::MiscAnims),
+    // Some(Kind::PlayerModel),
+    Some(Kind::BattleQuotes),
+    None,
+];
 
 /// A row's value: right (KH2, true) or left (KH1).
 fn value(row: i32) -> bool {

@@ -102,7 +102,10 @@ static DRAWN: AtomicU64 = AtomicU64::new(0);
 
 /// The Config row / ini choice.
 pub fn on() -> bool {
-    super::styles::kh2(super::styles::Kind::PlayerModel)
+    // (Off for now, s259, the user: "comment it out for now" (its row too); the ini's
+    // `player_model` is ignored meanwhile.)
+    // super::styles::kh2(super::styles::Kind::PlayerModel)
+    false
 }
 
 /// Starts loading the models (a thread).

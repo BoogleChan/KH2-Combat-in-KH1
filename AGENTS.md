@@ -3077,3 +3077,8 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   his with his own Keyblade alone. Now: KH1's figure minus the byte's Keyblade, plus his own and
   the one under the cursor (`equipmenu::valor_preview` returns all three, the hovered row from
   the list).
+
+### 2026-10-20: Stage 259 (Player Model off for now)
+- The user: the KH2 player model "comment it out for now" (s257's bugs being fixed meanwhile).
+  Its Config row is commented out (`config::ROW_KINDS` maps rows to styles explicitly now) and
+  `model::on` is false whatever the ini says; the code stays.
