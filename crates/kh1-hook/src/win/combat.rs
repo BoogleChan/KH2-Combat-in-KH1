@@ -263,6 +263,22 @@ pub unsafe fn resume_command() {
     }
 }
 
+/// The battle menu's top entries (`0x140529614`, four command ids; KH1's menu fill `0x140292760`
+/// puts the context command there through `0x140290E70 (slot, id)`: Talk in place of Attack
+/// (slot 0), Open / Examine and the like in the Triangle slot (3)).
+const MENU_ENTRIES_RVA: Rva = Rva(0x529614);
+
+/// `kind` is the context command the menu offers now (Talk, Open, Examine...): KH1's field
+/// interaction, not one of Sora's moves.
+unsafe fn context_command(base: usize, kind: u8) -> bool {
+    let e = rd::<[u8; 4]>(base + MENU_ENTRIES_RVA);
+    let ctx = (e[0] != 1 && e[0] == kind) || (e[3] != 0 && e[3] == kind);
+    if ctx {
+        cmd_log(format!("command {kind:#x}: the menu's context command (entries {e:02x?}), allowed in any form"));
+    }
+    ctx
+}
+
 /// Command types that don't move Sora (`0x1402A1470`): the party's (`+0x98`'s), the menu's.
 const NOT_SORAS: [u8; 21] = [0x1D, 0x1E, 0x46, 0x51, 0x54, 0x64, 0x4B, 0x4D, 0x4E, 0x52, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5E, 0x5F, 0x60, 0x4F, 0x5C, 0x5D];
 
@@ -347,7 +363,10 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     // Valor by the menu, `spell_not_yet`) and an item. (Type 99 too, which s222 let through: the
     // command step runs it as attack row 0x3E, `0x1402A4760`; the user, s229: "valor form can
     // still use strike raid, ragnarok".)
-    if actor == sora && super::form::two_blades() && !matches!(kind, 0 | 1 | 2 | ITEM_COMMAND_TYPE) && !NOT_SORAS.contains(&kind) {
+    // (Not the field's context commands, talking and examining: the user, "please let sora be
+    // allowed to talk to people and interact with objects in drive forms"; the log: Talk, command
+    // 0x4, refused in Final Form.)
+    if actor == sora && super::form::two_blades() && !matches!(kind, 0 | 1 | 2 | ITEM_COMMAND_TYPE) && !NOT_SORAS.contains(&kind) && !context_command(base, kind) {
         static N: AtomicU32 = AtomicU32::new(0);
         if N.fetch_add(1, Ordering::Relaxed) < 30 {
             log(&format!("command {kind:#x} ({full:08x}) refused: not in Valor Form"));

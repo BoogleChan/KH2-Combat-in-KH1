@@ -3123,3 +3123,12 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 
   The pick is now stored before the confirm's stats refresh (`docs/kh1-equipment.md`).
 - Nothing tested in game.
+
+### 2026-10-20: Stage 263 (talking and examining in Drive Forms)
+- The user: "please let sora be allowed to talk to people and interact with objects in drive
+  forms". In the log, Talk (command 0x4) was refused in Final Form by the two-Keyblade rule.
+  That rule was s222/s229's refusal of KH1's specials in Valor and Final.
+- The menu's context commands are now let through in any form (`combat::context_command`).
+  These are the command ids KH1's menu fill (`0x140292760`, through `0x140290E70 (slot, id)`)
+  puts in its top entries (`0x140529614`, Steam `0x528914`): Talk in Attack's slot, Open /
+  Examine in the Triangle slot. KH1 takes him for them as it does in base form.
