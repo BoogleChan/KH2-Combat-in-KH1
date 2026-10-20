@@ -906,6 +906,16 @@ impl Character {
 
     /// Just touched down out of a move of the host's own (a spell cast in the air): standing,
     /// in the landing (its short hold, a jump out of it at any frame).
+    /// `land_now`, sliding on at `vel_h` (per frame) through the landing as a landing out of his
+    /// own fall does (a form's ground inertia brakes it).
+    pub fn land_sliding(&mut self, vel_h: [f32; 2]) {
+        self.land_now();
+        if vel_h.iter().all(|v| v.is_finite()) {
+            self.vel_h = vel_h;
+            self.steer_speed = len2(vel_h);
+        }
+    }
+
     pub fn land_now(&mut self) {
         self.airborne = true;
         self.mode = Mode::Free;

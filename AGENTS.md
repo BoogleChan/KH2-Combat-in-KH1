@@ -3172,3 +3172,12 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - Effects that follow their anchor were moved, after their first frame, by base Sora's rule (the
   right hand's Keyblade tip). The left blade's effects jumped there; Valor's too. Both forms now
   follow the right anchor every frame.
+
+### 2026-10-20: Stage 267 (a form's landing out of KH1's air casts)
+- The user: "when landing from the aerial KH1 magic in final form, it doesn't play final form's
+  landing animation so sora doesnt slide like he should when hitting the ground".
+- In a Drive Form, a KH1 air cast (Gravity, Stop, Aero, and Wisdom's / Final's Cure) that KH1
+  sets down (its ground state) is now handed to KH2 straight into the form's landing.
+  `Character::land_sliding` slides on at the speed the cast kept (`form_cast_frame`), braked by
+  the form's ground inertia as a landing from his own fall is. Base Sora's KH1 air spells still
+  land KH1's way (s241's choice).

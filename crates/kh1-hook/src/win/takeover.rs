@@ -701,6 +701,8 @@ static JUMP_HELD_OVER: AtomicU8 = AtomicU8::new(0);
 static JUMP_WATCH: AtomicU32 = AtomicU32::new(0);
 /// KH1 landed him out of an air cast: KH2 starts in its landing.
 static LAND_NOW: AtomicBool = AtomicBool::new(false);
+/// ... sliding on at this speed (a form's KH1 air cast, `form_cast_frame`'s).
+static LAND_SLIDE: Mutex<Option<[f32; 2]>> = Mutex::new(None);
 
 /// A command KH1 runs (a spell): when it started and how many attack objects of Sora's were
 /// live then (a new one is the spell's shot going out).
@@ -1263,7 +1265,17 @@ unsafe fn takeover(actor: usize) -> bool {
         //     log("KH1's air spell on the ground without its landing seen: KH2's landing");
         // }
         // let cast_landed = air_cast().is_some() && (seen || late);
-        let cast_landed = false;
+        // A Drive Form's KH1 air cast set down by KH1 (the user: "when landing from the aerial KH1
+        // magic in final form, it doesn't play final form's landing animation so sora doesnt slide
+        // like he should when hitting the ground"): KH2 takes him into the form's own landing,
+        // sliding on at the speed he cast with (`form_cast_frame`'s), as out of his own fall.
+        let form_landed = super::form::in_form() && command && state == 0 && frames >= 1 && air_cast().is_some() && FORM_CAST.try_lock().ok().is_some_and(|f| f.is_some_and(|f| f.air));
+        if form_landed {
+            let v = FORM_CAST.try_lock().ok().and_then(|f| f.map(|f| f.v));
+            *LAND_SLIDE.lock().unwrap() = v;
+            log(&format!("a form's KH1 air cast landed: the form's landing, sliding at {:.1?}", v));
+        }
+        let cast_landed = form_landed;
         // KH1's jump or glide (`stylejump`, the Jump / Glide styles at KH1): which, if any.
         let style_air = super::stylejump::mode();
         // KH1's glide out of KH2's jump, down on the ground: KH2's landing, as an air spell's.
@@ -1674,7 +1686,10 @@ unsafe fn takeover(actor: usize) -> bool {
     }
     if LAND_NOW.swap(false, Ordering::Relaxed) {
         d.grounded = true;
-        d.character.land_now();
+        match LAND_SLIDE.lock().unwrap().take() {
+            Some(v) => d.character.land_sliding(v),
+            None => d.character.land_now(),
+        }
         d.held.0 = false;
     }
     d.growth.update(base, &mut d.character);
