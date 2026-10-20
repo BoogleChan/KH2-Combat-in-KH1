@@ -76,6 +76,7 @@ unsafe extern "system" fn on_exception(p: *mut c_void) -> i32 {
     }
     log(&format!("CRASH {code:#x} at {}{info}; {}; stack: {}", name(at), r.join(" "), stack.join(" ")));
     log(&format!("at the crash: {}", super::fx12::crash_note(EXE.load(Ordering::Relaxed))));
+    super::flush_log();
     0
 }
 

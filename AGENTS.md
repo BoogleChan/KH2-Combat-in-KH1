@@ -3278,3 +3278,12 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - Anti's ledge hang ("even crazier now"). s274's hand alignment never ran: it was kept under
   300 units, and the hang's hands sit further off. The cap is now 3000, and each alignment is
   logged (30).
+
+### 2026-10-20: Stage 277 (the log off the game's thread; Anti hangs by his foot)
+- The user: "the sound issue is still happening, as is the frame drops". s276's profile logged
+  nothing over 2 ms on the game's thread. `log` wrote and flushed each line there, and a KH2
+  move logs several. Lines are now queued and written by a thread of ours every 50 ms
+  (`flush_log`; a crash and a panic flush at once).
+- Anti's ledge hang: "sora should be hanging from his foot, so he should be significantly lower
+  in this hang animation". The pose's topmost point (his gripping foot) now goes where KH1's
+  hands hold the ledge, not his hands.

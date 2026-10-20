@@ -1519,11 +1519,15 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
         if let Some(h) = kh1_hands {
             let inv = to_world.inverse();
             let kh1_mid = (inv * h[0]).w_axis.truncate().lerp((inv * h[1]).w_axis.truncate(), 0.5);
-            let ours = pose[HANDS[0].0].w_axis.truncate().lerp(pose[HANDS[1].0].w_axis.truncate(), 0.5);
+            // (Anti hangs upside down by a foot, the user: "sora should be hanging from his foot, so
+            // he should be significantly lower in this hang animation": the pose's topmost bone,
+            // whatever it is, goes where KH1's hands hold the ledge.)
+            let up = inv.transform_vector3(glam::Vec3::new(0.0, -1.0, 0.0)).normalize_or_zero();
+            let ours = pose.iter().take(SORA_BONES as usize).map(|m| m.w_axis.truncate()).filter(|p| p.is_finite()).max_by(|a, b| a.dot(up).total_cmp(&b.dot(up))).unwrap_or_default();
             let d = kh1_mid - ours;
             static N: AtomicU32 = AtomicU32::new(0);
             if N.fetch_add(1, Ordering::Relaxed) < 30 {
-                log(&format!("Anti Form's ledge pose: hands {ours:.0?}, KH1's {kh1_mid:.0?}: moved {d:.0?}"));
+                log(&format!("Anti Form's ledge pose: its top {ours:.0?}, KH1's hands {kh1_mid:.0?}: moved {d:.0?}"));
             }
             // (s274 kept the move under 300 and so never made it: the hang's hands sit further.)
             if d.is_finite() && d.length() < 3000.0 {

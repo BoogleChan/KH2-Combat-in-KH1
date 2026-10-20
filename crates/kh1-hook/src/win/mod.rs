@@ -57,11 +57,36 @@ static IN_KH1: AtomicBool = AtomicBool::new(false);
 
 pub const KH1_EXE: &str = "KINGDOM HEARTS FINAL MIX.exe";
 
-/// Appends a line to `kh1-kh2.log` next to the game.
+/// Lines waiting for the log's writer thread.
+static LOG_QUEUE: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static LOG_WRITER: std::sync::Once = std::sync::Once::new();
+
+/// Appends a line to `kh1-kh2.log` next to the game. The game's thread only queues it; a thread
+/// of ours writes and flushes (each line was written and flushed on the game's thread, the user:
+/// "the frame drops", many lines during a KH2 move).
 pub fn log(line: &str) {
+    LOG_WRITER.call_once(|| {
+        std::thread::spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            flush_log();
+        });
+    });
+    if let Ok(mut q) = LOG_QUEUE.lock() {
+        q.push(line.to_string());
+    }
+}
+
+/// Writes the queued lines now (the writer thread, and a crash: `crash`).
+pub fn flush_log() {
+    let lines = LOG_QUEUE.lock().map(|mut q| std::mem::take(&mut *q)).unwrap_or_default();
+    if lines.is_empty() {
+        return;
+    }
     if let Ok(mut g) = LOG.lock() {
         if let Some(f) = g.as_mut() {
-            let _ = writeln!(f, "{line}");
+            for l in lines {
+                let _ = writeln!(f, "{l}");
+            }
             let _ = f.flush();
         }
     }
@@ -177,7 +202,10 @@ pub unsafe extern "system" fn DllMain(_inst: *mut c_void, reason: u32, _reserved
             *LOG.lock().unwrap() = Some(f);
         }
         log(&format!("kh1-kh2 {} ({}) loaded (build {}) in {exe}", crate::VERSION, env!("CARGO_PKG_VERSION"), env!("KH1_KH2_BUILD")));
-        std::panic::set_hook(Box::new(|info| log(&format!("PANIC in kh1-kh2: {info}"))));
+        std::panic::set_hook(Box::new(|info| {
+            log(&format!("PANIC in kh1-kh2: {info}"));
+            flush_log();
+        }));
         let base = GetModuleHandleA(std::ptr::null()) as usize;
         let build = addr::detect(base);
         if build == addr::Build::Unknown {
