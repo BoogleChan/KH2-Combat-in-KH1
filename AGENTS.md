@@ -2998,3 +2998,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   weapon bones were still the last drawn ones, far from the hand, and that hold put the weapon
   there. A hold is noted only with every weapon bone within 250 of the grip (logged otherwise).
   The shield's orientation ("isn't perfectly oriented in his hand") is open: no detail given.
+
+### 2026-10-20: Stage 251 (KH1's jump handling off for now)
+- The user: comment off, for now, (1) the Jump style's KH1 jump start (`style_air_start`'s jump
+  branch: KH1's ground jump handler, KH2's speed into its air speed, its take-off height), (2)
+  the jump button kept from KH1 in its jump / held while rising (s245's strip for
+  `stylejump::JUMP`, s248's `kh1_rise`; KH1's glide keeps its strip and Square-as-jump-held),
+  (3) s247's filter on KH1's action bit (it reads as Square again, as before). The Jump row at
+  KH1 does nothing meanwhile (KH2's jump).
