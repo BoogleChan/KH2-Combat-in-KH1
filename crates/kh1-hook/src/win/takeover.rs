@@ -814,7 +814,7 @@ pub fn command_started(shots: usize, spell: Option<u8>) {
         // (His speed going in, KH2's last frame: no halt at the cast's start, the user.)
         let v = with_kh2(|_, o| [o.displacement[0], o.displacement[2]]).unwrap_or([0.0; 2]);
         let v = if v[0].is_finite() && v[1].is_finite() && v[0].hypot(v[1]) < 40.0 { v } else { [0.0; 2] };
-        Some(FormCast { len: clip.length, react, allow, accel: p.acceleration, brake: p.brake, walk: p.walk_speed, run: p.run_speed, threshold: p.run_threshold, v, air })
+        Some(FormCast { len: clip.length, react, allow, accel: p.acceleration, brake: p.brake, walk: p.walk_speed, run: p.run_speed, threshold: p.run_threshold, v, air, air_keep: p.air_keep })
     });
     if let Ok(mut f) = FORM_CAST.lock() {
         *f = fc;
@@ -836,6 +836,8 @@ struct FormCast {
     threshold: f32,
     v: [f32; 2],
     air: bool,
+    /// The form's air steering (`air_keep`: the share of his air speed kept each step).
+    air_keep: f32,
 }
 
 static FORM_CAST: Mutex<Option<FormCast>> = Mutex::new(None);
@@ -867,6 +869,32 @@ unsafe fn form_cast_frame(actor: usize, frames: u32) -> Option<(u32, u32)> {
             let base = BASE.load(Ordering::Relaxed);
             let mv: MoveFn = std::mem::transmute(base + MOVE_RVA);
             mv(actor, &[fc.v[0], 0.0, fc.v[1], 0.0], 0);
+        }
+    }
+    // In the air (KH1's jump or fall state): he keeps the speed he had going in, as KH2's air
+    // casts do (the user: "when casting aerial gravity/stop/aero, the animations are correct, but
+    // sora doesnt maintain his velocity"); KH1's own air cast slowed him to a stop. The stick
+    // steers him in the motion's allow-movement range, by the form's air steering (toward the
+    // stick at its run speed); his height stays KH1's. KH1's own air speed (`+0x3C0`) is zeroed
+    // so it adds nothing.
+    if fc.air && matches!(rd::<i32>(actor + 0x70), 1 | 2) {
+        let tilt = move_tilt();
+        let moving = fc.allow.is_some_and(|(a, b)| (a..b).contains(&frames));
+        if moving && tilt > 0.0 && frames % 2 == 0 {
+            let dir = stick_dir(actor, tilt);
+            let t = dir * fc.run;
+            let k = fc.air_keep.clamp(0.0, 1.0);
+            fc.v = [fc.v[0] * k + t.x * (1.0 - k), fc.v[1] * k + t.y * (1.0 - k)];
+        }
+        wr(actor + 0x3C0, [0.0f32; 4]);
+        if fc.v[0] != 0.0 || fc.v[1] != 0.0 {
+            let base = BASE.load(Ordering::Relaxed);
+            let mv: MoveFn = std::mem::transmute(base + MOVE_RVA);
+            mv(actor, &[fc.v[0], 0.0, fc.v[1], 0.0], 0);
+        }
+        static N: AtomicU32 = AtomicU32::new(0);
+        if frames == 0 && N.fetch_add(1, Ordering::Relaxed) < 20 {
+            log(&format!("KH1 air cast in a form's motion: his speed {:.1}/frame kept", fc.v[0].hypot(fc.v[1])));
         }
     }
     Some((fc.len, fc.react))

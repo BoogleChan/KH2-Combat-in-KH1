@@ -3152,3 +3152,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - Code: a per-form table (`form::Kind::magic_sub`, `casting_form`) replaces the `in_wisdom()`
   checks. Final's Reflect now runs at Final's sub too.
 - Not tested in game.
+
+### 2026-10-20: Stage 265 (KH1 air casts keep his speed)
+- The user: "when casting aerial gravity/stop/aero, the animations are correct, but sora doesnt
+  maintain his velocity". KH1's own air cast slowed him to a stop.
+- In a form's (or the KH2 Magic style's) KH1 air cast, `takeover::form_cast_frame` now moves
+  him at the sideways speed he went in with. In the cast motion's allow-movement range the
+  stick steers that speed by the form's air steering (`air_keep`, toward its run speed).
+  KH1's own air speed (`+0x3C0`) is zeroed, and his height stays KH1's.
