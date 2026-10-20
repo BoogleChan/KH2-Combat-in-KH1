@@ -543,7 +543,14 @@ pub fn abilities(d: &mut Drive, ch: &mut Character) {
 /// half as often out of it (KH2's gauge drains so); with none left, back to Sora (on the
 /// ground, `before_step`).
 pub unsafe fn after_step(d: &mut Drive, actor: usize, battle: bool) {
-    super::tint::refresh(actor, d.form.as_ref().is_some_and(|f| f.kind == Kind::Wisdom));
+    super::tint::refresh(
+        actor,
+        d.form.as_ref().and_then(|f| match f.kind {
+            Kind::Wisdom => Some(super::tint::Look::Wisdom),
+            Kind::Valor => Some(super::tint::Look::Valor),
+            Kind::Final => None,
+        }),
+    );
     // Valor's second Keyblade's Strength and MP (and back to Sora's own after).
     super::valorstats::step(actor);
     let Some(f) = d.form.as_mut() else { return };

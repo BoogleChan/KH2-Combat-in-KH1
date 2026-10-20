@@ -39,8 +39,8 @@ damage_scale = 1.0\r\n\
 magic_scale = 1.0\r\n\
 ; glide: square = Square in the air glides (as KH1's Superglide); jump = hold jump in the air\r\n\
 glide = square\r\n\
-; air_cast_fall: how fast Sora falls while Reflect plays in the air (0 = he hangs, 1 = full\r\n\
-;   gravity); his fall is stopped as the cast starts\r\n\
+; air_cast_fall: how fast Sora falls while Reflect plays in the air, a share of KH1's own\r\n\
+;   gravity (0 = he hangs, 1 = KH1's); his fall is stopped as the cast starts\r\n\
 air_cast_fall = 1.0\r\n\
 ; kh2_voice: on = Sora's KH2 battle voice on those moves instead of KH1's; off = KH1's voice\r\n\
 kh2_voice = off\r\n\

@@ -113,6 +113,7 @@ pub fn start() {
         let mut spell: Vec<(u8, u16, i32)> = Vec::new();
         if super::settings::get().reflect {
             events.extend(super::reflect::cast_voices(kh2).into_iter().map(character_core::EventKind::Voice));
+            events.extend(REFLECT_VOICES.map(character_core::EventKind::Voice));
             spell = super::reflect::element_sounds();
         }
         // Wisdom Form's (its shots', `form`), and the revert's (Sora's elements, `form::revert_fx`).
@@ -170,7 +171,8 @@ fn load(events: &[character_core::EventKind], spell: &[(u8, u16, i32)]) -> Resul
                 wants.push((id, Want::Sound(id)));
             }
             // (The user: KH1's voice, not KH2's, unless `kh2_voice = on`.)
-            EventKind::Voice(v) if v >= 0 && !voice_ids.contains(&v) && super::settings::get().kh2_voice => voice_ids.push(v),
+            // (Reflect's, `REFLECT_VOICES`, whatever `kh2_voice` says.)
+            EventKind::Voice(v) if v >= 0 && !voice_ids.contains(&v) && (super::settings::get().kh2_voice || REFLECT_VOICES.contains(&v)) => voice_ids.push(v),
             _ => {}
         }
     }
@@ -292,7 +294,8 @@ pub unsafe fn event(motion: u16, kind: character_core::EventKind) {
                 None => note_play(|| format!("sound {id} (motion {motion}) not loaded")),
             }
         }
-        EventKind::Voice(v) => {
+        // (A motion's voice only with `kh2_voice`: Reflect's voices load without it.)
+        EventKind::Voice(v) if super::settings::get().kh2_voice => {
             if let Some(c) = l.voices.get(&v) {
                 static PICK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
                 let n = PICK.fetch_add(7, std::sync::atomic::Ordering::Relaxed) as usize;
@@ -323,6 +326,25 @@ fn note_play(what: impl FnOnce() -> String) {
     static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 40 {
         log(&format!("KH2 sound played: {} (volume {:.2})", what(), game_volume(Channel::Effects)));
+    }
+}
+
+/// Sora's swing grunts (VTBL voice 4: clips 9..13, his combo swings' voice) and Reflect's
+/// finisher line (voice 25, clip 31), loaded whatever `kh2_voice` says (`reflect_voice`).
+pub const SWING_VOICE: i16 = 4;
+pub const REFLECT_FINISHER_VOICE: i16 = 25;
+pub const REFLECT_VOICES: [i16; 2] = [SWING_VOICE, REFLECT_FINISHER_VOICE];
+
+/// Reflect's cast voice `v` (`reflect`), whatever `kh2_voice` says: one of its clips at random.
+pub unsafe fn reflect_voice(v: i16) {
+    let Ok(g) = LOADED.try_lock() else { return };
+    match g.as_ref().and_then(|l| l.voices.get(&v)) {
+        Some(c) if !c.is_empty() => {
+            let n = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos()) / 1000) as usize % c.len();
+            play(&c[n], Channel::Voice);
+            note_play(|| format!("Reflect voice {v} (clip {n} of {})", c.len()));
+        }
+        _ => note_play(|| format!("Reflect voice {v} not loaded")),
     }
 }
 

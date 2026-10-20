@@ -2765,3 +2765,30 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 ### 2026-10-19: Stage 232 (Final Form's code kept secret)
 - The user: the code is removed from every readable part (notes, comments, logs); the table in
   `form.rs` is stored encoded. No change in play.
+
+### 2026-10-19: Stage 233 (the user's 19:57 list; Final Form's combos)
+- Footsteps: KH2's back (s229 undone).
+- Air casts (Reflect) fall at KH1's own gravity after the stop: KH1's air state falls
+  0.4847 × 0.5 × t² (`0x1402AD3A0`, its step `0x1423405DC` 1.0 at 60 fps) and at most 20 a frame;
+  the controller's air cast takes a gravity share over 1 and its own fastest fall
+  (`air_magic_fall_max`); `air_cast_fall` is now a share of KH1's.
+- Final Form: a swing meeting a wall with no repelled motion in the moveset (Final has no 41)
+  went back to its frame 0, met the wall again, for ever: "repeats the same moves ... soft locks
+  you" (wall clinks on since s223). Now only pushed back (test
+  `wall_hit_without_a_repelled_motion_doesnt_loop`). Its air combo ended after two hits: an air
+  attack with an allow-movement window dropped its no-gravity frames (Wisdom's shots' rule); now
+  only one moving all through does.
+- Lock-on: an air swing at a target just below (within 150 past its radius) hops no higher than
+  reaches it (test `air_swing_hops_less_at_a_target_below`).
+- KH1 spells: Attack pressed during any of them is taken (KH1's menu refused it while it held
+  him) and cuts the spell once it is out (a form's at its cast motion's input frame), the combo
+  going on; pressed too early it is dropped.
+- Clanks (helper, `clank`): KH2 swings clash along the drawn KH1 Keyblade (six points, KH1's own
+  blade range per weapon, KH1's clash radius), swept between frames, against guards, walls and
+  enemy attacks (KH1's attack-against-attack clash); Aerial Dodge carries a KH1 guard object (a
+  parry). `docs/kh1-clash.md`.
+- Reflect (helper, `refl-voice`): the pop at the barrier's end whatever the hits (the hold for
+  hits taken out; the pop strikes with the counter at frame 30, the burst row's damage); a random
+  KH2 attack grunt on each cast and voice 25 (its finisher line) on the finisher.
+- Looks (helper, `form-colors`): Wisdom's sleeves blue; Valor's sleeves, belt, hood lining and
+  shoes red (`tint::Look`, `docs/kh1-tint.md`).

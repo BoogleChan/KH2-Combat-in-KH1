@@ -195,3 +195,17 @@ shatter: the script starts no element for it and element 11's 174 plays nothing 
   end, however many attacks met the barrier (the user: the second attack on one Reflect made it
   pop again; 574's re-arms hit each foe 3..5 times). 574 still runs in the script and its effect
   plays. kh2-magic test `reflect_pops_once_for_two_hits`.
+
+## One pop, at the barrier's end, whatever the hits (s233)
+
+- The script's timeline is the same for any number of hits (the sample files, every level): the
+  barrier (element 0, ATKP 573) from frame 1 to 29; the first hit flashes it (element 1); at 29
+  the counter's animation (element 4 / 5 / 6 by tier) and at 30 the counter attack (574 for 1..4
+  hits, 576 for 5..6, 578 for more); the burst (667 / 668 / 669, the same tier) at 58.
+- Ours: the pop strikes once per foe as the counter appears (frame 30, with its animation), with
+  its tier's burst row for damage; the burst at 58 no longer strikes. The hold while hits keep
+  coming (stage 172) is gone: it moved the pop with the hits. Test
+  `reflect_pop_frame_ignores_hit_count`.
+- Voices (always, not `kh2_voice`'s): a ground or air cast plays one of his swings' grunts at
+  random (VTBL voice 4: clips 9..13), the finisher Reflect KH2's MAGC finisher line for Reflect
+  (voice 25, clip 31; Fire / Blizzard / Thunder have 11 / 12 / 13, their name calls).

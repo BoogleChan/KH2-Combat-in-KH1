@@ -1,4 +1,8 @@
-//! Sora's clothes recoloured in a Drive Form (the user: Wisdom Form, "recolor KH1 Sora blue").
+//! Sora's clothes recoloured in a Drive Form (the user: Wisdom Form, "recolor KH1 Sora blue";
+//! s233: Wisdom's sleeves blue too, and Valor red: "his shoes red, his sleeves red, his belt red,
+//! the inside part of his hoodie red"). Each look recolours its parts of the textures (`ops`):
+//! a hue shift (red or yellow or blue to another hue) or a colourize (light grey and cream given
+//! a hue), some only within a region of the texture (`SLEEVES`, `BELT`, `HOOD_LINING`).
 //!
 //! The PC draws the remastered Sora (`docs/kh1-tint.md`): 9 meshes on 4 HD textures, the
 //! jumpsuit, jacket, hood, zipper and crown all on the second (`-1c1.dds`, slot 1), and a strip
@@ -31,21 +35,79 @@ const TEX_GPU: usize = 0x70;
 const TEX_W: usize = 0x7C;
 const TEX_H: usize = 0x7E;
 /// The slots recoloured (mesh table entries 0 and 1: `-1c0`, the collar; `-1c1`, the clothes;
-/// 3: `-1c3`, the shoes and the yellow pouches, the user: "soras shoes should turn from yellow to
-/// blue in this form").
+/// 3: `-1c3`, the shoes (the user: "soras shoes should turn from yellow to blue in this form";
+/// every texel of it is on a leg or foot bone, `docs/kh1-tint.md`).
 const SLOTS: [usize; 3] = [0, 1, 3];
-/// The hue each slot's colour is taken from (red; the shoes' yellow) and how wide (degrees).
-const FROM: [(f32, f32); 3] = [(0.0, RED_WIDTH), (0.0, RED_WIDTH), (YELLOW_HUE, YELLOW_WIDTH)];
 const YELLOW_HUE: f32 = 48.0;
-const YELLOW_WIDTH: f32 = 16.0;
+/// (Wide enough for the orange where the yellow shades off; only bright texels, so the dark
+/// brown beside the shoes stays.)
+const YELLOW_WIDTH: f32 = 26.0;
+const YELLOW_MIN_V: f32 = 0.42;
+/// The blue of the belt and of the hood's lining (hue, half width).
+const BLUE_HUE: f32 = 225.0;
+const BLUE_WIDTH: f32 = 22.0;
 const MODEL: &str = "xa_ex_0010.mdls";
-/// Red → blue: the hue that is moved, how wide (degrees, soft edge after), the saturation it
-/// takes from (soft edge after), and the hue it goes to.
+/// Hue shift: how wide the colour moved is (degrees, soft edge after), the saturation it takes
+/// from (soft edge after).
 const RED_WIDTH: f32 = 12.0;
 const RED_SOFT: f32 = 6.0;
 const SAT_FROM: f32 = 0.55;
 const SAT_SOFT: f32 = 0.15;
-const TO_HUE: f32 = 225.0;
+const BLUE: f32 = 225.0;
+const RED: f32 = 0.0;
+
+/// Regions of `-1c1` (u0, v0, u1, v1; texture fractions), found by plotting the remastered mesh
+/// 1's vertices by bone on the texture (`docs/kh1-tint.md`): the jacket's sleeves (the cream
+/// strip both arms' bones use; the zipper rail beside it below 0.62 left out), the belt (the
+/// blue band of the top strip, meshes 4..8) and the hood's lining (the blue band of the hood).
+const SLEEVES: [[f32; 4]; 2] = [[0.035, 0.415, 0.236, 0.85], [0.236, 0.415, 0.215 + 0.025, 0.62]];
+const BELT: [f32; 4] = [0.035, 0.07, 0.57, 0.14];
+const HOOD_LINING: [f32; 4] = [0.755, 0.72, 1.0, 1.0];
+
+/// A form's look (`form`): Wisdom's blue, Valor's red.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Look {
+    Wisdom,
+    Valor,
+}
+
+/// One recolouring.
+#[derive(Clone, Copy)]
+enum Op {
+    /// Saturated texels near hue `from` (within `width`), at least `min_v` bright, to hue `to`,
+    /// same saturation and brightness; within `rect` if given.
+    Shift { from: f32, width: f32, to: f32, min_v: f32, rect: Option<[f32; 4]> },
+    /// Light, unsaturated texels (white, cream, grey) given hue `to` at saturation `sat`, their
+    /// brightness kept; within `rect`.
+    Colourize { to: f32, sat: f32, rect: [f32; 4] },
+}
+
+/// What each look does to each slot (`SLOTS` order); none: that slot isn't swapped.
+fn ops(look: Look, k: usize) -> Vec<Op> {
+    let shift = |from, width, to| Op::Shift { from, width, to, min_v: 0.0, rect: None };
+    let shoes = |to| Op::Shift { from: YELLOW_HUE, width: YELLOW_WIDTH, to, min_v: YELLOW_MIN_V, rect: None };
+    match (look, k) {
+        // Wisdom (the user: "recolor KH1 Sora blue"): the reds and the shoes' yellow blue, and
+        // the sleeves blue (the user, s232: "can you make his sleeves blue when in wisdom?").
+        (Look::Wisdom, 0) => vec![shift(0.0, RED_WIDTH, BLUE)],
+        (Look::Wisdom, 1) => {
+            let mut v = vec![shift(0.0, RED_WIDTH, BLUE)];
+            v.extend(SLEEVES.map(|rect| Op::Colourize { to: BLUE, sat: 0.7, rect }));
+            v
+        }
+        (Look::Wisdom, 2) => vec![shoes(BLUE)],
+        // Valor (the user: "make his shoes red, his sleeves red, his belt red, the inside part of
+        // his hoodie red"); his jumpsuit is red already.
+        (Look::Valor, 1) => {
+            let mut v: Vec<Op> = SLEEVES.map(|rect| Op::Colourize { to: RED, sat: 0.75, rect }).to_vec();
+            v.push(Op::Shift { from: BLUE_HUE, width: BLUE_WIDTH, to: RED, min_v: 0.0, rect: Some(BELT) });
+            v.push(Op::Shift { from: BLUE_HUE, width: BLUE_WIDTH, to: RED, min_v: 0.0, rect: Some(HOOD_LINING) });
+            v
+        }
+        (Look::Valor, 2) => vec![shoes(RED)],
+        _ => Vec::new(),
+    }
+}
 
 static BASE: AtomicUsize = AtomicUsize::new(0);
 
@@ -56,16 +118,17 @@ struct Pixels {
     bgra: Vec<u8>,
 }
 
-/// Each slot's recoloured pixels from the PKG (`None`: not read).
+/// The slots' original pixels from the PKG (`None`: not read).
 static FROM_PKG: [OnceLock<Option<Arc<Pixels>>>; 3] = [OnceLock::new(), OnceLock::new(), OnceLock::new()];
 
 struct Swap {
-    /// Per slot: the source texture swapped (its address), KH1's GPU texture to put back.
-    swapped: [Option<(usize, u64)>; 3],
-    /// Our GPU texture for a source texture (made once per source).
-    ours: Option<HashMap<usize, u64>>,
-    /// Sources we couldn't make one for (not tried again).
-    failed: Vec<usize>,
+    /// Per slot: the source texture swapped (its address), KH1's GPU texture to put back, and
+    /// the look it wears.
+    swapped: [Option<(usize, u64, Look)>; 3],
+    /// Our GPU texture for a source texture and a look (made once each).
+    ours: Option<HashMap<(usize, Look), u64>>,
+    /// Those we couldn't make (not tried again).
+    failed: Vec<(usize, Look)>,
 }
 
 static SWAP: Mutex<Swap> = Mutex::new(Swap { swapped: [None, None, None], ours: None, failed: Vec::new() });
@@ -77,51 +140,78 @@ unsafe fn wr<T: Copy>(p: usize, v: T) {
     std::ptr::write_unaligned(p as *mut T, v)
 }
 
-/// Pixels near hue `from` (within `width` degrees) to blue, in place (B8G8R8A8). Returns how
-/// many changed.
-fn recolour(bgra: &mut [u8], (from, width): (f32, f32)) -> usize {
+fn hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let mx = r.max(g).max(b);
+    let mn = r.min(g).min(b);
+    let c = mx - mn;
+    if c <= 1e-6 || mx <= 0.0 {
+        return (0.0, 0.0, mx);
+    }
+    let h = if mx == r {
+        ((g - b) / c).rem_euclid(6.0)
+    } else if mx == g {
+        (b - r) / c + 2.0
+    } else {
+        (r - g) / c + 4.0
+    } * 60.0;
+    (h, c / mx, mx)
+}
+
+fn rgb(h: f32, s: f32, v: f32) -> (f32, f32, f32) {
+    let hh = h.rem_euclid(360.0) / 60.0;
+    let i = hh.floor() as i32 % 6;
+    let f = hh - hh.floor();
+    let (p, q, t) = (v * (1.0 - s), v * (1.0 - s * f), v * (1.0 - s * (1.0 - f)));
+    match i {
+        0 => (v, t, p),
+        1 => (q, v, p),
+        2 => (p, v, t),
+        3 => (p, q, v),
+        4 => (t, p, v),
+        _ => (v, p, q),
+    }
+}
+
+/// `op` on `p`'s pixels, in place. Returns how many changed.
+fn apply(p: &mut Pixels, op: Op) -> usize {
+    let (w, h) = (p.w as usize, p.h as usize);
+    let rect = match op {
+        Op::Shift { rect, .. } => rect,
+        Op::Colourize { rect, .. } => Some(rect),
+    };
+    let [u0, v0, u1, v1] = rect.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+    let (x0, x1) = ((u0 * w as f32) as usize, ((u1 * w as f32).ceil() as usize).min(w));
+    let (y0, y1) = ((v0 * h as f32) as usize, ((v1 * h as f32).ceil() as usize).min(h));
     let mut changed = 0;
-    for px in bgra.chunks_exact_mut(4) {
-        let (b, g, r) = (px[0] as f32 / 255.0, px[1] as f32 / 255.0, px[2] as f32 / 255.0);
-        let mx = r.max(g).max(b);
-        let mn = r.min(g).min(b);
-        let c = mx - mn;
-        if c <= 1e-6 || mx <= 0.0 {
-            continue;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = (y * w + x) * 4;
+            let px = &mut p.bgra[i..i + 4];
+            let (b, g, r) = (px[0] as f32 / 255.0, px[1] as f32 / 255.0, px[2] as f32 / 255.0);
+            let (hue, s, v) = hsv(r, g, b);
+            let (k, (nr, ng, nb)) = match op {
+                Op::Shift { from, width, to, min_v, .. } => {
+                    let dh = (hue - from).rem_euclid(360.0);
+                    let d = dh.min(360.0 - dh);
+                    let k = ((width - d) / RED_SOFT).clamp(0.0, 1.0) * ((s - SAT_FROM) / SAT_SOFT).clamp(0.0, 1.0) * if min_v > 0.0 { ((v - min_v) / 0.08 + 0.5).clamp(0.0, 1.0) } else { 1.0 };
+                    (k, rgb(to, s, v))
+                }
+                Op::Colourize { to, sat, .. } => {
+                    // Light and grey: not the black trim, not already coloured.
+                    let k = ((0.3 - s) / 0.1).clamp(0.0, 1.0) * ((v - 0.3) / 0.15).clamp(0.0, 1.0);
+                    // (A little darker: the cream is near white, and a pale tint read as washed out.)
+                    (k, rgb(to, sat, v * 0.85))
+                }
+            };
+            if k <= 0.0 {
+                continue;
+            }
+            changed += 1;
+            let mix = |a: f32, z: f32| ((a * (1.0 - k) + z * k) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+            px[0] = mix(b, nb);
+            px[1] = mix(g, ng);
+            px[2] = mix(r, nr);
         }
-        let h = if mx == r {
-            ((g - b) / c).rem_euclid(6.0)
-        } else if mx == g {
-            (b - r) / c + 2.0
-        } else {
-            (r - g) / c + 4.0
-        } * 60.0;
-        let s = c / mx;
-        let dh = (h - from).rem_euclid(360.0);
-        let d = dh.min(360.0 - dh);
-        let w = ((width - d) / RED_SOFT).clamp(0.0, 1.0) * ((s - SAT_FROM) / SAT_SOFT).clamp(0.0, 1.0);
-        if w <= 0.0 {
-            continue;
-        }
-        changed += 1;
-        // The same saturation and brightness at the new hue.
-        let hh = TO_HUE / 60.0;
-        let i = hh.floor() as i32 % 6;
-        let f = hh - hh.floor();
-        let v = mx;
-        let (p, q, t) = (v * (1.0 - s), v * (1.0 - s * f), v * (1.0 - s * (1.0 - f)));
-        let (nr, ng, nb) = match i {
-            0 => (v, t, p),
-            1 => (q, v, p),
-            2 => (p, v, t),
-            3 => (p, q, v),
-            4 => (t, p, v),
-            _ => (v, p, q),
-        };
-        let mix = |a: f32, z: f32| ((a * (1.0 - w) + z * w) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-        px[0] = mix(b, nb);
-        px[1] = mix(g, ng);
-        px[2] = mix(r, nr);
     }
     changed
 }
@@ -150,9 +240,10 @@ fn dds_bgra(dds: &[u8]) -> Option<Pixels> {
     Some(Pixels { w, h, bgra })
 }
 
-fn recoloured(mut p: Pixels, what: &str, k: usize) -> Arc<Pixels> {
-    let n = recolour(&mut p.bgra, FROM[k]);
-    log(&format!("Wisdom tint: {what}, {}x{}, {n} texels recoloured ({:.1} %)", p.w, p.h, n as f32 * 100.0 / (p.w * p.h).max(1) as f32));
+fn recoloured(p: &Pixels, what: &str, k: usize, look: Look) -> Arc<Pixels> {
+    let mut p = Pixels { w: p.w, h: p.h, bgra: p.bgra.clone() };
+    let counts: Vec<usize> = ops(look, k).into_iter().map(|op| apply(&mut p, op)).collect();
+    log(&format!("form tint ({look:?}): {what}, {}x{}, texels recoloured per step {counts:?}", p.w, p.h));
     Arc::new(p)
 }
 
@@ -176,7 +267,10 @@ pub fn install() {
             let asset = format!("-1c{slot}.dds");
             let p = match install.read_remastered(kh1_data::Source::Live, MODEL, &asset) {
                 Ok((name, bytes)) => match dds_bgra(&bytes) {
-                    Some(p) => Some(recoloured(p, &format!("{MODEL} {name} (from the PKG)"), k)),
+                    Some(p) => {
+                        log(&format!("form tint: {MODEL} {name} read from the PKG ({}x{})", p.w, p.h));
+                        Some(Arc::new(p))
+                    }
                     None => {
                         log(&format!("Wisdom tint: {name} isn't a plain 32-bit DDS"));
                         None
@@ -250,12 +344,12 @@ struct Desc {
     flags: u32,
 }
 
-/// Our recoloured GPU texture for `src` (made on first use).
-unsafe fn ours_for(s: &mut Swap, k: usize, src: usize) -> Option<u64> {
-    if let Some(&t) = s.ours.as_ref().and_then(|o| o.get(&src)) {
+/// Our recoloured GPU texture for `src` in `look` (made on first use).
+unsafe fn ours_for(s: &mut Swap, k: usize, src: usize, look: Look) -> Option<u64> {
+    if let Some(&t) = s.ours.as_ref().and_then(|o| o.get(&(src, look))) {
         return Some(t);
     }
-    if s.failed.contains(&src) {
+    if s.failed.contains(&(src, look)) {
         return None;
     }
     let (w, h) = (rd::<u16>(src + TEX_W) as u32, rd::<u16>(src + TEX_H) as u32);
@@ -265,18 +359,15 @@ unsafe fn ours_for(s: &mut Swap, k: usize, src: usize) -> Option<u64> {
     let mem = if dds > 0x10000 && super::crash::readable(dds + 128) && rd::<u32>(dds) == 0x2053_4444 {
         let (dh, dw) = (rd::<u32>(dds + 12), rd::<u32>(dds + 16));
         let len = 128 + (dw as usize) * (dh as usize) * 4;
-        (dw == w && dh == h && super::crash::readable(dds + len - 1))
-            .then(|| dds_bgra(std::slice::from_raw_parts(dds as *const u8, len)))
-            .flatten()
-            .map(|p| recoloured(p, &format!("{name} (KH1's copy in memory)"), k))
+        (dw == w && dh == h && super::crash::readable(dds + len - 1)).then(|| dds_bgra(std::slice::from_raw_parts(dds as *const u8, len))).flatten().map(|p| recoloured(&p, &format!("{name} (KH1's copy in memory)"), k, look))
     } else {
         None
     };
-    let pixels = mem.or_else(|| FROM_PKG[k].get().cloned().flatten()).filter(|p| p.w == w && p.h == h);
+    let pixels = mem.or_else(|| FROM_PKG[k].get().cloned().flatten().filter(|p| p.w == w && p.h == h).map(|p| recoloured(&p, &format!("{name} (the PKG's)"), k, look)));
     let Some(p) = pixels else {
         if FROM_PKG[k].get().is_some() {
-            log(&format!("Wisdom tint: no pixels for {name} ({w}x{h}; neither KH1's copy nor the PKG's fits)"));
-            s.failed.push(src);
+            log(&format!("form tint: no pixels for {name} ({w}x{h}; neither KH1's copy nor the PKG's fits)"));
+            s.failed.push((src, look));
         }
         return None;
     };
@@ -288,55 +379,55 @@ unsafe fn ours_for(s: &mut Swap, k: usize, src: usize) -> Option<u64> {
     if r < 0x10000 {
         return None;
     }
-    let label = b"kh2combat_wisdom_blue\0";
+    let label: &[u8] = match look {
+        Look::Wisdom => b"kh2combat_wisdom_blue\0",
+        Look::Valor => b"kh2combat_valor_red\0",
+    };
     let t = create(r, &desc, p.bgra.as_ptr(), label.as_ptr(), 0);
     if t < 0x10000 {
-        log(&format!("Wisdom tint: KH1 made no texture for {name} ({t:#x})"));
-        s.failed.push(src);
+        log(&format!("form tint: KH1 made no texture for {name} ({t:#x})"));
+        s.failed.push((src, look));
         return None;
     }
-    log(&format!("Wisdom tint: blue {name} ready ({w}x{h}, texture {t:#x}; KH1's {:#x})", rd::<u64>(src + TEX_GPU)));
-    s.ours.get_or_insert_with(HashMap::new).insert(src, t);
+    log(&format!("form tint ({look:?}): {name} ready ({w}x{h}, texture {t:#x}; KH1's {:#x})", rd::<u64>(src + TEX_GPU)));
+    s.ours.get_or_insert_with(HashMap::new).insert((src, look), t);
     Some(t)
 }
 
-/// Each KH2 frame (`form`, the game thread): in the form, Sora's textures swapped for the blue
-/// copies; out of it, KH1's back.
-pub unsafe fn refresh(actor: usize, on: bool) {
+/// Each KH2 frame (`form`, the game thread): in a form with a look, Sora's textures swapped for
+/// its recoloured copies; out of it (revert, knocked out, another form), KH1's back. A model
+/// loaded again (an area change) is a new source: ours for the old one are left to KH1's freeing.
+pub unsafe fn refresh(actor: usize, look: Option<Look>) {
     if BASE.load(Ordering::Relaxed) == 0 || !super::settings::get().drive {
         return;
     }
     let Ok(mut s) = SWAP.try_lock() else { return };
     for (k, &entry) in SLOTS.iter().enumerate() {
         let src = source_texture(actor, entry);
-        match (on, s.swapped[k], src) {
-            (true, None, Some(src)) => {
-                if let Some(t) = ours_for(&mut s, k, src) {
-                    let orig = rd::<u64>(src + TEX_GPU);
-                    wr(src + TEX_GPU, t);
-                    s.swapped[k] = Some((src, orig));
-                }
-            }
-            (true, Some((was, _)), Some(src)) if was != src => {
-                // The model was loaded again (a new source, KH1's own texture in it); the old
-                // one, ours with it, is KH1's to free.
-                if let Some(o) = s.ours.as_mut() {
-                    o.remove(&was);
-                }
-                s.swapped[k] = None;
-            }
-            (false, Some((was, orig)), _) => {
-                let ours = s.ours.as_ref().and_then(|o| o.get(&was)).copied().unwrap_or(0);
+        let want = look.filter(|l| !ops(*l, k).is_empty());
+        if let Some((was, orig, l)) = s.swapped[k] {
+            if want != Some(l) || src != Some(was) {
+                let ours = s.ours.as_ref().and_then(|o| o.get(&(was, l))).copied().unwrap_or(0);
                 if src == Some(was) && rd::<u64>(was + TEX_GPU) == ours {
                     wr(was + TEX_GPU, orig);
+                } else if src != Some(was) {
+                    if let Some(o) = s.ours.as_mut() {
+                        o.retain(|(t, _), _| *t != was);
+                    }
                 }
                 s.swapped[k] = None;
             }
-            _ => {}
+        }
+        if let (Some(l), None, Some(src)) = (want, s.swapped[k], src) {
+            if let Some(t) = ours_for(&mut s, k, src, l) {
+                let orig = rd::<u64>(src + TEX_GPU);
+                wr(src + TEX_GPU, t);
+                s.swapped[k] = Some((src, orig, l));
+            }
         }
     }
     static N: AtomicU32 = AtomicU32::new(0);
-    if on && s.swapped.iter().all(|x| x.is_none()) && N.fetch_add(1, Ordering::Relaxed) == 600 {
-        log("Wisdom tint: still nothing swapped after 10 s in the form");
+    if look.is_some() && s.swapped.iter().all(|x| x.is_none()) && N.fetch_add(1, Ordering::Relaxed) == 600 {
+        log("form tint: still nothing swapped after 10 s in the form");
     }
 }

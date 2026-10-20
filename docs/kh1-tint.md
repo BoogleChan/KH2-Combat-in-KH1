@@ -154,3 +154,28 @@ once (pixels from KH1's DDS at `+0x68`, else the PKG's `-1c<n>.dds` read at star
 `Kh1Install::read_remastered`; red within 12° (soft 6°) at saturation over 0.55 (soft 0.15) moved
 to hue 225°) with `0x1400F9F80`, and writes it into `+0x70`; out of the form KH1's goes back. A
 model loaded again (a new source) is left to KH1 and swapped afresh.
+
+## Per-form looks (stage 233)
+
+Each form's look recolours its own parts of the textures (`tint::ops`), as a swapped copy per
+look, KH1's own texture back out of the form:
+
+- **Wisdom** (blue): the reds of `-1c0` / `-1c1` (hue shift to 225°), the shoes' yellow of `-1c3`,
+  and the jacket's sleeves.
+- **Valor** (red): the sleeves, the belt, the hood's lining, the shoes' yellow.
+
+Where the parts are, from plotting the remastered mesh 1 (and 3)'s vertices on the texture by
+the bone each follows (`-c0.cvbl`: tag 0x11 chunks give matrix slot → bone at `+8` / `+0xC`, a
+tag 1 chunk's vertices name their slot in the low 16 bits of the flags word):
+
+| part | texture | region (u, v fractions) | bones |
+|---|---|---|---|
+| sleeves (cream, black trim beside) | `-1c1` | 0.035..0.236 × 0.415..0.85 (and the cream to 0.24 above 0.62) | arms 90 / 195 and their sleeve chains (128.. / 233..) |
+| belt (blue band with holes) | `-1c1` | 0.035..0.57 × 0.07..0.14 | hips (meshes 4..8) |
+| hood lining (blue band) | `-1c1` | 0.755..1 × 0.72..1 | hood chains under the neck (79.., 85..) |
+| shoes (all the yellow) | `-1c3` | whole | legs and feet 18..24 / 44..50 |
+
+Sleeves are light and grey, so they are coloured ("colourize": hue and saturation given,
+brightness × 0.85 kept) only where texels are light and unsaturated (the black trim and the
+zipper rail stay); the belt and lining are blue, hue-shifted within their regions; the shoes'
+yellow (hue 48° ± 26°) only where bright (≥ 0.42), so the dark brown beside them stays.

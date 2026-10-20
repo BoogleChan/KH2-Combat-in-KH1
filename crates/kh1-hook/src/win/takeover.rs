@@ -134,6 +134,10 @@ static FLY_PRESS: AtomicBool = AtomicBool::new(false);
 static FLY_PRESS_GROUND: AtomicBool = AtomicBool::new(false);
 /// KH1's own move ended with him in the air: KH2 starts falling.
 static AIR_START: AtomicBool = AtomicBool::new(false);
+/// KH1's fall: its gravity (units per 60 Hz frame², `0x1403EAB54`) and fastest fall per frame
+/// (20 × its step, `0x1404308B8`).
+const KH1_FALL_ACCEL: f32 = 0.484_693_88;
+const KH1_FALL_MAX: f32 = 20.0;
 /// KH2 steps after a cut of a KH1 move still to log KH1's motion fields for.
 static AFTER_CUT_LOG: AtomicU32 = AtomicU32::new(0);
 /// KH1's glide (state 0x15, `0x1402B0BA0`): never while KH2 has him.
@@ -1256,7 +1260,13 @@ unsafe fn takeover(actor: usize) -> bool {
     // (Not out of a flight: there Square is flight's descend.)
     // Air casts (Reflect) fall as they play, as KH1's spells do (the user).
     d.character.air_magic_falls = true;
-    d.character.air_magic_gravity = super::settings::get().air_cast_fall;
+    // KH1's own fall for them (the user: Reflect should land with KH1's gravity, closer to KH1's
+    // physics): KH1's air state falls `KH1_FALL_ACCEL` × t² / 2 a frame at its 60 Hz step
+    // (`0x1402AD3A0`: 0.4847 × 0.5 × t², the step `0x1423405DC` 1.0), at most `KH1_FALL_MAX` a
+    // frame; `air_cast_fall` scales it.
+    let g = d.character.params.gravity;
+    d.character.air_magic_gravity = if g > 0.0 { super::settings::get().air_cast_fall * KH1_FALL_ACCEL / g } else { 1.0 };
+    d.character.air_magic_fall_max = Some(KH1_FALL_MAX);
     d.character.glide_button = if super::settings::get().glide_on_square && !FLEW.load(Ordering::Relaxed) { character_core::GlideButton::Action } else { character_core::GlideButton::Jump };
     if d.last_state.is_none() {
         // (Re)starting: face where KH1 had him facing.
@@ -2281,11 +2291,9 @@ pub unsafe fn install() {
     sparkle_stub(base);
     hook::install(base + PHYS_RVA, &PHYS_PROLOGUE, physics as *const () as usize, &ORIG_PHYS, "actor physics step");
     let _ = hook::install(base + FOOTSTEP_RVA, &FOOTSTEP_PROLOGUE, footstep as *const () as usize, &ORIG_FOOTSTEP, "footstep sound");
-    // KH2's footsteps are off: KH1's own play as they are, from KH1's motions (the user: "right
-    // now kh2s footstep sfx plays on top of kh1's footstep sounds, we want that removed from all
-    // animations and just want kh1s footsteps sfx playing"). With the step sound unhooked, KH1's
-    // aren't dropped and `kh2_footsteps` plays none.
-    let _ = (STEP_SOUND_RVA, STEP_SOUND_PROLOGUE, step_sound as unsafe extern "system" fn(usize, i32));
+    // (KH2's footsteps, KH1's dropped while KH2 has him: s229 had them off, the user then:
+    // "revert the changes on footsteps".)
+    let _ = hook::install(base + STEP_SOUND_RVA, &STEP_SOUND_PROLOGUE, step_sound as *const () as usize, &ORIG_STEP_SOUND, "step sound (KH2's footsteps)");
     if hook::install(base + CONTROL_RVA, &CONTROL_PROLOGUE, control as *const () as usize, &ORIG_CONTROL, "player control step").is_some() {
         CONTROL_HOOKED.store(true, Ordering::Relaxed);
     }

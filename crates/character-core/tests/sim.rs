@@ -1458,3 +1458,52 @@ fn guard_row_attack_launches_from_square() {
         assert!(w.pos[1] > 30.0, "didn't launch: y {}", w.pos[1]);
     }
 }
+
+/// A wall met by a swing in a moveset without a repelled motion (Final Form's): pushed back, the
+/// swing goes on to its end (it went back to its frame 0, met the wall again, for ever: the KH1
+/// port's user, "it soft locks you").
+#[test]
+fn wall_hit_without_a_repelled_motion_doesnt_loop() {
+    let mut ch = sora();
+    ch.moveset.clips.remove(&41);
+    ch.moveset.clips.remove(&43);
+    let mut w = World::new(ch);
+    let first = w.run(1, Pad { attack: true, ..IDLE })[0].clone();
+    assert_eq!(first.state, StateName::Attack);
+    let mut frames = Vec::new();
+    for _ in 0..200 {
+        w.ch.register_wall_hit();
+        let o = w.run(1, IDLE)[0].clone();
+        if o.state != StateName::Attack {
+            break;
+        }
+        frames.push(o.clip_frame);
+    }
+    assert!(frames.len() < 200, "never left the swing");
+    assert!(frames.windows(2).all(|p| p[1] >= p[0]), "the swing went back: {frames:?}");
+}
+
+/// An air swing at a target just below and close hops less than at one level with him (the KH1
+/// port's user: locked on to a foe just below, his aerial attacks gave him too much air time).
+#[test]
+fn air_swing_hops_less_at_a_target_below() {
+    let rise = |target_y: f32| {
+        let mut ch = sora();
+        for r in ch.moveset.combo_rows.iter_mut().filter(|r| r.jump > 0.0) {
+            r.jump_min = 14.0;
+            r.jump_max = 40.0;
+        }
+        let mut w = World::new(ch);
+        w.run(3, Pad { jump: true, ..IDLE });
+        w.run(10, IDLE);
+        let y = w.pos[1];
+        w.targets = vec![TargetInfo { id: 7, pos: [0.0, y + target_y, 60.0], radius: 30.0, height: 100.0 }];
+        w.run(1, Pad { attack: true, ..IDLE });
+        let start = w.pos[1];
+        let top = w.run(30, IDLE).iter().scan(start, |y, o| { *y += o.displacement[1]; Some(*y) }).fold(f32::MIN, f32::max);
+        (start, top - start)
+    };
+    let (_, level) = rise(0.0);
+    let (_, below) = rise(-60.0);
+    assert!(below < level, "hop at a foe below {below} not under the level one {level}");
+}

@@ -455,3 +455,60 @@ fn reflect_pops_once_for_two_hits() {
         }
     }
 }
+
+/// The pop's frame doesn't depend on the hits (the user: "reflect still activates its hitbox and
+/// animation early if multiple moves hit reflect"): one hit or many, early or late, the barrier
+/// drops at the same frame and its counter (the pop, 574 / 576 / 578 by tier, which the hook
+/// strikes with the burst row 667 / 668 / 669) comes the frame after; more hits only raise the
+/// tier.
+#[test]
+fn reflect_pop_frame_ignores_hit_count() {
+    let d = dir();
+    let Ok(system) = std::fs::read(d.join("03system.bin")) else {
+        eprintln!("skipped: no extracted files in {}", d.display());
+        return;
+    };
+    let pref = kh2_formats::pref::Pref::from_03system(&system).unwrap();
+    for level in 1..=3 {
+        let file = format!("REFLECT_{level}.mag");
+        let Ok(bytes) = std::fs::read(d.join(&file)) else { continue };
+        let sub = level * 2 - 2;
+        let mut frames = Vec::new();
+        for (hits, counter, burst) in [(vec![5u32], 574u16, 667u16), (vec![20, 25], 574, 667), (vec![2, 2, 2], 574, 667), ((2..8).collect(), 576, 668), ((2..28).collect(), 578, 669)] {
+            let mut magic = Magic::new();
+            let spell = magic.add_spell(SpellFile::parse(&file, &bytes).unwrap());
+            let mut w = Fake { frame: 0, release_at: 0, motion_end: 60, seed: 1 };
+            magic.cast(spell, SORA, 5, sub, pref.magi.get(sub).unwrap(), &mut w).unwrap();
+            magic.release(SORA, &mut w);
+            let (mut down, mut pop, mut late) = (None, None, None);
+            for f in 1..400 {
+                w.frame = f;
+                magic.update(&mut w);
+                if hits.contains(&f) {
+                    let n = hits.iter().filter(|h| **h == f).count() as u8;
+                    if let Some(a) = magic.attacks.iter_mut().find(|a| a.atk == 573 && !a.freed) {
+                        a.reflect_count += n;
+                    }
+                }
+                if down.is_none() && f > 2 && !magic.attacks.iter().any(|a| a.atk == 573 && !a.freed) {
+                    down = Some(f);
+                }
+                if pop.is_none() {
+                    pop = magic.attacks.iter().find(|a| !a.freed && (574..=578).contains(&a.atk)).map(|a| (f, a.atk));
+                }
+                if late.is_none() {
+                    late = magic.attacks.iter().find(|a| !a.freed && (667..=669).contains(&a.atk)).map(|a| a.atk);
+                }
+                if magic.casts.is_empty() {
+                    break;
+                }
+            }
+            let (pf, atk) = pop.unwrap_or_else(|| panic!("{file} {hits:?}: no counter"));
+            assert_eq!(atk, counter, "{file} {hits:?}: tier");
+            assert_eq!(late, Some(burst), "{file} {hits:?}: its burst row");
+            assert_eq!(Some(pf), down.map(|d| d + 1), "{file} {hits:?}: the pop isn't at the barrier's end");
+            frames.push(pf);
+        }
+        assert!(frames.windows(2).all(|p| p[0] == p[1]), "{file}: the pop moved with the hits: {frames:?}");
+    }
+}

@@ -652,6 +652,17 @@ struct Runtime {
 /// enemies are hitting the same reflect should pop only once at the end of the reflect effects
 /// animation"): it runs in the script (its effect plays) but strikes nothing.
 const BURSTS: [u16; 3] = [667, 668, 669];
+/// The counter attacks by tier (the script's, from the barrier's drop, frame 30: 574 for 1..4
+/// hits, 576 for 5..6, 578 for more; Data, the sample files run through `kh2-magic`). Each is the
+/// pop: it strikes once per foe, with its tier's burst row (667 / 668 / 669) for damage, as its
+/// animation (element 4 / 5 / 6) starts; the burst at frame 58 no longer strikes (the user: the
+/// hitbox "right when the reflect effect is about to disappear").
+const COUNTERS: [u16; 3] = [574, 576, 578];
+
+/// The burst row a counter attack pops with.
+fn burst_of(counter: u16) -> Option<u16> {
+    COUNTERS.iter().position(|c| *c == counter).map(|i| BURSTS[i])
+}
 /// The party's actors (Sora first).
 const PARTY_RVA: Rva = Rva(0x2D37C80);
 const BURST_ELEMENT: u16 = 7;
@@ -763,12 +774,13 @@ pub unsafe fn before_step(actor: usize, ch: &mut Character) {
             rt.started = Some(Instant::now());
         }
     }
-    if let Some(r) = magc(level) {
-        let v = if finisher { r.voice_finisher } else { r.voice };
-        if v != 255 {
-            super::kh2sound::voice(v as i16);
-        }
-    }
+    // His voice, always (not `kh2_voice`'s): a grunt of his swings' on a ground or air cast, the
+    // finisher's own line on the combo's finisher (the user: "pick a few grunt sounds to play at
+    // random each time reflect is casted (pretty much the same as his base attack) then for
+    // reflect finisher can you have the voice line that says "protect!" play"). KH2's MAGC
+    // finisher voice for Reflect, 25 (Fire / Blizzard / Thunder name theirs 11 / 12 / 13).
+    let v = if finisher { magc(level).map(|r| r.voice_finisher).filter(|v| *v != 255).map_or(super::kh2sound::REFLECT_FINISHER_VOICE, |v| v as i16) } else { super::kh2sound::SWING_VOICE };
+    super::kh2sound::reflect_voice(v);
     note(format!(
         "{} cast (level {level}): motion {motion}{}, MP {before:?} -> {:?} (its effects loaded: {})",
         NAMES[(level - 1) as usize],
@@ -1107,21 +1119,21 @@ unsafe fn step(actor: usize, out: &Output, airborne: bool, strikes: &mut combat:
             guards.push((a.id | SPELL_KEY, shapes));
             continue;
         }
-        // (Only the burst strikes: `BURSTS`.)
-        if !BURSTS.contains(&a.atk) {
-            continue;
-        }
-        attacks.push(combat::SpellAttack { kh1_data: None, key: a.id | SPELL_KEY, group: if first.combo_group != 0 { first.combo_group as i64 } else { a.group }, atk: a.atk, sub: a.sub, shapes });
+        // (Only the pop strikes: the counter's first frame, with its tier's burst row, `COUNTERS`;
+        // once per foe, its key's hit record keeps it from striking again.)
+        let Some(burst) = burst_of(a.atk) else { continue };
+        let Some(brow) = row(battle, burst, a.sub, 0) else { continue };
+        attacks.push(combat::SpellAttack { kh1_data: None, key: a.id | SPELL_KEY, group: if brow.combo_group != 0 { brow.combo_group as i64 } else { a.group }, atk: burst, sub: a.sub, shapes });
     }
     // The burst (the counter's last attack, ATKP 667 / 668 / 669 by tier): its shatter sound,
     // element 7's (173 at every level; the script starts no element for the burst, and element
     // 11's 174 plays nothing in the PC files; the user: no burst sound). Ours: KH2's own hit
     // effect for it (`trap_attack_set_pax`) is not modelled.
-    for a in rt.magic.attacks.iter().filter(|a| !a.freed && a.owner == SORA && BURSTS.contains(&a.atk)) {
+    for a in rt.magic.attacks.iter().filter(|a| !a.freed && a.owner == SORA && burst_of(a.atk).is_some()) {
         if rt.burst_heard.insert(a.key) {
             let level = rt.levels.get(a.spell).copied().unwrap_or(1);
             super::kh2sound::spell_element(level, BURST_ELEMENT);
-            log(&format!("Reflect pop (ATKP {} burst, the cast's only one): {} hit(s) blocked", a.atk, rt.blocks));
+            log(&format!("Reflect pop (counter ATKP {}, burst row {:?}, the cast's only one): {} hit(s) blocked", a.atk, burst_of(a.atk), rt.blocks));
         }
     }
     // The barrier as a guard: enemy shots it touches turned back (counted, they never reach
@@ -1184,7 +1196,11 @@ fn hold(rt: &mut Runtime, blocks: u32, combo: bool) -> bool {
     let was = h.since.is_some();
     let cap = if h.combo { COMBO_WAIT_MAX_S } else { HOLD_MAX_S };
     let over = h.since.is_some_and(|t| t.elapsed().as_secs_f32() >= cap);
-    let hits = rt.barrier && !h.spent && !over && h.age >= HOLD_AT && h.since_hit.is_some_and(|n| n <= HOLD_FRAMES);
+    // (No longer held while hits keep coming: the pop comes when the barrier's own time is up,
+    // however many hits, the user, s232: "reflect still activates its hitbox and animation early
+    // if multiple moves hit reflect"; hits only add to the count.)
+    let _ = HOLD_FRAMES;
+    let hits = false;
     let for_combo = rt.barrier && !h.spent && !over && h.age >= HOLD_AT && !hits && combo && rt.blocks > 0;
     if for_combo != h.combo {
         h.combo = for_combo;

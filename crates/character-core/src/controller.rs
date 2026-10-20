@@ -368,6 +368,9 @@ const FINISHER_END: u32 = 6;
 
 /// Physics tick length in frames: KH2 recomputes velocities at 30 Hz.
 const DT: f32 = 2.0;
+/// How close (sideways, past its radius) a target below him must be for an air swing's hop to
+/// shrink toward it (`try_attack`).
+const LOW_TARGET_REACH: f32 = 150.0;
 const DEAD_ZONE: f32 = 0.1;
 
 /// One controllable character.
@@ -392,6 +395,10 @@ pub struct Character {
     /// spells stop his fall when cast and then sink slowly while the spell comes out; KH2's
     /// full gravity from rest dropped Reflect too fast (the user).
     pub air_magic_gravity: f32,
+    /// With `air_magic_falls`, the fastest an air cast falls (units per frame; `None`: the
+    /// character's own `fall_max`). A host can give KH1's (its air spells fall at KH1's gravity
+    /// and speed: the KH1 port).
+    pub air_magic_fall_max: Option<f32>,
     /// The air cast playing holds as Final Form's air Reflect does (`hold_air_cast`): frames of
     /// no gravity from its start, no drift; then a plain fall.
     cast_hold: Option<u32>,
@@ -543,6 +550,7 @@ impl Character {
             glide_button: GlideButton::default(),
             air_magic_falls: false,
             air_magic_gravity: 1.0,
+            air_magic_fall_max: None,
             cast_hold: None,
             facing: 0.0,
             vel_h: [0.0; 2],
@@ -605,14 +613,24 @@ impl Character {
         }
         self.hit = true;
         let back = [-self.facing.sin(), -self.facing.cos()];
+        // (Only with a repelled motion to play: without one (Final Form's moveset has none) the
+        // swing went back to its frame 0, met the wall again, and so on for ever, the KH1 port's
+        // user: "trying to do the ground combo repeats the same moves over and over ... and it
+        // soft locks you". Then he is only pushed back and the swing goes on.)
+        let air_clip = self.airborne && self.moveset.clips.contains_key(&motion::REPELLED_AIR);
+        let ground_clip = !self.airborne && self.moveset.clips.contains_key(&motion::REPELLED);
+        if !air_clip && !ground_clip {
+            self.push = Some((back, WALL_HOP * HIT_BACK_SPEED));
+            return true;
+        }
         act.frame = 0;
         act.lunge = 0.0;
-        if self.airborne && self.moveset.clips.contains_key(&motion::REPELLED_AIR) {
+        if air_clip {
             act.motion = motion::REPELLED_AIR;
             self.arc = Some(Arc::new(WALL_HOP, self.params.gravity));
             self.vel_h = scale(back, WALL_HOP * self.params.hit_back_to_jump);
             self.vel_y = 0.0;
-        } else if self.moveset.clips.contains_key(&motion::REPELLED) {
+        } else {
             act.motion = motion::REPELLED;
             self.vel_h = [0.0; 2];
             self.push = Some((back, WALL_HOP * HIT_BACK_SPEED));
@@ -1413,7 +1431,15 @@ impl Character {
             let (height, speed) = match target {
                 Some(t) => {
                     let extra = if row.flag & FLAG_JUMP_ADJUST != 0 { self.params.jump_height } else { 0.0 };
-                    let h = t.dy.clamp(row.jump_min, (row.jump_max + extra).max(row.jump_min));
+                    let mut h = t.dy.clamp(row.jump_min, (row.jump_max + extra).max(row.jump_min));
+                    // A target just below and close, in the air: the hop no higher than reaches it
+                    // (the row's least less how far below it is), so he doesn't climb away from it
+                    // swing after swing (the KH1 port's user: "when sora is locked on to an entity
+                    // that is just below him and close can you have his base aerial attacks not give
+                    // him as much air time").
+                    if self.airborne && t.dy < 0.0 && (t.distance - t.radius).max(0.0) < LOW_TARGET_REACH {
+                        h = (row.jump_min + t.dy).max(0.0);
+                    }
                     let up = uptime(h, self.params.gravity).max(1.0);
                     let s = ((t.distance - t.radius).max(0.0) / up).clamp(row.speed_min, row.speed_max.max(row.speed_min));
                     (h, s)
@@ -1890,7 +1916,10 @@ impl Character {
                 // (Air casts fall through their no-gravity frames from rest, as s174..s177 had it,
                 // the user's pick in s229: "roll back the physics of reflect to version s177";
                 // `air_magic_falls` ends a cast reaching the ground in KH2's landing.)
-                WindowKind::NoGravity if self.cast_hold.is_none() && !(self.air_magic_falls && matches!(act.kind, ActionKind::Magic)) && !(matches!(act.kind, ActionKind::Attack { .. }) && clip.windows.iter().any(|w| matches!(w.kind, WindowKind::AllowMovement))) => fo.no_gravity = true,
+                // (An air attack moving all through, Wisdom's shots, falls through its no-gravity frames; one
+                // moving only part of the way holds there, Final Form's: the KH1 port's user, its air
+                // combos "end after two hits".)
+                WindowKind::NoGravity if self.cast_hold.is_none() && !(self.air_magic_falls && matches!(act.kind, ActionKind::Magic)) && !(matches!(act.kind, ActionKind::Attack { .. }) && clip.windows.iter().any(|w| matches!(w.kind, WindowKind::AllowMovement) && w.start == 0 && w.end.is_none())) => fo.no_gravity = true,
                 WindowKind::WeaponTrail => fo.weapon_trail = true,
                 WindowKind::Guard { attack, group, weapon } => {
                     fo.guarding = true;
@@ -2388,7 +2417,7 @@ impl Character {
 
         if !self.airborne {
             self.vel_y = 0.0;
-        } else if gravity && self.air_magic_falls && self.air_magic_gravity < 1.0 && self.cast_hold.is_none() && matches!(self.mode, Mode::Action(Action { kind: ActionKind::Magic, .. })) {
+        } else if gravity && self.air_magic_falls && ((self.air_magic_gravity - 1.0).abs() > 1e-4 || self.air_magic_fall_max.is_some()) && self.cast_hold.is_none() && matches!(self.mode, Mode::Action(Action { kind: ActionKind::Magic, .. })) {
             // An air cast sinking at a share of gravity (KH1's spells). The arc is kept at the
             // speed reached, so the fall after the cast goes on from it.
             let share = self.air_magic_gravity.max(0.0);
