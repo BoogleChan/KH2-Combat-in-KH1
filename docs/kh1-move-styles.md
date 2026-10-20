@@ -120,3 +120,17 @@ during KH1's jump or glide (KH1's reactions; KH2's Aerial Recovery doesn't come 
 Unverified in game: the facing call's angle argument; that motion `0xDC` shows in `+0x164` from
 the roll's second frame (logged for its first four frames); that KH1's command step takes Attack
 during its roll at all (else an Attack comes after it, by the hand-back's rules).
+
+## Stage 242 changes
+
+- Glide at KH1 is on Square, held while falling (in KH2's air and in KH1's jump), not the jump
+  button: the jump press in the air is KH2's Aerial Dodge (in KH1's jump KH2 takes him for it).
+  While KH1 glides, Square held is KH1's jump-held bit in its control step (its glide is a hold).
+  One try per hold of Square.
+- KH2's glide with the style back at KH2: its level is kept aside while KH1's glide is on
+  (`KH2_GLIDE_KEPT`; Sora's abilities are only set again when KH1's menu changes).
+- Dodge Roll at KH1: KH1's ability bits are at `0x142D5F610` (Steam `0x142D5EC10`), not
+  `0x142F5F610`, so the roll never opened.
+- Battle Quotes (KH1 | KH2, ini `battle_quotes`, default from `kh2_voice`): every KH2 motion voice
+  is loaded and played only with it at KH2, so the row switches in game. On every form too. It
+  is on a third Config page (our rows go 8 to a page).

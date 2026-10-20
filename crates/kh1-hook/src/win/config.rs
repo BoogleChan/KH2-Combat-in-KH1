@@ -64,10 +64,10 @@ const PANEL_PROLOGUE: [u8; 6] = [0x40, 0x53, 0x48, 0x83, 0xEC, 0x50];
 const CURSOR_ROW_RVA: Rva = Rva(0x2ED030);
 const DECOR_RVA: Rva = Rva(0x2F0740);
 
-/// Our rows: 8 the camera, 9..15 the move styles (`styles::Kind::EVERY` in order). Each:
+/// Our rows: 8 the camera, 9..16 the move styles (8 a page: rows 8..15, 16..) (`styles::Kind::EVERY` in order). Each:
 /// label, left value, right value, help.
 const FIRST_ROW: i32 = 8;
-const ROWS: [[u32; 4]; 8] = [
+const ROWS: [[u32; 4]; 9] = [
     [0x7F00_0001, 0x7F00_0002, 0x7F00_0003, 0x7F00_0004],
     [0x7F00_0101, 0x7F00_0002, 0x7F00_0003, 0x7F00_0102],
     [0x7F00_0103, 0x7F00_0002, 0x7F00_0003, 0x7F00_0104],
@@ -76,10 +76,11 @@ const ROWS: [[u32; 4]; 8] = [
     [0x7F00_0109, 0x7F00_0002, 0x7F00_0003, 0x7F00_010A],
     [0x7F00_010B, 0x7F00_0002, 0x7F00_0003, 0x7F00_010C],
     [0x7F00_010D, 0x7F00_0002, 0x7F00_0003, 0x7F00_010E],
+    [0x7F00_010F, 0x7F00_0002, 0x7F00_0003, 0x7F00_0110],
 ];
 /// The camera row's help line (with the version under it).
 const HELP_ID: u32 = 0x7F00_0004;
-const STRINGS: [(u32, &str); 18] = [
+const STRINGS: [(u32, &str); 20] = [
     (0x7F00_0001, "Camera Style"),
     (0x7F00_0002, "KH1"),
     (0x7F00_0003, "KH2"),
@@ -98,6 +99,8 @@ const STRINGS: [(u32, &str); 18] = [
     (0x7F00_010C, "Choose KH1's or KH2's glide for Sora.\nDrive Forms keep their own."),
     (0x7F00_010D, "Dodge Roll"),
     (0x7F00_010E, "Choose KH1's or KH2's dodge roll for Sora.\nDrive Forms keep their own."),
+    (0x7F00_010F, "Battle Quotes"),
+    (0x7F00_0110, "Choose KH1's or KH2's battle quotes for Sora."),
 ];
 
 /// The move style a row switches (`None`: the camera row).
@@ -127,6 +130,14 @@ fn toggle(row: i32) {
 
 fn ours(row: i32) -> bool {
     (FIRST_ROW..FIRST_ROW + ROWS.len() as i32).contains(&row)
+}
+
+/// Our rows go 8 to a page (KH1's list has places for 8): a row's page and place on it.
+fn page(row: i32) -> i32 {
+    (row - FIRST_ROW) / 8
+}
+fn place(row: i32) -> i32 {
+    (row - FIRST_ROW) % 8
 }
 
 static BASE: AtomicUsize = AtomicUsize::new(0);
@@ -187,7 +198,7 @@ pub unsafe fn install() {
     let n = 8 + ROWS.len() as u16;
     wr(base + ROWS_RVA, n);
     wr(base + VISIBLE_RVA, n);
-    log("Config menu: our rows added (Camera Style, Ground Combo, Aerial Combo, Magic, Aerial Magic; a second page)");
+    log("Config menu: our rows added (Camera Style and the move styles, on pages of 8 after KH1's)");
 }
 
 /// KH1's sysmsg lookup (its own instructions, re-done here: its first one is RIP-relative, so
@@ -233,12 +244,16 @@ unsafe extern "system" fn help(win: usize) {
     // Rows 8..12 read their help ids from just past the table (the max-value table's entries
     // 0..4, read only by the Config update's left / right, never during this call): ours for the
     // call, put back right after.
+    // (A row past the second page is read as the row in its place on the second page: the
+    // cursor row is that one for the call.)
     debug_assert_eq!(base + HELP_IDS_RVA + 8 * 4, base + MAX0_RVA);
-    debug_assert!(row - FIRST_ROW < 8);
-    let at = base + HELP_IDS_RVA + row as usize * 4;
+    let slot = FIRST_ROW + place(row);
+    let at = base + HELP_IDS_RVA + slot as usize * 4;
     let keep = rd::<u32>(at);
     wr(at, ROWS[(row - FIRST_ROW) as usize][3]);
+    wr(base + ROW_RVA, slot);
     f(win);
+    wr(base + ROW_RVA, row);
     wr(at, keep);
 }
 
@@ -280,7 +295,9 @@ unsafe extern "system" fn update(win: usize) {
     HIDE_KH1.store(false, Ordering::Relaxed);
     if our_page {
         for k in 0..ROWS.len() as i32 {
-            draw(base, win, FIRST_ROW + k);
+            if page(FIRST_ROW + k) == page(row) {
+                draw(base, win, FIRST_ROW + k);
+            }
         }
     }
     if let Some((p, r)) = kept {
@@ -296,7 +313,7 @@ unsafe fn draw(base: usize, win: usize, row: i32) {
     let decor: unsafe extern "system" fn(usize, i32, i32, i32) = std::mem::transmute(base + DECOR_RVA);
     let ids = ROWS[(row - FIRST_ROW) as usize];
     let h = rd::<i32>(base + ROW_H_RVA);
-    let y = 0x47 + (row - FIRST_ROW) * (h + rd::<i32>(base + ROW_GAP_RVA));
+    let y = 0x47 + place(row) * (h + rd::<i32>(base + ROW_GAP_RVA));
     let selected = rd::<i32>(base + ROW_RVA) == row;
     if selected {
         let y2 = h / 2 - 1 + y;

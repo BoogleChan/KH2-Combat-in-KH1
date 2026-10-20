@@ -43,6 +43,7 @@ glide = square\r\n\
 ;   gravity (0 = he hangs, 1 = KH1's); his fall is stopped as the cast starts\r\n\
 air_cast_fall = 1.0\r\n\
 ; kh2_voice: on = Sora's KH2 battle voice on those moves instead of KH1's; off = KH1's voice\r\n\
+; (battle_quotes, below, takes its place once set)\r\n\
 kh2_voice = off\r\n\
 ; bonus_ap: on = (abilities = kh1) Sora's max AP grows by the AP of each KH2 ability he learns\r\n\
 bonus_ap = on\r\n\
@@ -99,7 +100,10 @@ air_magic = kh1\r\n\
 jump_style = kh2\r\n\
 glide_style = kh2\r\n\
 ; roll_style: kh1 or kh2, KH1's or KH2's dodge roll for base Sora\r\n\
-roll_style = kh2\r\n";
+roll_style = kh2\r\n\
+; battle_quotes: kh1 or kh2, Sora's KH1 or KH2 battle quotes (the Config menu's row; without\r\n\
+; this line kh2_voice decides)\r\n\
+battle_quotes = kh1\r\n";
 
 #[derive(Debug)]
 pub struct Settings {
@@ -122,6 +126,8 @@ pub struct Settings {
     /// Gravity's share while a KH2 cast (Reflect) plays in the air, after its fall speed was
     /// stopped (`air_cast_fall`, 0..1; KH1's spells sink slowly).
     pub air_cast_fall: f32,
+    /// (Read for `battle_quotes`'s default; `styles::Kind::BattleQuotes` is what plays.)
+    #[allow(dead_code)]
     pub kh2_voice: bool,
     pub bonus_ap: bool,
     pub auto_aim: bool,
@@ -150,8 +156,8 @@ pub struct Settings {
     pub drive: bool,
     /// Valor's Keyblade drawn in his left hand (`valor_left_blade = on`, `leftblade`).
     pub valor_left_blade: bool,
-    /// KH2's (true) or KH1's moves per `styles::Kind` (ground combo, air combo, magic, air magic, jump, glide, dodge roll).
-    pub styles: [bool; 7],
+    /// KH2's (true) or KH1's moves per `styles::Kind` (ground combo, air combo, magic, air magic, jump, glide, dodge roll, battle quotes).
+    pub styles: [bool; 8],
 }
 
 static SETTINGS: OnceLock<Settings> = OnceLock::new();
@@ -227,7 +233,7 @@ pub fn get() -> &'static Settings {
             kh2_hair: on(&text, "kh2_hair", "on", true),
             drive: on(&text, "drive", "on", true),
             valor_left_blade: on(&text, "valor_left_blade", "on", true),
-            styles: [on(&text, "ground_combo", "kh2", true), on(&text, "air_combo", "kh2", true), on(&text, "magic", "kh2", false), on(&text, "air_magic", "kh2", false), on(&text, "jump_style", "kh2", true), on(&text, "glide_style", "kh2", true), on(&text, "roll_style", "kh2", true)],
+            styles: [on(&text, "ground_combo", "kh2", true), on(&text, "air_combo", "kh2", true), on(&text, "magic", "kh2", false), on(&text, "air_magic", "kh2", false), on(&text, "jump_style", "kh2", true), on(&text, "glide_style", "kh2", true), on(&text, "roll_style", "kh2", true), on(&text, "battle_quotes", "kh2", on(&text, "kh2_voice", "on", false))],
         };
         log(&format!("settings ({path}): {s:?}"));
         s

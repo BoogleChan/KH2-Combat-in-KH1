@@ -2898,3 +2898,18 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   (`JUMP_HELD_OVER`). For 40 frames after a KH1 move KH1's push doesn't lift him in the air (not
   on a platform), and those frames are logged ("after KH1's move: ...") for the high jump, whose
   cause isn't confirmed.
+
+### 2026-10-19: Stage 242 (KH1 glide on Square, KH1 roll, KH2 glide back, Battle Quotes row)
+- The user (KH1 glide): "when you input an aerial dodge glide takes priority can you rewrite
+  normal glide so that it activates on a square press". KH1's glide starts on Square held while
+  falling (KH2's air, or KH1's jump), once a hold; the jump press in KH1's air is KH2's (Aerial
+  Dodge). In KH1's glide, Square held is fed to KH1's control step as its jump held.
+- "unable to input a kh1 dodge roll": s240 read KH1's ability bits at `0x142F5F610`; they are at
+  `0x142D5F610` (Steam `0x142D5EC10`, gen2's override fixed).
+- "unable to input a kh2 glide when glide is set to KH2": KH1's glide style zeroed KH2's glide
+  level in Sora's abilities, which are only set again when KH1's menu changes; kept aside now and
+  given back.
+- The user: "an option to switch between kh1/kh2 battle quotes". `styles::Kind::BattleQuotes`
+  (ini `battle_quotes`, default from `kh2_voice`, so KH1's), every form; KH2's motion voices all
+  load and play by it (`kh2sound::kh2_voice`). Config rows go 8 to a page now: Battle Quotes is
+  on a third page (the help line reads it as the second page's row in its place).

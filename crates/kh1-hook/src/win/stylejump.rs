@@ -57,7 +57,9 @@ pub fn active() -> bool {
 
 /// KH1's jump hand-off with KH1's glide: the jump button is KH1's (its glide) in its control step.
 pub fn kh1_keeps_jump() -> bool {
-    mode() == JUMP && kh1_glide()
+    // (No more: KH1's glide is on Square now, started by `takeover`, and the jump press in KH1's
+    // air is KH2's Aerial Dodge, the user.)
+    false
 }
 
 /// Any hand-off to KH1 (`takeover::hand_to_kh1`) ends the mode; ours sets it after.

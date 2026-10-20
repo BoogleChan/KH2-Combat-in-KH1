@@ -398,7 +398,7 @@ const HAS_ABILITY_RVA: Rva = Rva(0x282A70);
 
 /// KH1's jump or glide instead of KH2's, on a fresh jump press (`stylejump`): what KH1 started,
 /// or `None` (KH2's as before). KH1 has him from this frame.
-unsafe fn style_air_start(base: usize, actor: usize, d: &Driver) -> Option<&'static str> {
+unsafe fn style_air_start(base: usize, actor: usize, d: &Driver, glide_press: bool) -> Option<&'static str> {
     if rd::<i32>(actor + 0x70) != 0 || FLEW.load(Ordering::Relaxed) || rd::<u32>(base + BATTLE_RVA) & FLIGHT_FLAG != 0 {
         return None;
     }
@@ -409,7 +409,7 @@ unsafe fn style_air_start(base: usize, actor: usize, d: &Driver) -> Option<&'sta
     let n = v[0].hypot(v[1]);
     let k = if n > 30.0 { 30.0 / n } else { 1.0 };
     let set: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(base + SET_STATE_RVA);
-    if super::stylejump::kh1_jump() && d.grounded && !d.character.airborne() && matches!(st, StateName::Idle | StateName::Walk | StateName::Run | StateName::Land) {
+    if !glide_press && super::stylejump::kh1_jump() && d.grounded && !d.character.airborne() && matches!(st, StateName::Idle | StateName::Walk | StateName::Run | StateName::Land) {
         let press: unsafe extern "system" fn(usize) -> usize = std::mem::transmute(base + JUMP_PRESS_RVA);
         let y = rd::<f32>(actor + 0x14);
         press(actor);
@@ -429,14 +429,16 @@ unsafe fn style_air_start(base: usize, actor: usize, d: &Driver) -> Option<&'sta
         return Some("KH1's jump (the Jump style is KH1's)");
     }
     let falling = up <= 0.0;
-    if super::stylejump::kh1_glide() && d.character.airborne() && falling && matches!(st, StateName::Air | StateName::Jump) {
-        let has: unsafe extern "system" fn(i32, i32) -> i32 = std::mem::transmute(base + HAS_ABILITY_RVA);
-        let (superglide, glide) = (has(4, 0xB) != 0, has(3, 0xB) != 0);
-        if !superglide && !glide {
+    // (KH1's glide on Square held while falling, not on the jump button, the user: "rewrite normal
+    // glide so that it activates on a square press and not when you press the jump button": the
+    // jump press in the air is KH2's Aerial Dodge.)
+    if glide_press && super::stylejump::kh1_glide() && d.character.airborne() && falling && matches!(st, StateName::Air | StateName::Jump) {
+        // KH1's air state as an air command sets it (`combat::command`), then its glide.
+        // (Once a hold of Square: a glide that doesn't start isn't tried every frame.)
+        let y = rd::<f32>(actor + 0x14);
+        if !kh1_glide_open(base) || GLIDE_TRIED.swap(true, Ordering::Relaxed) {
             return None;
         }
-        // KH1's air state as an air command sets it (`combat::command`), then its glide.
-        let y = rd::<f32>(actor + 0x14);
         set(actor, 2);
         wr(actor + 0x3B0, 0.0f32);
         wr(actor + 0x3B8, 0.0f32);
@@ -445,19 +447,40 @@ unsafe fn style_air_start(base: usize, actor: usize, d: &Driver) -> Option<&'sta
         wr(actor + 0x3C0, [v[0] * k, 0.0f32, v[1] * k, n * k]);
         wr(actor + 0x3D0, 0u32);
         wr(actor, rd::<u32>(actor) & !0x1_0000);
-        let start: unsafe extern "system" fn(usize) = std::mem::transmute(base + if superglide { SUPERGLIDE_RVA } else { GLIDE_RVA });
-        start(actor);
-        if rd::<i32>(actor + 0x70) != KH1_GLIDE_STATE {
-            set(actor, 0);
-            static N: AtomicU32 = AtomicU32::new(0);
-            if N.fetch_add(1, Ordering::Relaxed) < 10 {
-                log(&format!("KH1's glide didn't start ({:.0} above the floor): KH2 keeps him", rd::<f32>(actor + 0x3D4)));
+        return match kh1_glide_start(base, actor) {
+            Some(w) => Some(w),
+            None => {
+                set(actor, 0);
+                None
             }
-            return None;
-        }
-        return Some(if superglide { "KH1's Superglide (the Glide style is KH1's)" } else { "KH1's glide (the Glide style is KH1's)" });
+        };
     }
     None
+}
+
+/// Sora has KH1's Glide or Superglide.
+unsafe fn kh1_glide_open(base: usize) -> bool {
+    let has: unsafe extern "system" fn(i32, i32) -> i32 = std::mem::transmute(base + HAS_ABILITY_RVA);
+    has(4, 0xB) != 0 || has(3, 0xB) != 0
+}
+
+/// KH1's Superglide (when he has it) or Glide, from KH1's air state: what started, if it did.
+unsafe fn kh1_glide_start(base: usize, actor: usize) -> Option<&'static str> {
+    let has: unsafe extern "system" fn(i32, i32) -> i32 = std::mem::transmute(base + HAS_ABILITY_RVA);
+    let (superglide, glide) = (has(4, 0xB) != 0, has(3, 0xB) != 0);
+    if !superglide && !glide {
+        return None;
+    }
+    let start: unsafe extern "system" fn(usize) = std::mem::transmute(base + if superglide { SUPERGLIDE_RVA } else { GLIDE_RVA });
+    start(actor);
+    if rd::<i32>(actor + 0x70) != KH1_GLIDE_STATE {
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 10 {
+            log(&format!("KH1's glide didn't start ({:.0} above the floor, KH1 state {}): KH2 keeps him", rd::<f32>(actor + 0x3D4), rd::<i32>(actor + 0x70)));
+        }
+        return None;
+    }
+    Some(if superglide { "KH1's Superglide (the Glide style is KH1's)" } else { "KH1's glide (the Glide style is KH1's)" })
 }
 
 /// KH1's roll (`styleroll`): its start, the stick's angle, the facing setter, its deep-water
@@ -466,7 +489,9 @@ const ROLL_START_RVA: Rva = Rva(0x2C7CB0);
 const DIR_ANGLE_RVA: Rva = Rva(0x295E20);
 const SET_FACING_RVA: Rva = Rva(0x295C80);
 const DEEP_WATER_RVA: Rva = Rva(0x2BF530);
-const ROLL_ABILITY_RVA: Rva = Rva(0x2F5F610);
+/// (`0x142D5F610`, its handler's `mov eax, [rip+...]` at `0x1402A5A65`; s240 read `0x142F5F610`,
+/// which never had the bit: the user, "unable to input a kh1 dodge roll".)
+const ROLL_ABILITY_RVA: Rva = Rva(0x2D5F610);
 const ROLL_ABILITY: u32 = 0x20;
 
 /// KH1's dodge roll instead of KH2's, on a fresh Square with the stick (`styleroll`): whether it
@@ -596,14 +621,19 @@ unsafe extern "system" fn control(actor: usize, dir: usize) {
     };
     let state = base + BUTTONS_RVA;
     let saved = rd::<[u32; 6]>(state);
+    // KH1's glide at the Glide style KH1 (`stylejump::GLIDE`): its jump button held is Square held
+    // (it glides on Square, the user), for its held state only.
+    let inject: u32 = if strip && super::stylejump::mode() == super::stylejump::GLIDE && buttons() & SQUARE != 0 { 0x6 } else { 0 };
     if strip {
         for off in [4usize, 8, 0x10, 0x14] {
             wr(state + off, rd::<u32>(state + off) & !bits(off));
         }
+        wr(state + 4, rd::<u32>(state + 4) | inject);
     }
     f(actor, dir);
     if strip {
         // KH1's own changes to the state meanwhile kept; only our bits come back.
+        wr(state + 4, rd::<u32>(state + 4) & !inject);
         for off in [4usize, 8, 0x10, 0x14] {
             wr(state + off, rd::<u32>(state + off) | (saved[off / 4] & bits(off)));
         }
@@ -632,6 +662,10 @@ unsafe fn kh1_move_done(base: usize, actor: usize) -> bool {
 
 /// KH1's move ended on a jump press: KH2 jumps at once (the press isn't taken as held over).
 static JUMP_NOW: AtomicBool = AtomicBool::new(false);
+/// KH2's glide level while the Glide style is KH1's (its ability set to 0 meanwhile).
+static KH2_GLIDE_KEPT: AtomicU32 = AtomicU32::new(0);
+/// KH1's glide was tried on this hold of Square (`style_air_start`, KH1's jump).
+static GLIDE_TRIED: AtomicBool = AtomicBool::new(false);
 /// A fresh jump press while KH1 has him on the ground in one of its moves (`takeover`).
 static GROUND_JUMP: AtomicBool = AtomicBool::new(false);
 static JUMP_PREV: AtomicBool = AtomicBool::new(false);
@@ -1213,7 +1247,20 @@ unsafe fn takeover(actor: usize) -> bool {
         // him on the stick in the rise (state 1), only on the ground.
         let (square_pressed, jump_pressed_air) = super::stylejump::presses(buttons() & SQUARE != 0, buttons() & jump_button() != 0);
         let in_jump = style_air == super::stylejump::JUMP;
-        let kh2_glide_jump = in_jump && !super::stylejump::kh1_glide() && !super::settings::get().glide_on_square && jump_pressed_air && matches!(state, 1 | 2) && vel.is_some_and(|(_, up)| up < 0.0);
+        // (The jump press in KH1's air is KH2's: its Aerial Dodge, or its glide on the jump button.
+        // Square: KH1's glide with the Glide style at KH1, held while falling; else KH2's.)
+        let kh2_glide_jump = in_jump && jump_pressed_air && matches!(state, 1 | 2);
+        if buttons() & SQUARE == 0 {
+            GLIDE_TRIED.store(false, Ordering::Relaxed);
+        }
+        let kh1_glide_here = in_jump && super::stylejump::kh1_glide() && buttons() & SQUARE != 0 && state == 2 && vel.is_some_and(|(_, up)| up < 0.0) && kh1_glide_open(base) && !GLIDE_TRIED.swap(true, Ordering::Relaxed);
+        if kh1_glide_here {
+            if let Some(what) = kh1_glide_start(base, actor) {
+                super::stylejump::started(super::stylejump::GLIDE, true, buttons() & jump_button() != 0);
+                log(&format!("{what}, out of KH1's jump"));
+            }
+        }
+        let square_pressed = square_pressed && !super::stylejump::kh1_glide();
         let kh2_air = in_jump && (attack || square_pressed || kh2_glide_jump || super::stylejump::wanted());
         let air_free = if in_jump { air_free && kh2_air } else { air_free };
         let falling = falling && !in_jump;
@@ -1506,8 +1553,19 @@ unsafe fn takeover(actor: usize) -> bool {
     d.growth.update(base, &mut d.character);
     super::form::abilities(&mut d.drive, &mut d.character);
     // Glide at KH1 (`stylejump`): KH1's glide, none of KH2's.
+    // (Its level kept aside and given back with the style at KH2: Sora's abilities are only set
+    // again when KH1's menu changes, so a 0 left here took KH2's glide away for good, the user:
+    // "unable to input a kh2 glide when glide is set to KH2, nothing comes out".)
     if super::stylejump::kh1_glide() {
-        d.character.abilities.glide = 0;
+        if d.character.abilities.glide != 0 {
+            KH2_GLIDE_KEPT.store(d.character.abilities.glide as u32, Ordering::Relaxed);
+            d.character.abilities.glide = 0;
+        }
+    } else if d.character.abilities.glide == 0 {
+        let kept = KH2_GLIDE_KEPT.swap(0, Ordering::Relaxed);
+        if kept != 0 {
+            d.character.abilities.glide = kept as _;
+        }
     }
     // Glide on Square, as KH1's Superglide was (the user), or on the jump button (ini `glide`).
     // (Not out of a flight: there Square is flight's descend.)
@@ -1656,9 +1714,14 @@ unsafe fn takeover(actor: usize) -> bool {
         lock: Button::default(),
     };
     d.held = (jump_raw, action_raw);
-    // Jump / Glide at KH1 (`stylejump`): KH1's own, on the fresh jump press.
-    if input.jump.pressed && !frozen && !shortcut {
-        if let Some(what) = style_air_start(base, actor, d) {
+    // Jump / Glide at KH1 (`stylejump`): KH1's jump on the fresh jump press, its glide on Square
+    // held while falling.
+    if !action_raw {
+        GLIDE_TRIED.store(false, Ordering::Relaxed);
+    }
+    let style_press = if input.jump.pressed { Some(false) } else if action_raw { Some(true) } else { None };
+    if let Some(glide_press) = style_press.filter(|_| !frozen && !shortcut) {
+        if let Some(what) = style_air_start(base, actor, d, glide_press) {
             hand_to_kh1(what);
             FROM_COMMAND.store(false, Ordering::Relaxed);
             super::stylejump::started(if what.contains("glide") { super::stylejump::GLIDE } else { super::stylejump::JUMP }, action_raw, jump_raw);

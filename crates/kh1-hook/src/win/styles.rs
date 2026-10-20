@@ -16,10 +16,12 @@ pub enum Kind {
     Jump,
     Glide,
     DodgeRoll,
+    /// Sora's battle quotes (KH2's voice on KH2's moves, or KH1's): everywhere, forms too.
+    BattleQuotes,
 }
 
 impl Kind {
-    pub const EVERY: [Kind; 7] = [Kind::GroundCombo, Kind::AirCombo, Kind::Magic, Kind::AirMagic, Kind::Jump, Kind::Glide, Kind::DodgeRoll];
+    pub const EVERY: [Kind; 8] = [Kind::GroundCombo, Kind::AirCombo, Kind::Magic, Kind::AirMagic, Kind::Jump, Kind::Glide, Kind::DodgeRoll, Kind::BattleQuotes];
 
     /// Its ini key.
     pub fn key(self) -> &'static str {
@@ -31,6 +33,7 @@ impl Kind {
             Kind::Jump => "jump_style",
             Kind::Glide => "glide_style",
             Kind::DodgeRoll => "roll_style",
+            Kind::BattleQuotes => "battle_quotes",
         }
     }
 
@@ -44,6 +47,7 @@ impl Kind {
             Kind::Jump => "Jump",
             Kind::Glide => "Glide",
             Kind::DodgeRoll => "Dodge Roll",
+            Kind::BattleQuotes => "Battle Quotes",
         }
     }
 
@@ -53,7 +57,7 @@ impl Kind {
 }
 
 /// KH2's (true) or KH1's, per `Kind`: combos, jump, glide and dodge roll KH2's, magic KH1's by default (as before).
-static KH2: [AtomicBool; 7] = [AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true)];
+static KH2: [AtomicBool; 8] = [AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false), AtomicBool::new(false), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(true), AtomicBool::new(false)];
 static INIT: Once = Once::new();
 
 fn init() {

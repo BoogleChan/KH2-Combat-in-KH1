@@ -172,7 +172,7 @@ fn load(events: &[character_core::EventKind], spell: &[(u8, u16, i32)]) -> Resul
             }
             // (The user: KH1's voice, not KH2's, unless `kh2_voice = on`.)
             // (Reflect's, `REFLECT_VOICES`, whatever `kh2_voice` says.)
-            EventKind::Voice(v) if v >= 0 && !voice_ids.contains(&v) && (super::settings::get().kh2_voice || REFLECT_VOICES.contains(&v)) => voice_ids.push(v),
+            EventKind::Voice(v) if v >= 0 && !voice_ids.contains(&v) => voice_ids.push(v),
             _ => {}
         }
     }
@@ -264,7 +264,7 @@ fn vtbl(bar: &[u8]) -> Vec<(u8, u8, Vec<i8>)> {
 
 /// Whether KH2's own sounds stand in for KH1's (its swing voice) on `motion`.
 pub fn covers(motion: u16) -> bool {
-    super::settings::get().kh2_voice && allowed(motion) && LOADED.try_lock().map_or(false, |g| g.is_some())
+    kh2_voice() && allowed(motion) && LOADED.try_lock().map_or(false, |g| g.is_some())
 }
 
 /// Sora's `motion` reached a KH2 event: its sound, if it has one.
@@ -295,7 +295,7 @@ pub unsafe fn event(motion: u16, kind: character_core::EventKind) {
             }
         }
         // (A motion's voice only with `kh2_voice`: Reflect's voices load without it.)
-        EventKind::Voice(v) if super::settings::get().kh2_voice => {
+        EventKind::Voice(v) if kh2_voice() => {
             if let Some(c) = l.voices.get(&v) {
                 static PICK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
                 let n = PICK.fetch_add(7, std::sync::atomic::Ordering::Relaxed) as usize;
@@ -350,7 +350,7 @@ pub unsafe fn reflect_voice(v: i16) {
 
 /// Sora's battle voice `v` (a spell's cast voice, `reflect`), when KH2's voices are on.
 pub unsafe fn voice(v: i16) {
-    if !super::settings::get().kh2_voice {
+    if !kh2_voice() {
         return;
     }
     let Ok(g) = LOADED.try_lock() else { return };
@@ -439,4 +439,10 @@ pub unsafe fn tick() {
         }
         !done
     });
+}
+
+/// KH2's battle quotes for Sora (the Battle Quotes row / ini `battle_quotes`; `kh2_voice` without
+/// it). Every motion's voices are loaded, so the row switches them in game.
+pub fn kh2_voice() -> bool {
+    super::styles::kh2(super::styles::Kind::BattleQuotes)
 }
