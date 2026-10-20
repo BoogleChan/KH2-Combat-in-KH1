@@ -358,6 +358,18 @@ unsafe fn wr<T: Copy>(p: usize, v: T) {
 type PhysFn = unsafe extern "system" fn(usize);
 type MoveFn = unsafe extern "system" fn(usize, *const [f32; 4], u32);
 
+/// Work of ours that took over 4 ms on the game's thread (a frame is 16.7): logged, 60 at most
+/// (the user: "every single attack lag").
+fn note_slow(t0: Instant, what: impl FnOnce() -> String) {
+    let ms = t0.elapsed().as_secs_f32() * 1000.0;
+    if ms > 4.0 {
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 60 {
+            log(&format!("slow: {} took {ms:.1} ms", what()));
+        }
+    }
+}
+
 unsafe extern "system" fn physics(actor: usize) {
     let sora = actor > 0x10000 && actor == rd::<u64>(BASE.load(Ordering::Relaxed) + PARTY_RVA) as usize;
     if sora {
@@ -368,7 +380,11 @@ unsafe extern "system" fn physics(actor: usize) {
             RESUMED_MS.store(now, Ordering::Relaxed);
         }
     }
+    let t0 = Instant::now();
     let took = ON.load(Ordering::Relaxed) && actor > 0x10000 && takeover(actor);
+    if sora {
+        note_slow(t0, || format!("Sora's frame of ours (KH2 has him: {took}, KH2 motion {})", KH2_MOTION.load(Ordering::Relaxed)));
+    }
     if sora {
         GAME_FRAME.fetch_add(1, Ordering::Relaxed);
         FRAME_KIND.store(if took { 1 } else if HANDOFF_FRAME.load(Ordering::Relaxed) { 2 } else { 0 }, Ordering::Relaxed);
@@ -2317,15 +2333,22 @@ unsafe fn takeover(actor: usize) -> bool {
     super::reflect::after_step(actor, &out, d.character.airborne(), &mut d.strikes, &battle_rows, lock);
     // KH2's own sounds for the effect elements this frame starts. In Wisdom Form a frame
     // trigger 1 is a shot from its model's script instead (`form`).
+    // (Each event's work timed: one over 4 ms is logged, the user: "the new abilities ... lag when
+    // i use them".)
     for e in &out.events {
+        let t0 = Instant::now();
         if super::form::takes(&d.drive, e) {
             if let character_core::EventKind::Effect(n) = e {
                 super::form::effect(out.motion, *n);
             }
+            note_slow(t0, || format!("the form's effect event {e:?} of motion {}", out.motion));
             continue;
         }
         super::kh2sound::event(out.motion, *e);
+        note_slow(t0, || format!("KH2 sound for {e:?} of motion {}", out.motion));
+        let t1 = Instant::now();
         super::kh2fx::event(out.motion, *e);
+        note_slow(t1, || format!("KH2 effect for {e:?} of motion {}", out.motion));
     }
     super::form::shots_step(actor, &out, d.character.airborne(), &mut d.strikes, &battle_rows, lock);
     super::form::after_step(&mut d.drive, actor, rd::<u32>(base + BATTLE_RVA) & 1 != 0);

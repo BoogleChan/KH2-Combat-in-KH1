@@ -3242,3 +3242,18 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
     plays through state 18 for at most a second.
 - No KH1 Keyblade trail or Keyblade swing effect in Anti (`Strikes::swing_start`, `trail`); the
   swing voice stays.
+
+### 2026-10-20: Stage 274 (KH2 sounds without stalls; Anti's ledge hands)
+- The user: "it's the new abilities that make the game lag. Aerial finish, dodge slash etc ...
+  The base combo doesn't lag ... the drive forms lag too. Every single attack lag".
+  - The moves with KH2 sounds are the KH2 ability moves (`kh2_sounds` default) and everything
+    in a form. Each sound opened its own `waveOut` device on the game's thread (`waveOutOpen`)
+    and closed it there (`tick`), and Windows can take tens of ms over each.
+  - Now one device, opened once, is mixed on a thread of ours (`kh2sound::mixer`: 48 kHz
+    stereo, 10 ms blocks, four queued; each sound resampled, at its gain, clipped). The game's
+    thread only queues the sound.
+  - Our work over 4 ms on the game's thread is logged ("slow: ... took N ms": Sora's whole
+    frame, each sound, effect and form effect event) in case anything else stalls.
+- Anti Form's ledge hang (the user's screenshot: hanging well down the wall, "looks like his
+  collision is a little off"). The hang / climb pose is moved so its hands are where KH1's own
+  hands are this frame (`pose::check`, `ANTI_LEDGE`).

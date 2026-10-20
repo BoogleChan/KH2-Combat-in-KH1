@@ -9,12 +9,15 @@
 //! clips in `voice/us/battle/*_sora.win32.scd`: Explosion 6 at 0, Magnet Burst 7 at 0 and 6
 //! at 50). Sound ids name the bank's id records, not its streams (`kh2_formats::scd`). Once
 //! KH2 Sora is loaded, a thread reads them from the user's own KH2 install, decodes them
-//! (Microsoft ADPCM, Ogg Vorbis for voices) and keeps them; nothing is copied anywhere. They play through Windows' `waveOut`, a device handle per sound, closed
-//! when it is done. Ini: `kh2_sounds` (`magnet_explosion` the default, `all`, `off`) and
+//! (Microsoft ADPCM, Ogg Vorbis for voices) and keeps them; nothing is copied anywhere. They play through Windows' `waveOut`: one device, opened once on a
+//! thread of ours that mixes every sound playing into it (`mixer`). (It was a device per sound,
+//! opened and closed on the game's thread, which stalled it each time, the user: "the new
+//! abilities ... lag when i use them. The base combo doesn't lag ... the drive forms lag too",
+//! the moves with KH2 sounds.) Ini: `kh2_sounds` (`magnet_explosion` the default, `all`, `off`) and
 //! `kh2_volume`. The default is every KH2 ability move (`DEFAULT_MOTIONS`).
 
 use super::log;
-use super::sys::{waveOutClose, waveOutOpen, waveOutPrepareHeader, waveOutUnprepareHeader, waveOutWrite, WaveFormatEx, WaveHdr, WAVE_MAPPER, WHDR_DONE};
+use super::sys::{waveOutOpen, waveOutPrepareHeader, waveOutWrite, WaveFormatEx, WaveHdr, WAVE_MAPPER, WHDR_DONE};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -52,16 +55,97 @@ const WEAPON_BANK: u32 = 500;
 /// Sora's battle voices (KH2 loads a world's set; Twilight Town's here).
 const VOICE_FILE: &str = "voice/us/battle/tt0_sora.win32.scd";
 
+/// A sound asked for, for the mixer: its samples, rate, channels and gain.
 struct Voice {
-    handle: usize,
-    hdr: Box<WaveHdr>,
-    _data: Arc<Vec<i16>>,
+    data: Arc<Vec<i16>>,
+    rate: u32,
+    channels: u16,
+    gain: f32,
+    /// Where it is, in its own frames.
+    pos: f64,
 }
 
-// The header and buffer live in the voice until it is closed.
-unsafe impl Send for Voice {}
+/// Sounds asked for since the mixer last looked.
+static QUEUE: Mutex<Vec<Voice>> = Mutex::new(Vec::new());
+/// The mixer's thread runs (started on the first sound).
+static MIXER: std::sync::Once = std::sync::Once::new();
+/// The mixer's output: 48 kHz stereo, in blocks of 10 ms, four queued (40 ms ahead at most).
+const OUT_RATE: u32 = 48_000;
+const BLOCK_FRAMES: usize = 480;
+const BLOCKS: usize = 4;
 
-static VOICES: Mutex<Vec<Voice>> = Mutex::new(Vec::new());
+/// The mixer (its own thread): one `waveOut` device for every KH2 sound, kept open; each block,
+/// as Windows hands it back, refilled with the sounds playing (resampled to 48 kHz, each at its
+/// gain, clipped) and queued again.
+fn mixer() {
+    let fmt = WaveFormatEx { format_tag: 1, channels: 2, samples_per_sec: OUT_RATE, avg_bytes_per_sec: OUT_RATE * 4, block_align: 4, bits_per_sample: 16, cb_size: 0 };
+    let mut handle = 0usize;
+    let r = unsafe { waveOutOpen(&mut handle, WAVE_MAPPER, &fmt, 0, 0, 0) };
+    if r != 0 {
+        log(&format!("KH2 sound: Windows refused to open the sound device (waveOutOpen {r}): no KH2 sounds"));
+        return;
+    }
+    log("KH2 sound: mixer running (one device, 48 kHz stereo, 10 ms blocks)");
+    let size = std::mem::size_of::<WaveHdr>() as u32;
+    let mut bufs: Vec<Vec<i16>> = (0..BLOCKS).map(|_| vec![0i16; BLOCK_FRAMES * 2]).collect();
+    let mut hdrs: Vec<Box<WaveHdr>> = bufs
+        .iter_mut()
+        .map(|b| Box::new(WaveHdr { data: b.as_mut_ptr() as *mut u8, buffer_length: (b.len() * 2) as u32, bytes_recorded: 0, user: 0, flags: 0, loops: 0, next: std::ptr::null_mut(), reserved: 0 }))
+        .collect();
+    for h in hdrs.iter_mut() {
+        unsafe {
+            waveOutPrepareHeader(handle, &mut **h, size);
+        }
+        // (Ready to fill.)
+        h.flags |= WHDR_DONE;
+    }
+    let mut playing: Vec<Voice> = Vec::new();
+    let mut mix = vec![0f32; BLOCK_FRAMES * 2];
+    loop {
+        let mut wrote = false;
+        for i in 0..BLOCKS {
+            let done = unsafe { std::ptr::read_volatile(&hdrs[i].flags) } & WHDR_DONE != 0;
+            if !done {
+                continue;
+            }
+            if let Ok(mut q) = QUEUE.lock() {
+                playing.append(&mut q);
+            }
+            mix.iter_mut().for_each(|x| *x = 0.0);
+            for v in playing.iter_mut() {
+                let ch = v.channels.max(1) as usize;
+                let frames = v.data.len() / ch;
+                let step = v.rate as f64 / OUT_RATE as f64;
+                for f in 0..BLOCK_FRAMES {
+                    let p = v.pos as usize;
+                    if p + 1 >= frames {
+                        v.pos = frames as f64;
+                        break;
+                    }
+                    let t = (v.pos - p as f64) as f32;
+                    let at = |k: usize, c: usize| v.data[k * ch + c.min(ch - 1)] as f32;
+                    let l = at(p, 0) * (1.0 - t) + at(p + 1, 0) * t;
+                    let r = at(p, 1) * (1.0 - t) + at(p + 1, 1) * t;
+                    mix[f * 2] += l * v.gain;
+                    mix[f * 2 + 1] += r * v.gain;
+                    v.pos += step;
+                }
+            }
+            playing.retain(|v| (v.pos as usize) + 1 < v.data.len() / v.channels.max(1) as usize);
+            for (o, m) in bufs[i].iter_mut().zip(&mix) {
+                *o = m.clamp(-32768.0, 32767.0) as i16;
+            }
+            hdrs[i].flags &= !WHDR_DONE;
+            unsafe {
+                waveOutWrite(handle, &mut *hdrs[i], size);
+            }
+            wrote = true;
+        }
+        if !wrote {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+}
 
 fn allowed(motion: u16) -> bool {
     match &super::settings::get().kh2_sounds {
@@ -413,42 +497,17 @@ unsafe fn play(s: &Sound, channel: Channel) {
         }
         return;
     }
-    let block = s.channels * 2;
-    let fmt = WaveFormatEx { format_tag: 1, channels: s.channels, samples_per_sec: s.rate, avg_bytes_per_sec: s.rate * block as u32, block_align: block, bits_per_sample: 16, cb_size: 0 };
-    let mut handle = 0usize;
-    let r = waveOutOpen(&mut handle, WAVE_MAPPER, &fmt, 0, 0, 0);
-    if r != 0 {
-        static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-        if N.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 10 {
-            log(&format!("KH2 sound: Windows refused to open the sound device (waveOutOpen {r}, {} Hz, {} ch; {} playing)", s.rate, s.channels, VOICES.lock().map_or(0, |v| v.len())));
-        }
-        return;
-    }
-    let data = if gain < 0.999 { Arc::new(s.data.iter().map(|&x| (x as f32 * gain) as i16).collect::<Vec<i16>>()) } else { s.data.clone() };
-    let mut hdr = Box::new(WaveHdr { data: data.as_ptr() as *mut u8, buffer_length: (data.len() * 2) as u32, bytes_recorded: 0, user: 0, flags: 0, loops: 0, next: std::ptr::null_mut(), reserved: 0 });
-    let size = std::mem::size_of::<WaveHdr>() as u32;
-    if waveOutPrepareHeader(handle, &mut *hdr, size) != 0 || waveOutWrite(handle, &mut *hdr, size) != 0 {
-        waveOutClose(handle);
-        return;
-    }
-    if let Ok(mut v) = VOICES.lock() {
-        v.push(Voice { handle, hdr, _data: data });
+    // (Handed to the mixer: nothing here waits on Windows' sound device.)
+    MIXER.call_once(|| {
+        std::thread::spawn(mixer);
+    });
+    if let Ok(mut q) = QUEUE.lock() {
+        q.push(Voice { data: s.data.clone(), rate: s.rate.max(1), channels: s.channels.max(1), gain, pos: 0.0 });
     }
 }
 
-/// Every frame: closes the sounds that finished.
-pub unsafe fn tick() {
-    let Ok(mut v) = VOICES.try_lock() else { return };
-    let size = std::mem::size_of::<WaveHdr>() as u32;
-    v.retain_mut(|voice| {
-        let done = std::ptr::read_volatile(&voice.hdr.flags) & WHDR_DONE != 0;
-        if done {
-            waveOutUnprepareHeader(voice.handle, &mut *voice.hdr, size);
-            waveOutClose(voice.handle);
-        }
-        !done
-    });
-}
+/// Every frame (no work now: the mixer closes nothing; kept for its callers).
+pub unsafe fn tick() {}
 
 /// KH2's battle quotes for Sora (the Battle Quotes row / ini `battle_quotes`; `kh2_voice` without
 /// it). Every motion's voices are loaded, so the row switches them in game.

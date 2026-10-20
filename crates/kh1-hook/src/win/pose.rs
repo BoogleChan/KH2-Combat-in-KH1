@@ -1052,6 +1052,9 @@ fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
     follow_play(s, slot, to_world, None)
 }
 
+/// This frame's pose is Anti's ledge hang or climb (`anti_ledge`): `check` puts its hands on KH1's.
+static ANTI_LEDGE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// KH1's ledge grab while Anti Form has him: its hang (KH1 state 15, as `takeover::grab`'s "bar"
 /// finds it; 13 too) as Anti's hang, its pull-up (19, then 18 on top of the ledge for its last
 /// motions) as Anti's climb. `None`: not on a ledge, or Anti has no such motion.
@@ -1081,6 +1084,7 @@ fn anti_ledge() -> Option<Play> {
         }
     };
     let has = KH2.get()?.as_ref().ok()?.anti.as_ref().is_some_and(|f| f.rig.motions.contains_key(&motion));
+    ANTI_LEDGE.store(has, Ordering::Relaxed);
     has.then_some(Play::Motion { motion, field: false, looping: motion == m2::HANG, group: if motion == m2::HANG { 7 } else { 8 } })
 }
 
@@ -1506,6 +1510,29 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
         }
         return;
     };
+    // Anti Form's hang and climb on KH1's ledge grab (`anti_ledge`): KH1 places him for its own
+    // hang, Anti's hands sit elsewhere on its body (the user's screenshot: hanging well down the
+    // wall, "looks like his collision is a little off"). The pose is moved so its hands are where
+    // KH1's own hands are this frame (KH1's pass drew them on the ledge).
+    if ANTI_LEDGE.swap(false, Ordering::Relaxed) {
+        let kh1_hands = orig_hands.or_else(|| HANDS_NOW.lock().ok().and_then(|h| h.map(|h| h.orig)));
+        if let Some(h) = kh1_hands {
+            let inv = to_world.inverse();
+            let kh1_mid = (inv * h[0]).w_axis.truncate().lerp((inv * h[1]).w_axis.truncate(), 0.5);
+            let ours = pose[HANDS[0].0].w_axis.truncate().lerp(pose[HANDS[1].0].w_axis.truncate(), 0.5);
+            let d = kh1_mid - ours;
+            if d.is_finite() && d.length() < 300.0 {
+                let t = Mat4::from_translation(d);
+                for m in pose.iter_mut() {
+                    *m = t * *m;
+                }
+                static N: AtomicU32 = AtomicU32::new(0);
+                if N.fetch_add(1, Ordering::Relaxed) < 10 {
+                    log(&format!("Anti Form's ledge pose moved {:.0?} to put its hands on KH1's", d));
+                }
+            }
+        }
+    }
     let kh2_feet = MODE.load(Ordering::Relaxed) == 0 && super::takeover::active() && super::takeover::GROUNDED.load(Ordering::Relaxed);
     super::feet::place(BASE.load(Ordering::Relaxed), &mut pose, &s.parents, &to_world, kh2_feet);
     // (KH1's own motion, `kh1_air_pose`: its hold is KH1's already.)

@@ -63,7 +63,5 @@ pub const WHDR_DONE: u32 = 1;
 extern "system" {
     pub fn waveOutOpen(out: *mut usize, device: u32, format: *const WaveFormatEx, callback: usize, instance: usize, flags: u32) -> u32;
     pub fn waveOutPrepareHeader(out: usize, hdr: *mut WaveHdr, size: u32) -> u32;
-    pub fn waveOutUnprepareHeader(out: usize, hdr: *mut WaveHdr, size: u32) -> u32;
     pub fn waveOutWrite(out: usize, hdr: *mut WaveHdr, size: u32) -> u32;
-    pub fn waveOutClose(out: usize) -> u32;
 }
