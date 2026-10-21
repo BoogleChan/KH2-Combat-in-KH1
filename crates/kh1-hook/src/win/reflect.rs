@@ -6,13 +6,15 @@
 //!   written as a spell of its own (type 2, spell byte 7, no target submenu) each time the battle
 //!   menus are filled (`0x140292330`), and put into the magic list (`0x140529638`: `+4` / `+8`
 //!   disabled bits, `+0x10` count, `+0x14` command ids) after KH1's spells, before Summon, once
-//!   Sora has Aero (`learned`). Greyed as KH1 greys a spell (magic sealed, MP short by KH1's own
+//!   Sora has found it (`learned`). Greyed as KH1 greys a spell (magic sealed, MP short by KH1's own
 //!   check `0x1402A2A80` with a cost of 1 MP, `COST`). Its name: KH1 draws a command's name from
 //!   its record's word index (`+4`) through `0x14028D820`, called once in its name drawer
 //!   `0x1402787B0`; that call is pointed at `word`, which answers our index with the level's
 //!   name (Reflect / Reflera / Reflega).
-//! - **Levels.** Reflect's level is KH1's Aero level (`level`): Aero / Aerora / Aeroga give
-//!   Reflect / Reflera / Reflega, each from its own KH2 files (`magic/REFLECT_<n>.mag`: script
+//! - **Levels.** Reflect is found by winning three fights (the user: Pot Centipede, the Hercules
+//!   Cup, Ice Titan's Gold Match; `crate::story`): the first won gives Reflect, the second
+//!   Reflera, the third Reflega (`found`, `level`; `menu` shows a box for each), each from its
+//!   own KH2 files (`magic/REFLECT_<n>.mag`: script
 //!   and effect package; MAGC row of that level; ATKP and `magi` at sub `level × 2 − 2`).
 //! - **Shortcuts.** `shortcuts` puts it in KH1's shortcuts (Customize and battle); a shortcut
 //!   gives KH1's command step the same command as the menu, so it comes here the same way.
@@ -115,28 +117,23 @@ fn note(s: String) {
     }
 }
 
-/// When Sora has Reflect: once he has KH1's Aero (the user's rule; one place to change it).
-/// `save` is KH1's save block (`*0x1428695A0`); party member 0's spells are the bits of
-/// `+0x74` (`0x1402830C0 (member, spell)`), Aero spell 6.
-pub unsafe fn learned(save: usize) -> bool {
-    save > 0x10000 && rd::<u8>(save + 0x74) & (1 << 6) != 0
+/// How many of Reflect's three fights are won (the user: "Reflect should be found ... after
+/// defeating Pot Centipede, after defeating Hercules (Hercules cup), after defeating Ice Titan (Gold
+/// match)"; `crate::story::Flags::reflect_level`): 0 none yet. `save` is KH1's save block
+/// (`*0x1428695A0`), else `menu::save_block`'s.
+pub unsafe fn found(save: usize) -> u8 {
+    let save = if save > 0x10000 { Some(save) } else { super::menu::save_block(base()) };
+    save.and_then(|s| super::menu::story_flags_at(s)).map_or(0, |f| f.reflect_level())
 }
 
-/// Reflect's level, 1..3: KH1's Aero level (the user: Aero / Aerora / Aeroga give Reflect /
-/// Reflera / Reflega; one place to change it). The level KH1 has loaded for Aero (its spell
-/// table `0x142D23580 + 6 * 0x38`, `+0`: what KH1's own menus name and cast, Aero / Aerora /
-/// Aeroga), else the save's (`save + 0x492 + spell`, which `0x14028D3D0` keeps with it), else 1.
+/// When Sora has Reflect: the first of its three fights won (`found`; one place to change it).
+pub unsafe fn learned(save: usize) -> bool {
+    found(save) >= 1
+}
+
+/// Reflect's level, 1..3: one per fight won (`found`): Reflect, Reflera, Reflega.
 pub unsafe fn level(save: usize) -> u8 {
-    let loaded = rd::<i32>(base() + SPELLS_RVA + 6 * 0x38);
-    if (1..=LEVELS as i32).contains(&loaded) {
-        return loaded as u8;
-    }
-    let saved = if save > 0x10000 { rd::<u8>(save + 0x492 + 6) } else { 0 };
-    if (1..=LEVELS).contains(&saved) {
-        saved
-    } else {
-        1
-    }
+    found(save).clamp(1, LEVELS)
 }
 
 /// The level cast now: Aero's, or the highest level below it whose files loaded.
@@ -407,10 +404,14 @@ unsafe fn in_menus(base: usize) -> bool {
     let l = level(save);
     if LEVEL_LOGGED.swap(l as u32, Ordering::Relaxed) != l as u32 {
         log(&format!(
-            "Reflect: level {l}, {} (KH1's Aero level: loaded {}, saved {}){}",
+            "Reflect: level {l}, {} ({}){}",
             NAMES[(l - 1) as usize],
-            rd::<i32>(base + SPELLS_RVA + 6 * 0x38),
-            rd::<u8>(save + 0x492 + 6),
+            super::menu::story_flags_at(save).or_else(|| super::menu::story_flags(base)).map_or("its fights not read".to_string(), |f| format!(
+                "Pot Centipede {}, Hercules Cup {}, Ice Titan {}",
+                if f.pot_centipede { "beaten" } else { "not yet" },
+                if f.hercules_cup { "won" } else { "not yet" },
+                if f.ice_titan { "beaten" } else { "not yet" }
+            )),
             match (PARSED.get().is_some(), cast_level(save)) {
                 (false, _) => String::new(),
                 (true, Some(c)) if c != l => format!("; its files didn't load, level {c} is cast"),
@@ -527,7 +528,7 @@ pub unsafe fn install() {
     }
     let _ = HELP_TEXT.set(Box::leak(super::menu::encode(HELP).into_boxed_slice()).as_ptr() as usize);
     let _ = NAME.set(NAMES.map(|n| Box::leak(super::menu::encode(n).into_boxed_slice()).as_ptr() as usize));
-    log(&format!("Reflect: menu entry ready (command {COMMAND:#x}, learned with Aero, its level Aero's, 1 MP = KH1 cost {COST})"));
+    log(&format!("Reflect: menu entry ready (command {COMMAND:#x}, found after Pot Centipede, the Hercules Cup and Ice Titan, a level for each, 1 MP = KH1 cost {COST})"));
     // The spell files, once KH2 Sora is there (their MAGC rows name them).
     std::thread::spawn(|| {
         let t = Instant::now();

@@ -364,9 +364,9 @@ starts at any MP.
 ## Limit Form in the KH1 port (Data; the rules ours where marked)
 
 The user: "lets begin working on limit form". Its cost and unlock are the user's: 1 MP to enter,
-as Valor and Wisdom (`form::LIMIT_COST_MP`), and open from level 97 (`form::LIMIT_LEVEL`, the same
-level check as Final's 99 and the second form's 98). It is the Drive list's third entry, after
-Wisdom.
+as Valor and Wisdom (`form::LIMIT_COST_MP`). It opens by the Dive's choice ("When the
+forms open" below: first for the Shield, second for the Sword, third for the Rod). It is the Drive
+list's third entry, after Wisdom.
 
 Read from the extracted `00battle.bin`, `03system.bin`, `00objentry.bin`, `msg/us/sys.bar`,
 `obj/P_EX100_KH1F.mdlx` / `.mset` and `obj/W_EX010_KH1F.mset`, and from the install's file
@@ -790,8 +790,8 @@ The user: "lets take the rules and procedures we've done for wisdom form and val
 make master form. I want sora's jumpsuit to be yellow, and the inside of sora's jacket's hood be
 yellow as well instead of blue. I want soras belt to be black. Lets make sure when sora uses his
 KH2 Master Form attacks, his secondary keyblade's trail actually follows the keyblade." Its cost
-and unlock are the user's: 2 MP to enter (`form::MASTER_COST_MP`), open from level 97
-(`form::MASTER_LEVEL`, the same level check as Limit Form's).
+and unlock are the user's: 2 MP to enter (`form::MASTER_COST_MP`), open once Anti-Sora is beaten
+("When the forms open" below).
 
 Read from fresh copies of the Steam install's `00battle.bin`, `03system.bin`, `00objentry.bin`,
 `obj/P_EX100_TRIF.mdlx` / `.mset` and `obj/W_EX010_TRIF_R` / `_L.mset` (research helpers
@@ -964,6 +964,47 @@ All of it, in particular:
   windows (and in its jump and glide); in Valor, unchanged but filled earlier;
 - Aerial Dodge as Master's growth ability; no guard (Square on the ground does nothing);
 - the "M:" row and the copy counting with all three rows.
+
+## When the forms open (the rules the user's, the flags Checked: scripts + saves)
+
+The user's table (`kh1-hook/src/story.rs`, `FORM_TABLE`; `form::unlocked` reads it). The Dive
+to the Heart's choice is `save + 0x48C` (0 Sword, 1 Shield, 2 Rod / Wand):
+
+| Fight | Sword | Shield | Rod |
+|---|---|---|---|
+| Guard Armor (first form) | Valor | Limit | Wisdom |
+| Opposite Armor (second) | Limit | Wisdom | Valor |
+| Pegasus Cup, Leon & Yuffie (third) | Wisdom | Valor | Limit |
+
+Master Form opens after Anti-Sora, Final Form after Ansem-Riku (Riku 2). Anti Form is the secret
+code's, as before. Each tier stands alone (a randomizer's save that wins the Pegasus Cup first
+gets the third form only). The level placeholders (97 / 98 / 99) are gone. The Drive list, the
+Equipment page's V: / M: / F: rows and the form slots' copy counting (`equip`) all ask
+`form::unlocked`. The flags and the forms open are logged at the start and whenever they change
+("Drive forms: Dive choice ...").
+
+The flags, all relative to the save block (`menu::save_block`, `menu::story_flags`; the same
+layout on Steam, so no new addresses):
+
+| Flag | Where | How it was found |
+|---|---|---|
+| Guard Armor | Traverse Town's story byte (`+0x1504`) ≥ 0x2B | Third District script: 0x28 as the fight starts, 0x2B once its enemies are cleared and its prize given; KH1's own snapshots `tw03_t011` (0x28, no journal entry) and `tw03_t021` (0x2B, Guard Armor's entry 0x9E). High. |
+| Opposite Armor | Heartless journal entry 0x9F (`+0x16F6` bit 0) | Added by a Second District script function of its own once the fight is over, the same shape as Guard Armor's 0x9E. No story byte changes: Traverse Town stays 0x4E from the Gizmo Shop bell to the fight (snapshot `tw02_t021` at 0x4E has no 0x9F; the next world's `al00_00` has it; three of the user's saves sit at 0x4E without it). High. |
+| Pegasus Cup won | cup state `+0xF37` ≥ 1 | The cup scripts step `+0xF36 + cup` 0 → 1 (normal), 1 → 2, 2 → 3 (the other rounds; trophy flags 20 + cup). Cups in order Phil, Pegasus, Hercules, Hades: their prizes are consecutive (`btltbl` prize table `0x5E..0x61`), their unlock flags (`+0xF2E + cup`) need Deep Jungle, then Monstro, then Neverland, then Hollow Bastion's end, and Pegasus is run in the arena that loads Leon's and Yuffie's battle models. High for the byte, medium-high for the order. |
+| Anti-Sora | Neverland's story byte ≥ 0x32 | The hold's event at 0x1E sets 0x28 as it starts and the fight is in it (the journal entry 0x6F is added there, and KH1's snapshots show the battle's EXP between `pp05_y021` and `pp07_y021`); the next room's event sets 0x32 as Sora walks in. 0x28 already holds during the fight, so 0x32 is the first byte only reached after it. Medium-high (the form opens one room after the fight). |
+| Ansem-Riku (Riku 2) | Hollow Bastion's story byte ≥ 0x82 | After Dragon Maleficent (0x6E, the value `growth::BOSS_GIFTS` uses, set right after its prize), the next room's entry script at 0x6E restores the party, runs the fight and its scenes and ends by setting 0x82; nothing is written between 0x6E and 0x82. Medium-high. |
+| Pot Centipede | Agrabah's story byte ≥ 0x35 | Set right after its prize in its room's script (`growth::BOSS_GIFTS`'s value); snapshots `al04_h011b` (0x17) and `al04_h011c` (0x35, its journal entry 0xA2). High. |
+| Hercules Cup won | cup state `+0xF38` ≥ 1 | As the Pegasus Cup (cup 2, run in the arena that loads Hercules). High / medium-high. |
+| Ice Titan | journal entry 0xA6 (`+0x16F7` bit 1) and Diamond Dust owned (`+0x499 + 0x65`) | The Gold Match's script adds 0xA6 as the match starts and gives prize 0x94 when it is won, which the prize table (`*0x142D37758`) makes item 0x65, Diamond Dust (`kh1-equipment.md`); the Platinum Match's is 0x95, One-Winged Angel. Both together: a lost match or a Diamond Dust from elsewhere doesn't count. High. |
+
+How the scripts were read (Checked, exe): an event script is 4-byte words, the top byte a class
+(`0x1404E6A90`'s handlers), the rest a signed argument; class 9 pushes it, 12 / 13 load and store
+a byte. A byte variable `0xB00..0xC7F` is `save + 0xA00 + arg` (`0x14019DF40`), so `0xB04 +
+world` is the world's story byte. Class 24 calls opcode `arg` (`0x1401B13F0`): 0x206 adds a
+Heartless journal entry (`0x1401B3830`: `save + 0xC00 + 0xAE3`, high bit first), 0x247 gives a
+prize, 0x251 clears the room's enemies. The scripts are each room's `.ard` in the user's own
+install (read with the PKG reader; nothing kept), and `event_data/*` are KH1's own save
+snapshots at its events (the same 0x16C00-byte layout as the save block).
 
 ## Not modelled
 

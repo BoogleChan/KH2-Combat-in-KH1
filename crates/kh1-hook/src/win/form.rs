@@ -62,7 +62,7 @@
 //! the KH2 limits, and for the moment put in the equivalent KH1 limits"): Magic is the Limit menu
 //! of KH1's own five limits instead (equipped or not; its shortcuts KH2 FM's Limit Form layout),
 //! run as KH1 does them, KH1 having him for each, the form on and draining (`drain`) all through.
-//! It costs `LIMIT_COST_MP` and opens at level `LIMIT_LEVEL` (the user).
+//! It costs `LIMIT_COST_MP` and opens by the user's table (`unlocked`, `crate::story`).
 //!
 //! Master Form (the user: "lets take the rules and procedures we've done for wisdom form and valor
 //! form, and lets make master form"; `docs/drive-model.md`, "Master Form in the KH1 port"): in the
@@ -73,7 +73,7 @@
 //! none, as Final's). Its growth ability is Aerial Dodge, one level above Sora's; no guard (its
 //! motion 42 is the repel's clip, with no guard window). It casts as Wisdom and Final do, on its
 //! own cast motions, at KH2's Master sub (+ 20, `Kind::magic_sub`, `formmagic`). It costs
-//! `MASTER_COST_MP` and opens at level `MASTER_LEVEL` (the user).
+//! `MASTER_COST_MP` and opens once Anti-Sora is beaten (`unlocked`, `crate::story`).
 
 use super::{log, pose};
 use character_core::{Abilities, Character, EventKind};
@@ -402,53 +402,43 @@ pub unsafe fn usable(sora: usize, kind: Kind) -> bool {
     unlocked(kind) && pose::kh2().is_some_and(|k| kind.data(k).is_some()) && (super::takeover::kh2_has() || super::takeover::kh1_cut_window()) && sora > 0x10000 && mp_enough(mp(sora), kind) && own_needs(kind).is_ok()
 }
 
-/// Sora's save (`menu::save_block`): his level (`+4`), the Dive to the Heart's choice (`+0x48C`,
-/// set by `0x1402835B0`; it picks his level-up table at `0x142529A10`), and Traverse Town's story
-/// progress (`+0x1504`, the worlds' bytes `menu` reads for the bosses' gifts; 0x2B and up: Guard
-/// Armor beaten, as gaithern's KH-1FM-AP-LUA reads it).
-const SAVE_LEVEL: usize = 4;
-const SAVE_CHOICE: usize = 0x48C;
-const SAVE_TT_PROGRESS: usize = 0x1504;
-const GUARD_ARMOR_BEATEN: u8 = 0x2B;
-/// The choice's values, taken in the dream weapons' order (Sword 0x52, Shield 0x53, Rod 0x54).
-const CHOSE_ROD: u8 = 2;
-/// The other "first" form's level, and Final's (the user: "for the time being, lets have final
-/// form be unlocked at level 99 ... whichever form is the opposite ... unlocked at level 98").
-const SECOND_FORM_LEVEL: u8 = 98;
-const FINAL_LEVEL: u8 = 99;
-/// Limit Form's level (the user: unlocked "at level 97", by the same level check).
-pub const LIMIT_LEVEL: u8 = 97;
-/// Master Form's level (the user: level 97, the same as Limit Form, by the same level check).
-pub const MASTER_LEVEL: u8 = 97;
+/// The Drive list's form as `story`'s (Anti has none: the secret code's, always open).
+fn story_form(kind: Kind) -> Option<crate::story::Form> {
+    use crate::story::Form;
+    match kind {
+        Kind::Valor => Some(Form::Valor),
+        Kind::Wisdom => Some(Form::Wisdom),
+        Kind::Limit => Some(Form::Limit),
+        Kind::Master => Some(Form::Master),
+        Kind::Final => Some(Form::Final),
+        Kind::Anti => None,
+    }
+}
 
-/// The form is open to Sora (the Drive list's; Anti is the code's, always). The user: "if the
-/// player picked the sword or the shield as their main power in the beginning of the game, have
-/// valor form be their first drive form. it should unlock after defeating guard armor. likewise,
-/// if the player picked wand, wisdom form should be their first drive form".
+/// The form is open to Sora (the Drive list's; Anti is the code's, always). The user's table
+/// (`crate::story::FORM_TABLE`): by the Dive to the Heart's choice (`save + 0x48C`, set by
+/// `0x1402835B0`: 0 Sword, 1 Shield, 2 Rod), the first form after Guard Armor, the second after
+/// Opposite Armor and the third after the Pegasus Cup; Master Form after Anti-Sora, Final Form
+/// after Riku 2 (Ansem-Riku). The flags are read from the save (`menu::story_flags`) and logged
+/// at the start and whenever they change.
 pub unsafe fn unlocked(kind: Kind) -> bool {
+    let Some(form) = story_form(kind) else { return true };
     let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
     let Some(save) = super::menu::save_block(base) else { return false };
-    if !super::crash::readable(save + SAVE_TT_PROGRESS) {
-        return false;
-    }
-    let level = rd::<u8>(save + SAVE_LEVEL);
-    let choice = rd::<u8>(save + SAVE_CHOICE);
-    let guard_armor = rd::<u8>(save + SAVE_TT_PROGRESS) >= GUARD_ARMOR_BEATEN;
-    let first = if choice == CHOSE_ROD { Kind::Wisdom } else { Kind::Valor };
-    let open = match kind {
-        Kind::Anti => true,
-        Kind::Limit => level >= LIMIT_LEVEL,
-        Kind::Master => level >= MASTER_LEVEL,
-        Kind::Final => level >= FINAL_LEVEL,
-        k if k == first => guard_armor || level >= SECOND_FORM_LEVEL,
-        _ => level >= SECOND_FORM_LEVEL,
-    };
+    let Some(flags) = super::menu::story_flags_at(save) else { return false };
+    let choice = rd::<u8>(save + crate::story::DIVE_CHOICE);
     static LAST: AtomicU32 = AtomicU32::new(u32::MAX);
-    let key = (level as u32) << 16 | (choice as u32) << 8 | guard_armor as u32;
+    let key = (choice as u32) << 8 | flags.bits() as u32;
     if LAST.swap(key, Ordering::Relaxed) != key {
-        log(&format!("Drive forms: Dive choice {choice} ({}), level {level}, Guard Armor {}: first form {}", ["Sword", "Shield", "Rod"].get(choice as usize).unwrap_or(&"?"), if guard_armor { "beaten" } else { "not yet" }, first.name()));
+        let open: Vec<&str> = Kind::ALL.iter().filter(|&&k| story_form(k).is_some_and(|f| crate::story::unlocked(f, choice, &flags))).map(|k| k.name()).collect();
+        log(&format!(
+            "Drive forms: Dive choice {choice} ({}); {}: open {}",
+            crate::story::choice_name(choice),
+            flags.describe(),
+            if open.is_empty() { "none".to_string() } else { open.join(", ") }
+        ));
     }
-    open
+    crate::story::unlocked(form, choice, &flags)
 }
 
 /// What a form needs besides MP: Valor its second Keyblade (`valor::keyblade`).

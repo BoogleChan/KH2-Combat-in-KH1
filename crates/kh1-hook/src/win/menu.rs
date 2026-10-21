@@ -448,6 +448,20 @@ pub unsafe fn save_block(base: usize) -> Option<usize> {
     (super::crash::readable(save) && super::crash::readable(save + 0x5A3)).then_some(save)
 }
 
+/// The story and battle flags (`crate::story`) of the save block at `save` (`save_block`'s, or
+/// KH1's save pointer), if its bytes are there.
+pub unsafe fn story_flags_at(save: usize) -> Option<crate::story::Flags> {
+    if save < 0x10000 || !super::crash::readable(save) || !super::crash::readable(save + crate::story::SPAN - 1) {
+        return None;
+    }
+    crate::story::Flags::read(std::slice::from_raw_parts(save as *const u8, crate::story::SPAN))
+}
+
+/// The story and battle flags of Sora's save block (`save_block`).
+pub unsafe fn story_flags(base: usize) -> Option<crate::story::Flags> {
+    story_flags_at(save_block(base)?)
+}
+
 /// Adds `id` (with `bits`) at the first free place of a list of `len`; false if it is full.
 unsafe fn add(list: usize, len: usize, byte: u8) -> bool {
     for i in 0..len {
@@ -519,6 +533,9 @@ pub struct Growth {
     hj_level: Option<u8>,
     ad_level: Option<u8>,
     gl_level: Option<u8>,
+    /// Reflect's fights won last second (`reflect::found`), with the story bytes and Sora's level
+    /// then (a save loaded changes those too: no box for it).
+    rf_seen: Option<(u8, Vec<u8>, u8)>,
 }
 
 unsafe fn rd<T: Copy>(p: usize) -> T {
@@ -527,7 +544,7 @@ unsafe fn rd<T: Copy>(p: usize) -> T {
 
 impl Growth {
     pub fn new() -> Growth {
-        Growth { mode: super::settings::get().abilities, frames: 0, seen: None, applied: false, no_room: Vec::new(), gave_back: false, prompts: Default::default(), idle: 0, qr_level: None, dr_level: None, hj_level: None, ad_level: None, gl_level: None }
+        Growth { mode: super::settings::get().abilities, frames: 0, seen: None, applied: false, no_room: Vec::new(), gave_back: false, prompts: Default::default(), idle: 0, qr_level: None, dr_level: None, hj_level: None, ad_level: None, gl_level: None, rf_seen: None }
     }
 
     /// Sora's side of KH1's save block, if it is there.
@@ -538,6 +555,33 @@ impl Growth {
         let shared = std::slice::from_raw_parts((save + 0x599) as *const u8, 10).to_vec();
         let progress = std::slice::from_raw_parts((save + PROGRESS_OFF) as *const u8, 12).to_vec();
         Some(Kh1Sora { level, abilities, shared, progress })
+    }
+
+    /// Reflect found or grown (`reflect::found`: one level per fight won, the user's three): a
+    /// box as the bosses' gifts have ("New Magic: Reflect", then "Magic Up: Reflera" /
+    /// "Reflega"). Once a second; only for one more fight won while the same save plays (not when
+    /// a save is loaded: its story bytes or Sora's level change with it).
+    unsafe fn reflect_box(&mut self, now: &Kh1Sora) {
+        if !super::settings::get().reflect {
+            return;
+        }
+        let found = super::reflect::found(0);
+        let seen = (found, now.progress.clone(), now.level);
+        let Some((old, progress, level)) = self.rf_seen.replace(seen) else { return };
+        if found == old {
+            return;
+        }
+        let worlds = progress.iter().zip(&now.progress).filter(|(a, b)| a != b).count();
+        let same_save = worlds <= 1 && now.level >= level && now.level - level <= 1;
+        let name = ["Reflect", "Reflera", "Reflega"].get((found as usize).wrapping_sub(1)).copied();
+        match name {
+            Some(name) if found == old + 1 && same_save => {
+                log(&format!("Reflect found: {name} ({found} of its 3 fights won)"));
+                let title = if found == 1 { "New Magic" } else { "Magic Up" };
+                self.prompts.push_back((title.to_string(), name.to_string(), String::new()));
+            }
+            _ => log(&format!("Reflect: {found} of its 3 fights won (was {old}; no box: a save loaded or several at once)")),
+        }
     }
 
     /// Every second: KH1's menu and level, and Sora's abilities from them (`kh1`), or the
@@ -570,6 +614,7 @@ impl Growth {
             return;
         }
         let Some(mut now) = Self::kh1(base) else { return };
+        self.reflect_box(&now);
         // Sora learns KH2's abilities at their levels (`kh1`), or has them taken back out.
         if let Some(save) = save_block(base) {
             if self.mode == Mode::Kh1 {

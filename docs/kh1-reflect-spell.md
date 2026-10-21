@@ -68,8 +68,15 @@ user's files; **Ours** a choice of the mod's where the games don't say.
   over the empty record each fill.
 - **Name**: the call at `0x1402787FB` goes to our `word`, which returns the level's name
   ("Reflect", "Reflera", "Reflega"; KH1 text codes) for index `0x1FF` and KH1's word otherwise.
-- **Level** (Ours: the user's rule, `reflect::level`): Aero's level, read as KH1's menus read
-  it (the spell table's `+0` for spell 6), else the save's `+0x498`, else 1. Each level uses
+- **Level** (Ours: the user's rule, `reflect::found` / `reflect::level`): one level
+  per fight won of three (the user: "Reflect should be found in these places: 1. After defeating
+  Pot Centipede 2. After defeating Hercules (Hercules cup) 3. After defeating Ice Titan (Gold
+  match)"): the first won gives Reflect, the second Reflera, the third Reflega, in whatever order
+  they come. The flags (`crate::story`, `docs/drive-model.md`, "When the forms open"): Agrabah's
+  story byte ≥ 0x35, the Hercules Cup's state `save + 0xF38` ≥ 1, and Ice Titan's journal entry
+  0xA6 with Diamond Dust owned. It no longer follows Aero (before: Aero's level). A box
+  shows it as the bosses' gifts' do ("New Magic: Reflect", "Magic Up: Reflera" / "Reflega",
+  `menu::Growth::reflect_box`), for one more fight won while the same save plays. Each level uses
   its own KH2 files: `magic/REFLECT_<n>.mag` (script and effect package), the MAGC row of that
   level (Data: every level casts with motions 71 / 72 / 73 and voices 7 / 25), ATKP and `magi`
   at sub `level × 2 − 2` (Data: the barrier 573 kind 3 at subs 0 / 2 / 4; the counter 574 power
@@ -77,8 +84,9 @@ user's files; **Ours** a choice of the mod's where the games don't say.
   sounds: barrier radius 110 / 160 / 210, counter 240 / 320 / 380, burst 260 / 340 / 400;
   barrier sound 138 / 175 / 177, burst sound 172 / 176 / 178. A level whose file doesn't load
   falls back to the next one down.
-- **The list**: after KH1's fill, `0x7D` goes after the spells, before Summon, once Sora has Aero
-  (`reflect::learned`, the user's rule), its disabled bit inserted at its place in both words.
+- **The list**: after KH1's fill, `0x7D` goes after the spells, before Summon, once Sora has
+  found Reflect (`reflect::learned`, the user's rule: the first of its three fights won), its
+  disabled bit inserted at its place in both words.
   Greyed as a KH1 spell is greyed (magic allowed in this state, not sealed), when Sora has less
   than 1 MP (`COST` = 100, KH1's own check), and while KH1 has Sora. With 9 entries the layout
   is pointed at our own 8 row panels (KH1's 7 and the 7th again), again whenever KH1 builds the

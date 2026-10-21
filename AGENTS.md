@@ -3548,3 +3548,14 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   hand through the left-blade path (`xw_dh_5000.wpn`), held rigidly (`leftblade::dream_left`,
   from KH1's own dream hold when recorded, else the left grip with KH1's bind pose); its stats
   (+1 Strength) count. `docs/kh1-equipment.md`, `docs/kh1-weapon-second.md` 10.
+
+### 2026-10-21: Stage 307 (forms and Reflect open by the story)
+- The user's table: first form after Guard Armor, second after Opposite Armor, third after the
+  Pegasus Cup (Sword: Valor, Limit, Wisdom; Shield: Limit, Wisdom, Valor; Rod: Wisdom, Valor,
+  Limit); Master after Anti-Sora; Final after Riku 2; Reflect / Reflera / Reflega by how many of
+  Pot Centipede, the Hercules Cup and Ice Titan are won (no longer Aero's level). The level
+  placeholders are gone. The user: "dont use the archipelago work just make it yourself": every
+  flag found from KH1's own event scripts and save snapshots (`story.rs`; `docs/drive-model.md`
+  "When the forms open"): TT >= 0x2B, journal 0x9F, cup bytes save+0xF37 / +0xF38 >= 1, Neverland
+  >= 0x32, Hollow Bastion >= 0x82, Agrabah >= 0x35, journal 0xA6 and Diamond Dust owned.
+  "New Magic: Reflect" / "Magic Up" boxes when one more is won.
