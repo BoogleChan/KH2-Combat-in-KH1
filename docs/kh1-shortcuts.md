@@ -96,3 +96,27 @@ an uninitialised local, and build a stray command id. `+0x847` is not read or wr
   the menu text lookup). The four name calls answer 7 with Reflect's level name.
 - Not checked in the game: the 9-row list's look (only the rows are pitched; the window has no
   height of its own in its definition).
+
+## Limit Form's shortcuts (Ours, `limits.rs`; KH2's layout read from its executable)
+
+- **KH2 FM** (PC executable, read): in Limit Form KH2's shortcut fill (`0x1403F2780`; the same
+  code is in the command menu build at `0x1403F2210`) reads each of the four saved shortcuts
+  (`0x1409ACA28`, four u16 commands) and, unless the slot holds an item, shows entry k of the
+  table at `0x1405C97E8` in slot k: Sonic Rave, Last Arcanum, Strike Raid, Infinity (`cmd` 0x2BA,
+  0x2BD, 0x2C0, 0x2AB). The saved shortcuts are left as they are; the form only shows these.
+- **Here:** while Sora is in Limit Form (with KH2's Limit menu off), after KH1's fill
+  (`limits::fill_kh1`, from `drive::fill`) slot k of the shortcut menu holds the KH1 limit
+  standing in for KH2's k-th: L1 + Triangle Sonic Blade, L1 + Square Ars Arcanum, L1 + confirm
+  Strike Raid, L1 + cancel (the mod's fourth) Ragnarok. The table is `limits::SHORTCUT_LIMITS`
+  (indices into `limits::KH1_LIMITS`; Trinity Limit is 4). Each entry is the Limit menu's record
+  for that limit (magic-type, its own argument, KH1's word for the limit, so KH1's name is drawn),
+  greyed as that menu's row. The shortcut flag `0x142D5445C` is set, so L1 opens the menu with
+  no spell in a shortcut. `shortcuts::fill` leaves the menu alone that frame (no Reflect slot, no
+  fourth spell over it). KH1's three slots never hold items, so every slot is a limit.
+- L1 + a button runs the entry through `0x1402912F0` as any shortcut; `combat::command` turns it
+  into KH1's own limit command (type the limit's command id), which KH1's command step runs.
+- The save's shortcuts are not touched. KH1's fill rebuilds the menu every frame from them, so
+  Sora's own shortcuts come back the frame the form ends.
+- With `shortcuts = 3` the menu has three slots and Ragnarok none.
+- Not checked: which face button KH2 shows for its slots 2 and 3, against ours (confirm,
+  cancel).

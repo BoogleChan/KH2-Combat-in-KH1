@@ -1158,8 +1158,8 @@ unsafe fn takeover(actor: usize) -> bool {
             }
         }
     }
-    // Limit Form: one of KH1's own limits runs (`limits::kh1_limit_holds`; Sonic Blade, Ars
-    // Arcanum, Strike Raid, Ragnarok, started as a KH1 command's hand-off, `combat::command`). KH1
+    // Limit Form: one of KH1's own limits runs (`limits::kh1_limit_holds`; any of the five from its
+    // Limit menu or shortcuts, started as a KH1 command's hand-off, `combat::command`). KH1
     // has him all through it whatever is pressed: its limit module moves and animates him, and its
     // Keyblade, effects and hits are KH1's (none of the hand-off's cuts below, which would take him
     // mid-limit). The form stays on and its MP drain goes on (`form::drain`; out of MP, the revert

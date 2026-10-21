@@ -160,8 +160,8 @@ unsafe extern "system" fn exec(actor: usize, row: i32, dir: usize) {
     // (Anti Form too: none of KH1's specials.)
     // (Every Drive Form: no KH1 limits in any, the user: "sora should not be able to use limits in
     // ANY drive form including anti form"; Wisdom's spells and items still run, as before. KH1's
-    // limits don't come through here, their module moves him: `command` refuses them, Limit
-    // Form's four stand-ins excepted.)
+    // limits don't come through here, their module moves him: `command` refuses them, but in
+    // Limit Form, from its Limit menu.)
     let limit = super::form::in_form() && !matches!(command, 1 | 2 | ITEM_COMMAND_TYPE);
     if actor == sora && command != 1 && (super::form::two_blades() || super::form::in_anti() || limit) {
         static N: AtomicU32 = AtomicU32::new(0);
@@ -300,16 +300,38 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     let base = BASE.load(Ordering::Relaxed);
     let f: unsafe extern "system" fn(usize, usize) = std::mem::transmute(ORIG_COMMAND.load(Ordering::Acquire));
     let sora = rd::<u64>(base + PARTY_RVA) as usize;
-    let kind = rd::<u8>(base + COMMAND_RVA);
+    let mut kind = rd::<u8>(base + COMMAND_RVA);
     // In the air KH1 allows only magic, kind 99 and kind 0x47 (`0x1402912F0`); KH1 judges the
     // air by his flags (`0x1402A0D30`), which stay the ground's while KH2 has him, and also
     // while KH1 has him falling from one of our air casts (its fall state 2, which we set), so
     // Sonic Blade and the like came out mid-jump (the user). Refused as KH1 refuses (magic of
     // every kind stays: jump casts are wanted).
-    let full = rd::<u32>(base + COMMAND_RVA);
+    let mut full = rd::<u32>(base + COMMAND_RVA);
     // Our Reflect (magic, spell byte 7, which KH1 has no spell for): KH2's, never KH1's.
     // A Drive form (page 2's Drive list, `drive`).
-    let arg = ((full >> 8) & 0xFF) as u8;
+    let mut arg = ((full >> 8) & 0xFF) as u8;
+    // Limit Form's Limit menu (or a shortcut) chose one of KH1's limits (`limits::fill_kh1`: our
+    // record, magic with the limit's argument): the command becomes KH1's own limit command (its
+    // type, argument 0, the step's flags kept), which KH1's command step sends to its limit start
+    // as from its Triangle box (`0x1402A1470` → `0x14028B240`; that start checks no ability, the
+    // equipped test is only in the offer). It goes on below as KH1's limit does in Limit Form.
+    if actor == sora && kind == 2 {
+        if let Some(k) = super::limits::kh1_menu_arg(arg) {
+            let l = &super::limits::KH1_LIMITS[k];
+            if !super::form::in_limit() {
+                cmd_log(format!("command {kind:#x} ({full:08x}, KH1's {} from the Limit menu) refused: not in Limit Form", l.name));
+                let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
+                sound(4);
+                return;
+            }
+            wr(base + COMMAND_RVA, l.command);
+            wr(base + COMMAND_RVA + 1, 0u8);
+            cmd_log(format!("command {kind:#x} ({full:08x}): KH1's {} from Limit Form's Limit menu, as KH1's command {:#x}", l.name, l.command));
+            kind = l.command;
+            full = rd::<u32>(base + COMMAND_RVA);
+            arg = 0;
+        }
+    }
     // Anti Form: only Attack (the user: "I want 1:1 combat parity"; KH2's Anti can't use magic,
     // items, summons, Limits or Revert): magic (Reflect and L1's shortcuts too), items, KH1's
     // specials, summons and the Drive list (its Revert: "I dont want sora to be able to revert
@@ -353,11 +375,11 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     // follow-ups in a Drive Form (`limits::kh1_limit`). They move Sora through KH1's limit module,
     // not through this step (`NOT_SORAS` has them, so the form refusal below never caught them:
     // the offer's skip, `limits::specials_prompt`, kept them out). None in any form (the user:
-    // "No drive form should be able to use KH1 Limits"), but in Limit Form the four that stand in
-    // for its KH2 limits for now (the user: "for the moment put in the equivalent KH1 limits"):
-    // Sonic Blade, Ars Arcanum, Strike Raid, Ragnarok. KH1 runs them as its own (its limit, its
-    // MP cost) and has Sora for them: a KH1 command's hand-off (`takeover`), kept all through the
-    // limit, the form staying on.
+    // "No drive form should be able to use KH1 Limits"), but in Limit Form all five, from its
+    // Limit menu and shortcuts (the user: "Limit form should have all the KH1 limits without
+    // having to have the abilities equipped"): Sonic Blade, Ars Arcanum, Strike Raid, Ragnarok,
+    // Trinity Limit. KH1 runs them as its own (its limit, its MP cost) and has Sora for them: a
+    // KH1 command's hand-off (`takeover`), kept all through the limit, the form staying on.
     if actor == sora && super::form::in_form() {
         if let Some((k, follow_up)) = super::limits::kh1_limit(kind) {
             let name = super::limits::KH1_LIMITS[k].name;
@@ -367,7 +389,7 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
                 sound(4);
             };
             if !super::limits::kh1_limit_allowed(k) {
-                refuse(if super::form::in_limit() && !super::limits::KH2_LIMITS { "not one of Limit Form's (only Sonic Blade, Ars Arcanum, Strike Raid, Ragnarok)" } else { "no KH1 limits in a Drive Form" });
+                refuse("no KH1 limits in a Drive Form but Limit Form");
                 return;
             }
             // A follow-up: KH1's limit has him, its own (nothing of ours in between).
@@ -375,10 +397,11 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
                 cmd_log(format!("command {kind:#x} ({full:08x}): KH1's {name} follow-up, KH1's own (limit running {})", super::limits::kh1_limit_running()));
                 return f(actor, dir);
             }
-            // The start: on the ground, as KH1 offers it (its ground state, which KH2's air reads
-            // as), and when KH2's move can take a command (no queue, as every command here).
-            if takeover::kh2_airborne() || rd::<i32>(actor + 0x70) == 2 {
-                refuse("in the air, as KH1 would");
+            // The start: only as KH1 could start it (on the ground, which KH2's air reads as for
+            // KH1, a target, Trinity's party, the MP: `limits::kh1_usable`, what greys its menu
+            // row), and when KH2's move can take a command (no queue, as every command here).
+            if let Err(why) = super::limits::kh1_usable(actor, k) {
+                refuse(why);
                 return;
             }
             if takeover::with_kh2(|c, _| c.can_take_command()) == Some(false) {
@@ -447,8 +470,8 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     // allowed to talk to people and interact with objects in drive forms"; the log: Talk, command
     // 0x4, refused in Final Form.)
     // (In every Drive Form now, the user: "sora should not be able to use limits in ANY drive form
-    // including anti form". KH1's limits themselves are refused above, `limits::kh1_limit`, all
-    // but Limit Form's four stand-ins; this is every other command of Sora's that moves him.)
+    // including anti form". KH1's limits themselves are refused above, `limits::kh1_limit`, but
+    // in Limit Form (its Limit menu); this is every other command of Sora's that moves him.)
     if actor == sora && super::form::in_form() && !matches!(kind, 0 | 1 | 2 | ITEM_COMMAND_TYPE) && !NOT_SORAS.contains(&kind) && !context_command(base, kind) {
         static N: AtomicU32 = AtomicU32::new(0);
         if N.fetch_add(1, Ordering::Relaxed) < 30 {
@@ -2398,8 +2421,8 @@ unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
     }
     // No magic in Valor Form (KH2's Valor can't cast): the "can't" sound, the menu stays.
     // (Nor in Limit Form: KH2's has its Limit commands there instead, `limits`; a KH1 spell from
-    // a shortcut is refused here. With KH2's Limit menu off, `limits::KH2_LIMITS`, Magic itself
-    // is greyed there again, `drive::fill`, and KH1's limits stand in, `command`.)
+    // a shortcut is refused here. With KH2's Limit menu off, `limits::KH2_LIMITS`, Magic's list
+    // and the shortcuts there are KH1's limits instead, `limits::fill_kh1`, taken above.)
     if kind == 2 && arg < super::drive::FORM_ARG && (super::form::in_valor() || super::form::in_limit()) {
         let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
         sound(4);

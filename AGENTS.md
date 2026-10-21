@@ -3454,3 +3454,16 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   on (`form::drain`), a revert at 0 MP waits for the limit's end; KH2 takes him back after.
 - Found: s278's refusal never caught KH1's limits (they skip that check list); the command step
   now refuses them and their follow-ups in every form but Limit Form's four.
+
+### 2026-10-21: Stage 299 (Limit Form's Limit menu of KH1's limits; its shortcuts)
+- The user: "Limit form should have all the KH1 limits without having to have the abilities
+  equipped", "access via the limit menu ... NOT ... prompted via the triangle prompts", and "the
+  shortcuts ... a different limit for each button ... what they are by default in KH2's limit
+  form". Magic reads "Limit" in Limit Form: Sonic Blade, Ars Arcanum, Strike Raid, Ragnarok,
+  Trinity Limit (KH1's own rules for it), whatever is equipped (KH1 checks abilities only in its
+  Triangle offer); greyed as KH1 would not offer one (running, in the air, no target, MP short;
+  its Sonic Blade / Ragnarok height split dropped). Zantetsuken is a combo-finisher flag, not a
+  limit: left out. KH1's limit offer skipped in Limit Form too; the follow-ups stay.
+- Shortcuts in Limit Form: KH2 FM's fixed table (slot k: Sonic Rave, Last Arcanum, Strike Raid,
+  Infinity, read from KH2's exe) as KH1's (`limits::SHORTCUT_LIMITS`).
+  (Version s298 is the testing branch's.)

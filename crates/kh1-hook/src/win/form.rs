@@ -59,8 +59,8 @@
 //! already). No magic: KH2's Limit Form has its Limit commands in place of Magic (Sonic Rave, Last
 //! Arcanum, Strike Raid, Infinity), run by its model's own script (`limi`): `limits`, the Limit
 //! menu in Magic's place. That menu is off for now (`limits::KH2_LIMITS`; the user: "lets comment
-//! the KH2 limits, and for the moment put in the equivalent KH1 limits"): Magic is greyed, and
-//! KH1's own Sonic Blade, Ars Arcanum, Strike Raid and Ragnarok (those equipped) are offered and
+//! the KH2 limits, and for the moment put in the equivalent KH1 limits"): Magic is the Limit menu
+//! of KH1's own five limits instead (equipped or not; its shortcuts KH2 FM's Limit Form layout),
 //! run as KH1 does them, KH1 having him for each, the form on and draining (`drain`) all through.
 //! It costs `LIMIT_COST_MP` and opens at level `LIMIT_LEVEL` (the user).
 

@@ -540,15 +540,19 @@ lists (`.hed` names). Nothing of it is in the repository.
   modelled on. With KH2's player model (off since s259) its own body `P_EX100_KH1F.mdlx` is
   drawn (`model.rs`).
 - **No magic.** KH1's spells (a shortcut's too) are refused in the form (`combat::run_entry`):
-  KH2's Limit Form can't cast. With the Limit menu off (below), Magic is greyed in the form as
-  in Valor (`drive::fill`), as it was before s291.
+  KH2's Limit Form can't cast. With KH2's Limit menu off (below), Magic's row is the Limit menu
+  of KH1's limits instead ("KH1's Limit menu in Limit Form" below).
 - **For now KH1's limits, not KH2's** (the user: "lets comment the KH2 limits, and for the
-  moment put in the equivalent KH1 limits"). The Limit menu below is switched off by
+  moment put in the equivalent KH1 limits"). KH2's Limit menu below is switched off by
   `limits::KH2_LIMITS` (false). Its code is kept and still compiled, only never installed, so
   `true` brings it back as it was (and takes KH1's limits out of Limit Form again). In its place,
-  KH1's own limits that stand in for KH2's four (the user's pairs): Sonic Blade for Sonic Rave,
-  Ars Arcanum for Last Arcanum, Strike Raid for Strike Raid, Ragnarok for Infinity. See "KH1's
-  limits in Limit Form" below.
+  KH1's own limits, in a Limit menu of the same kind (the user: "Limit form should have all the
+  KH1 limits without having to have the abilities equipped on base sora ... in this form, the
+  limits should be access via the limit menu (similar to KH2's limit menu) and they should NOT
+  be activated, or even prompted via the triangle prompts"). Four stand in for KH2's (the
+  user's pairs): Sonic Blade for Sonic Rave, Ars Arcanum for Last Arcanum, Strike Raid for Strike
+  Raid, Ragnarok for Infinity; Trinity Limit is there too. See "KH1's limits in Limit Form"
+  below.
 - **The Limit menu (the user's pick: "KH2's own limits"; off for now, above).** `limits.rs`:
   - The top's Magic row reads "Limit" (record 2's word answered by `limits::word`) and opens our
     list in the magic list's place: records 0x82..0x85 (words 0x1FA..0x1F7, spell-type records
@@ -612,10 +616,10 @@ lists (`.hed` names). Nothing of it is in the repository.
     Keyblade (elements 35 / 36, 6 and 28 along the blade) pointed along his facing, off the
     Keyblade (the user, s291: "the last arcanum vfx being desyncd from the keyblade"). An element
     a spell script starts now starts on its package's anchors (`kh2fx::spell_start`).
-- **No KH1 limits in any form but Limit Form's four** (the user: "KH1 limits that are equipped
-  shouldn't even prompt in any drive form. No drive form should be able to use KH1 Limits"; then,
-  for Limit Form only, "for the moment put in the equivalent KH1 limits"). Read from the
-  executable:
+- **No KH1 limits in any form but Limit Form, and none on Triangle** (the user: "KH1 limits that
+  are equipped shouldn't even prompt in any drive form. No drive form should be able to use KH1
+  Limits"; then, for Limit Form only, "for the moment put in the equivalent KH1 limits", and "all
+  the KH1 limits ... via the limit menu"). Read from the executable:
   - **The offer.** KH1 offers its limits in its Triangle box: `0x14028AF60`, called once, from
     the end of the context fill (`0x140292B12`). It does nothing while a limit runs (battle flags
     `0x142867CD8` bit 16), with Sora not in KH1's ground state, with the limit data not loaded
@@ -644,18 +648,69 @@ lists (`.hed` names). Nothing of it is in the repository.
     (`combat::command`, `limits::kh1_limit`). They don't move Sora through the command step, so
     `NOT_SORAS` lists them, and the s278 refusal of every KH1 move but Attack, magic and items
     never caught them: before this, the offer's skip was the only thing keeping them out.
-  - **Ours, Limit Form** (with `KH2_LIMITS` off): KH1's offer runs as KH1's own, with the
-    equipped bits of all but Sonic Blade, Ars Arcanum, Strike Raid and Ragnarok masked out for the
-    call. So only those four show, only the equipped ones, by KH1's own distance, height and MP
-    rules, and in KH1's own box. Not in KH2's air: KH1's ground-state check reads the ground all
-    through KH2's jumps. The command step refuses Trinity Limit, so only the four and their
-    follow-ups run.
+  - **Ours, Limit Form** (with `KH2_LIMITS` off): the offer call is skipped there too (s297 ran
+    it with the four stand-ins left in; the user, s298: "they should NOT be activated, or even
+    prompted via the triangle prompts"). The limits come from the form's Limit menu and
+    shortcuts instead (below). The follow-ups still come on Triangle: the running limit's own code
+    puts them in the Triangle box (its calls of `0x140290E70 (3, command)` in KH1's limit modules,
+    `0x140396264` and the like), not the offer, which does nothing while a limit runs.
+- **KH1's Limit menu in Limit Form (ours, on KH1's rules; `limits::fill_kh1`).**
+  - **How a limit starts without its ability (read from the executable).** The equipped test is
+    only in the Triangle offer: `0x14028B310` sets the offer's bits at `0x14299CC40` from KH1's
+    has-ability test `0x140282A70 (ability 11..15)`, and the offer looks at nothing else of the
+    abilities. The command step's dispatch (`0x1402A1470`, command type 0x4B..0x60 to
+    `0x14028B240`) and the limit start `0x14028B670 (sora, k)` (bit 16, the limit started through
+    `0x140397C00 (k, its data)`, MP paid) check no ability, and the limits' data is one file for
+    all five (`xl_limit.dat`, loaded by the frame task `0x14028B490` whatever is equipped; its
+    state `0x14299CC20` is 5 once loaded). So nothing needs to pass a check: a command of the
+    limit's type reaching the command step runs it.
+  - **The list.** In Limit Form the top's Magic row reads "Limit" (record 2's word, answered by
+    `limits::word`) and opens KH1's five limits in the magic list's place, in KH1's order: Sonic
+    Blade, Ars Arcanum, Strike Raid, Ragnarok, Trinity Limit (KH1's Summon row, page 2's Drive,
+    stays last). Equipped, learned or not. Their records are ours (0x82..0x86, spell-type records
+    with arguments 0x20..0x24, written over empty ones as the Drive forms are), each with the word
+    of KH1's own record for its limit (`record (command) + 4`), so the names are KH1's, in KH1's
+    text. KH1's magic list shows no cost.
+  - **Greyed** while KH1 couldn't start it there (`limits::kh1_usable`), its own conditions for
+    offering one (`0x14028AF60`): no limit running (bit 16), limits allowed (`0x142D54438` bit 1
+    clear), the limit data loaded, Sora in KH1's ground state (`+0x70` 0) and not in KH2's air, a
+    target (`0x142DB3F18` hittable, `+0x374 & 0x60` = 0x40), for Trinity Limit both others there
+    and able (`+0x88 & 0x30` clear, hittable, not `+0x374 & 0x8000`, not `+0 & 0x200`, within 500
+    of Sora), and its MP (KH1's test `0x1402A2A80` with KH1's cost, `*0x142D23730 + 0xF4 + 2k`).
+    **Ours:** not the offer's distance (the record's `+0xE`) and height rules (Sonic Blade only
+    with the target at most 160 above, Ragnarok only at least 160): they choose the one limit
+    the box shows, and in a menu they would always grey one of those two. Where KH1 greys Magic
+    itself (save `+0x874` bit 0) the Limit row stays greyed.
+  - **Chosen** (or from a shortcut): KH1's menu passes it on once KH2's move can take a command
+    (else the list stays open, as for a spell). `combat::command` turns it into KH1's own limit
+    command (type the limit's command id, argument 0, the step's flags kept) and it goes on as
+    one of KH1's limits in Limit Form does (below), at KH1's MP cost.
+  - **Shortcuts: KH2 FM's Limit Form layout** (read from the KH2 FM PC executable): in Limit
+    Form KH2's shortcut fill (`0x1403F2780`, the same code in the command menu build at
+    `0x1403F2210`) puts entry k of its table `0x1405C97E8` (Sonic Rave, Last Arcanum, Strike Raid,
+    Infinity: `cmd` 0x2BA, 0x2BD, 0x2C0, 0x2AB) in shortcut slot k (k = 0..3), unless the slot
+    holds an item; its Limit submenu lists the same four in the same order (`0x14074E978`, from
+    the menu build at `0x1403F20FA`). **Ours:** slot k is the mod's shortcut k (L1 + Triangle,
+    Square, confirm, cancel: KH1's three and the mod's fourth), given the KH1 limit standing in
+    for KH2's k-th: Sonic Blade, Ars Arcanum, Strike Raid, Ragnarok (`limits::SHORTCUT_LIMITS`, a
+    four-entry table). KH1's shortcuts never hold items, so every slot is a limit. With three
+    shortcuts (`shortcuts = 3`), Ragnarok has none. Each is greyed as its menu row, drawn with
+    KH1's name in KH1's shortcut menu, and the shortcut flag (`0x142D5445C`) is set so L1 opens
+    it. KH1 fills both menus again every frame, so Sora's own spells and shortcuts (Reflect, the
+    fourth) are back the frame the form ends.
+  - **Not in it: Zantetsuken.** KH1's Zantetsuken (ability 59) is a combo finisher, not a limit:
+    its ability sets bit 29 of KH1's combo-ability flags `0x142D5F610` (`0x1402A4707`, with Stun
+    Impact's bit 27 and Gravity Break's 28), which KH1's attack-row pick reads (`0x1402A4E3E`).
+    It has no command, no place in the limit table or file, so there is nothing to start; in the
+    form Attack is KH2's anyway, whose own Zantetsuken is the default ground finisher. The mod
+    still takes KH1's out of Sora's ability list (`menu.rs`, s153).
 - **KH1's limits in Limit Form: how they run (ours).**
-  - **The start** (`combat::command`) is taken on the ground, and only when KH2's move can take a
-    command (`can_take_command`, no queue, as every command here). Otherwise it is refused with
-    KH1's "can't". KH1's command step then runs it as KH1 does: its limit, its MP cost. If its
-    limit flag (bit 16) is set after that, KH1 takes Sora as for a KH1 command (`hand_to_kh1`,
-    `FROM_COMMAND`, no spell, no combo slot).
+  - **The start** (`combat::command`) is taken only as KH1 could start it (`limits::kh1_usable`,
+    what greys its menu row: on the ground, a target, Trinity's party, the MP), and only when
+    KH2's move can take a command (`can_take_command`, no queue, as every command here).
+    Otherwise it is refused with KH1's "can't". KH1's command step then runs it as KH1 does: its
+    limit, its MP cost. If its limit flag (bit 16) is set after that, KH1 takes Sora as for a KH1
+    command (`hand_to_kh1`, `FROM_COMMAND`, no spell, no combo slot).
   - **While it runs** (`takeover`, `limits::kh1_limit_holds`: Limit Form and bit 16 set), KH1 has
     him whatever is pressed. Its limit module moves and animates him, and its Keyblade (Strike
     Raid's throw too), effects, hits and MP are KH1's. None of the hand-off's cuts (Attack, jump,
@@ -681,8 +736,17 @@ lists (`.hed` names). Nothing of it is in the repository.
     only at the menu's top level);
   - the follow-ups' timing against KH2's (the press reaches the script one or two frames later);
   - the limits' hits (KH2's ATKP powers on KH1's enemies) and their invulnerability;
-  - KH1's limits gone from the Triangle box in every form but Limit Form, and in Limit Form only
-    the four, only those equipped;
+  - KH1's limits gone from the Triangle box in every form, Limit Form too, and their follow-ups
+    still there in Limit Form;
+  - KH1's Limit menu: the "Limit" row, KH1's five names, the greying (in particular that KH1's
+    ground state `+0x70` reads 0 while KH2 has him, else every row stays greyed), a limit started
+    without its ability equipped or learned, at KH1's cost; Trinity Limit with the party; that a
+    limit chosen from our magic-type record behaves as from the Triangle box (that box's command
+    may carry KH1's turn toward the target, flag `0x2000000` read at `0x1402A149A`, which ours
+    lacks);
+  - the shortcut layout's buttons against KH2's own (which face button KH2 draws for its slots 2
+    and 3 isn't traced), the names in KH1's shortcut menu, and Sora's shortcuts back after the
+    form;
   - KH1's limits in Limit Form: that KH1 has him all through each (Sonic Blade's dashes, Ars
     Arcanum's flurry, Strike Raid's throws, Ragnarok's rise and shots) and draws its own
     animation, Keyblade and effects there, its hits land, its follow-ups come on Triangle, and KH2
