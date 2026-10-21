@@ -15,6 +15,7 @@ mod formmagic;
 mod gates;
 mod fx12;
 mod hook;
+mod hud;
 mod hurt;
 mod kh2fx;
 mod kh1voice;
@@ -41,6 +42,7 @@ mod takeover;
 mod tint;
 mod valor;
 mod valorstats;
+mod vanish;
 mod equip;
 mod sys;
 
@@ -153,8 +155,8 @@ pub unsafe extern "C" fn OnInit(mod_path: *const u16) {
     log(&format!("loaded by Panacea (mod folder {s})"));
 }
 
-/// A heartbeat (which other mods are loaded), and the test key: Insert cycles what Sora is
-/// drawn with (`pose::MODES`).
+/// A heartbeat (which other mods are loaded), and the keys: Insert (the test key) cycles what
+/// Sora is drawn with (`pose::MODES`); the HUD toggle (`hud_toggle_key`, Page Down) hides the HUD.
 unsafe extern "system" fn monitor(_: *mut c_void) -> u32 {
     let base = GetModuleHandleA(std::ptr::null()) as usize;
     let mut n = 0u32;
@@ -170,6 +172,7 @@ unsafe extern "system" fn monitor(_: *mut c_void) -> u32 {
             log(&format!("Insert: {}", pose::MODES[m as usize]));
         }
         was = down;
+        hud::poll();
         probe::tick(n as f32 / 20.0);
         if n == 100 || n % 2400 == 0 {
             let others: Vec<&str> = ["DBGHELP.dll", "LuaBackend.dll"].into_iter().filter(|m| !GetModuleHandleA(format!("{m}\0").as_ptr()).is_null()).collect();
@@ -238,6 +241,7 @@ pub unsafe extern "system" fn DllMain(_inst: *mut c_void, reason: u32, _reserved
         model::install();
         gates::install();
         music::install();
+        hud::install();
         kh2sound::start();
         kh2fx::start();
         pose::load_kh2();

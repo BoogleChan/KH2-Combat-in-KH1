@@ -81,6 +81,8 @@
 //! and not knocked out (`crate::partners`, `field_party`); a guest in his place doesn't count.
 //! Without them the Drive row is greyed (`usable`) and the choice refused with the reason
 //! (`choose`). Only the start asks: a partner going down in the form doesn't end it.
+//! While the form lasts (from the change's start) the partners it takes vanish, their HUD entries
+//! too, and come back beside Sora when it ends (`vanish`; Anti Form takes both, if there).
 
 use super::{log, pose};
 use character_core::{Abilities, Character, EventKind};
@@ -285,6 +287,22 @@ pub fn floating_blade() -> bool {
 /// In Anti Form (no magic, items, summons or specials, no Revert; 1.5 times the damage).
 pub fn in_anti() -> bool {
     current() == Some(Kind::Anti)
+}
+
+/// The form under way for its partners (`vanish`): the one he is in, or changing into.
+pub fn vanishing() -> Option<Kind> {
+    if in_form() {
+        return current();
+    }
+    if CHANGING.load(Ordering::Relaxed) {
+        return Kind::from_code(WANT.load(Ordering::Relaxed));
+    }
+    None
+}
+
+/// The partners form `kind` takes while it lasts (`vanish`; `crate::partners::taken`).
+pub fn takes_partners(kind: Kind) -> &'static [crate::partners::Partner] {
+    crate::partners::taken(story_form(kind))
 }
 
 /// The form he is in, if it casts as Wisdom does (Wisdom, Final: `Kind::magic_sub`): its Fire,
@@ -837,7 +855,11 @@ unsafe fn revert(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     d.change = None;
     d.revert = false;
     d.changing_to = None;
-    let Some(f) = d.form.take() else { return };
+    let Some(f) = d.form.take() else {
+        // (Out of the change: its partners back.)
+        super::vanish::frame();
+        return;
+    };
     IN_FORM.store(false, Ordering::Relaxed);
     CURRENT.store(0, Ordering::Relaxed);
     if f.kind.two_blades() {
@@ -852,6 +874,8 @@ unsafe fn revert(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
         super::kh2sound::event(REVERT_FX, EventKind::Effect(el));
     }
     log(&format!("Revert ({why}){}", if ch.airborne() { ", falling" } else { "" }));
+    // Its partners back beside him now (`vanish`).
+    super::vanish::frame();
 }
 
 /// KH1 has had Sora for a scene long enough in the form (`takeover::scene_frame`: a cutscene, a

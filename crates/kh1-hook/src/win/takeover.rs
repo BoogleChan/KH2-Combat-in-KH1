@@ -430,6 +430,8 @@ unsafe extern "system" fn physics(actor: usize) {
         GAME_FRAME.fetch_add(1, Ordering::Relaxed);
         FRAME_KIND.store(if took { 1 } else if HANDOFF_FRAME.load(Ordering::Relaxed) { 2 } else { 0 }, Ordering::Relaxed);
         room_watch(actor, took);
+        // The partners a Drive Form takes, away while it lasts (`vanish`).
+        super::vanish::frame();
     }
     if took {
         return;

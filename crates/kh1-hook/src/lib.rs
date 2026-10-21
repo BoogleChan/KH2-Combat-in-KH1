@@ -10,13 +10,14 @@
 #![allow(clippy::missing_safety_doc)]
 
 pub mod growth;
+pub mod keys;
 pub mod mercy;
 pub mod partners;
 pub mod story;
 
 /// The mod's version as the user sees it (the Config menu's Camera Style help line, the log):
 /// the stage of the latest `AGENTS.md` entry, bumped with each build handed out (a test checks).
-pub const VERSION: &str = "s311";
+pub const VERSION: &str = "s312";
 
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod win;

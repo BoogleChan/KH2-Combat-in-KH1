@@ -16,6 +16,7 @@ extern "system" {
     pub fn FlushInstructionCache(process: *mut c_void, addr: *const c_void, size: usize) -> i32;
     pub fn GetCurrentProcess() -> *mut c_void;
     pub fn GetCurrentThreadId() -> u32;
+    pub fn GetCurrentProcessId() -> u32;
     pub fn OpenThread(access: u32, inherit: i32, id: u32) -> *mut c_void;
     pub fn SuspendThread(thread: *mut c_void) -> u32;
     pub fn ResumeThread(thread: *mut c_void) -> u32;
@@ -33,6 +34,21 @@ extern "system" {
 #[link(name = "user32")]
 extern "system" {
     pub fn GetAsyncKeyState(vk: i32) -> i16;
+    pub fn GetForegroundWindow() -> *mut c_void;
+    pub fn GetWindowThreadProcessId(window: *mut c_void, pid: *mut u32) -> u32;
+}
+
+/// Whether the foreground window (the one with the keyboard) is the game's.
+pub fn game_focused() -> bool {
+    unsafe {
+        let w = GetForegroundWindow();
+        if w.is_null() {
+            return false;
+        }
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(w, &mut pid);
+        pid == GetCurrentProcessId()
+    }
 }
 
 /// `WAVEFORMATEX`.

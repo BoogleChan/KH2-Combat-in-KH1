@@ -1153,3 +1153,85 @@ How the actors are read (no new addresses, so nothing new for Steam):
 
 The party is logged whenever it changes: "Drive partners: Donald (member 1), Goofy (member 2);
 save party list [00, 01, 02, ff]; partners there for Valor Form, Wisdom Form, ...".
+
+## Partners vanish in the form (the rule the user's and KH2's; the reads Checked: exe)
+
+The user: "lets make it so that the party member associated with the drive from also disappears
+(along with their hud icon) for the duration of the drive from". As in KH2, the partners a form
+takes leave the field while it lasts: Valor takes Goofy, Wisdom Donald, Master and Final both,
+Limit no one, Anti Form both (KH2's Anti; only those in the field party). A guest in their place
+never vanishes (they are found by member id, 1 Donald, 2 Goofy). They go when the change starts
+(Sora's Drive motion) and come back beside Sora when the form ends, however it ends: the Revert
+command, out of MP, knocked out, a new world, a long KH1 scene (`form::scene_revert`), game over.
+The log: "Drive: Goofy leaves for Valor Form" / "Drive: Goofy is back". The rule table is
+`partners::taken` (unit test there); the code `kh1-hook/src/win/vanish.rs`.
+
+**KH1's actor bits (Checked, exe).** The actor's flags word (`+0`):
+- `0x8000`: the actor acts. KH1's actor step (`0x140295E50`) skips everything for an actor
+  without it (`0x1402960E1` jumps to its end, `0x140296526`): the per-type control and AI
+  callback, the motion, the physics step (`0x140298230`), the stop timer. The hit pass's test
+  (`0x14028FEE0`: flags `& 0x8048 == 0x8000`) and the body push's (`0x14028FF80`: `& 0x8020 ==
+  0x8000`, used by the push loop `0x1402991BC`) leave him out. KH1's game over takes it off every
+  actor but the one going down (`0x140288130`, through its flag stack, below), and its Continue
+  gives it back (`0x1402875D0` for the others, `0x1402874A0` for the party members, which also
+  plays their revive and fades their HUD entry in, `0x140266CC0 (slot, 1)`).
+- `0x1` and `0x2`: his model and his shadow. The party draw (`0x14029F360`) draws the model only
+  with `0x1` (`0x14029F421`) and the shadow (`0x1402BB540`) only with `0x2` (`0x14029F466`). The
+  first-person view hides Sora by clearing `0x1` (`0x1401E0307`, back at `0x1401E04C2`).
+- `0x200`: not a foe. KH1's hostility test (`0x14028FE30 (a, b)`) is false for a `b` with it (and
+  for the same team, `+0x374` bits 5-6); Trinity Limit's check wants it clear.
+- `0x40`: untouchable (`kh1-intangible.md`).
+- KH1's script op `0xCF` (`0x1402B9160`, table `0x140529E80`, 16-byte entries) takes a member out
+  for good: it sets `0x240`, plays a motion and a state, marks `+0x374` bit 28 (nothing clears
+  it) and hides his HUD entry with `0x140266CC0 (slot, 3)`. Its HUD and flag parts are the ones
+  used here; its one-way parts are not.
+- The flag stack: `0x14028FFF0 (actor, flags)` pushes the flags word to `+0x37C + depth × 4` (depth
+  `+0x388`, three places) and sets the new one; `0x14028FFD0` pops. Only the game over pushes.
+- Deleting an actor (`0x140290200`: `+0x374` bit 1, his party slot emptied) can't be undone in the
+  room (a new party actor is made only by a room's load), so it isn't used.
+
+**KH1's HUD gauge slots (Checked, exe).** `0x1428123E0`: a u32 "bound" flag per slot, and slot n's
+record at `+ n × 0xDF0`, its actor `+0x28` (bound by `0x140266960 (actor, slot)` ->
+`0x14026C4C0`), its alpha `+0xABC` and fade speed `+0xAC0`, which every gauge draw reads (`+0xA9C`
+from the record's `+0x20`, `0x14026708C` and on). `0x140266CC0 (slot, mode)`: 0 fade out, 1 fade
+in, 2 shown, 3 hidden (alpha and speed 0). Slot 0 is Sora, 1 and 2 the field party (their place
+in the save's party list, `0x140282EC0`). KH1 sets all three at once at times (`0x1402872BE`,
+`0x140287B3B`).
+
+**What the mod does (Ours).**
+- Away: flags `0x8000 | 0x1 | 0x2` off, `0x200 | 0x40` on, his old bits kept; his HUD slot (the
+  one bound to his actor) to mode 3. Nothing is called on him and nothing in the save is
+  written: the save's party list stays, so a save made in the form has him, and his HP, MP and
+  state wait on his actor (no regen, no item use, no spells: his step doesn't run).
+- Each of Sora's frames (`takeover`'s physics step) and at once on the form's end
+  (`form::revert`, the change's end too) the state is checked:
+  - the form (or the change) takes him and no event runs: he is taken if he isn't yet; while
+    away his model, shadow and HUD entry are kept hidden if KH1 turns them back on (it shows the
+    whole HUD after an event or its game over);
+  - else he is back: his bits as they were, placed 60 units beside Sora (on the side he was on,
+    at Sora's height), his HUD entry faded in as KH1's revive does (or left hidden if Sora's own
+    entry is hidden then);
+  - his actor gone (a new room, the party changed: no member of his id in the field party) or
+    given `0x8000` back by KH1 itself (a new room's actor at the same place, the game over's
+    pop): nothing of ours is left on it; if the form still takes him he is taken again. KH1
+    holding him frozen (no `0x8000`, its game over) is waited out.
+  - KH1's game over pushed his flags while he was away: on his return the pushed copies get his
+    bits back too, and `0x8000` stays as KH1 holds it, so its Continue pops him back whole.
+- In an event they are back (a cutscene has them), and taken again if the form outlasts it (a
+  long one ends the form, `scene_revert`). A room change in the form: the new room's actors come
+  in whole and are taken on Sora's next frame.
+- Trinity Limit and the other party checks see them as gone (KH1's own tests: no `0x8000`, `0x200`
+  set); only Limit Form uses KH1's limits, and it takes no one.
+- HUD hiding (`hud.rs`, Page Down) empties the HUD's draws: a slot hidden here stays hidden under
+  it, and comes back with the HUD.
+
+**Open.** Whether placing him beside Sora can put him behind a wall (KH1's own catch-up warp for
+a partner left far behind wasn't looked for).
+
+To check in game: each form with the full party (who goes, who stays, the HUD entries, the log
+lines); Anti with one partner knocked out or away; Wisdom in Deep Jungle with Tarzan for Goofy
+(Donald goes, Tarzan stays); revert by command, out of MP, knocked out
+(game over and Continue), a room change and a world change in the form, a cutscene in the form,
+a save point (talking to it) in the form, then saving and loading; enemies ignoring where the
+partner stood; Limit Form's Trinity Limit as before (Limit takes no one); Page Down's HUD hiding
+in and out of a form.

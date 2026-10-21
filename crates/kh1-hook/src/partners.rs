@@ -48,6 +48,16 @@ pub fn needs(form: Form) -> &'static [Partner] {
     }
 }
 
+/// The partners a form takes while it lasts (KH2: they vanish in it, back when it ends): those it
+/// needs (`needs`); Anti Form (`None`, not a Drive list form) both, as KH2's Anti. Only who is
+/// there goes (`win::vanish` finds them by member id: a guest never vanishes).
+pub fn taken(form: Option<Form>) -> &'static [Partner] {
+    match form {
+        Some(f) => needs(f),
+        None => &[Partner::Donald, Partner::Goofy],
+    }
+}
+
 /// One of the two actors after Sora in KH1's field party: his member id and whether he is down.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Member {
@@ -124,6 +134,17 @@ mod tests {
         assert_eq!(needs(Form::Limit), &[]);
         assert_eq!(needs(Form::Master), &[Partner::Donald, Partner::Goofy]);
         assert_eq!(needs(Form::Final), &[Partner::Donald, Partner::Goofy]);
+    }
+
+    #[test]
+    fn who_vanishes() {
+        assert_eq!(taken(Some(Form::Valor)), &[Partner::Goofy]);
+        assert_eq!(taken(Some(Form::Wisdom)), &[Partner::Donald]);
+        assert_eq!(taken(Some(Form::Limit)), &[]);
+        assert_eq!(taken(Some(Form::Master)), &[Partner::Donald, Partner::Goofy]);
+        assert_eq!(taken(Some(Form::Final)), &[Partner::Donald, Partner::Goofy]);
+        // Anti Form.
+        assert_eq!(taken(None), &[Partner::Donald, Partner::Goofy]);
     }
 
     #[test]

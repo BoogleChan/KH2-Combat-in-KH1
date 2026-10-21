@@ -251,6 +251,8 @@ Frame-buffer object `fb` (RTV made in `0x1400FCD60`, DSV made in `0x1400FCB00`):
      `0x1400F31E0(count)` returns vertex memory of 0x20-byte vertices (float4 position, uv,
      RGBA8, a u16 "kick"), `0x1400FBB60(count)` flushes state and draws, with shader program 8
      and GS state set from a GIF tag (`0x140383FD0`). That is KH1's own effect path [med].
+     The field HUD is sixteen of these 165001 / 170001 tasks, set up by `0x140264C50`
+     (`docs/kh1-hud-hide.md`) [high].
    - 180000+ (`0x2BF20`, `0x2BF84`, `0x2BFE7`..`0x2BFE9`, ...): menus, HUD and event tasks
      [low: roles inferred only from their order after all 3D tasks].
 2. After the task list: `0x140177100` (screen-space projections for 2D markers), `0x1401790B0`

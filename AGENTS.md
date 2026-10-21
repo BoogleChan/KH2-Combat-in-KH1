@@ -3584,6 +3584,16 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   bounce, the swing goes on. Ini `walls = kh1 | clink | pass` (default kh1; `wall_clink` no longer
   read). Enemies' guards clink as before. `docs/kh1-clash.md`.
 
+### 2026-10-21: Stage 312 (Page Down hides the HUD; partners leave for their form)
+- The user: "can you also make it so that pg dn hides the hud?" New `win/hud.rs` and `keys.rs`: the 16
+  HUD tasks from 0x140264C50 run behind stubs whose draws get 0 vertices while hidden (ini
+  `hud_toggle_key = pagedown|off|<key>`). docs/kh1-hud-hide.md.
+- The user: "lets make it so that the party member associated with the drive from also disappears
+  (along with their hud icon) for the duration of the drive from". New `win/vanish.rs`: Valor Goofy,
+  Wisdom Donald, Master/Final/Anti both, Limit none; actor flags 0x8000/0x1/0x2 off, 0x200|0x40 on,
+  HUD slot faded with 0x140266CC0; restored beside Sora on revert, events, room change, game over.
+  docs/drive-model.md "Partners vanish in the form".
+
 ### 2026-10-21: Stage 311 (forms need partners; water, pits and midair climbs; music mute)
 - The user: "Let's make drive forms require their specific party members to cast". New `partners.rs`
   (Valor Goofy, Wisdom Donald, Master/Final both, Limit none, Anti unchanged); `form::field_party`

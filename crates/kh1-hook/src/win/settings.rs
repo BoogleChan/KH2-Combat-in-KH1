@@ -118,7 +118,10 @@ player_model = kh1\r\n\
 battle_quotes = kh1\r\n\
 ; gummi: vanilla = fly the Gummi Ship between worlds; skip = land in the chosen world at once\r\n\
 ; (the Config menu's Gummi Routes row switches it in game too)\r\n\
-gummi = vanilla\r\n";
+gummi = vanilla\r\n\
+; hud_toggle_key: the key that hides the whole HUD and shows it again (pagedown, pageup, home,\r\n\
+; end, delete, f1..f12, a letter, or a key code such as 0x22); off = no key\r\n\
+hud_toggle_key = pagedown\r\n";
 
 #[derive(Debug)]
 pub struct Settings {
@@ -179,6 +182,8 @@ pub struct Settings {
     /// Skip the Gummi Ship's flights (`gummi = skip`, `gummi.rs`; commented out for now).
     #[allow(dead_code)]
     pub gummi_skip: bool,
+    /// The key that hides and shows the HUD (`hud_toggle_key`, `hud.rs`); `None`: no key.
+    pub hud_toggle_key: Option<u8>,
 }
 
 /// What a swing does when it meets a wall (`walls`).
@@ -272,6 +277,15 @@ pub fn get() -> &'static Settings {
             valor_left_blade: on(&text, "valor_left_blade", "on", true),
             styles: [on(&text, "ground_combo", "kh2", true), on(&text, "air_combo", "kh2", true), on(&text, "magic", "kh2", false), on(&text, "air_magic", "kh2", false), on(&text, "jump_style", "kh2", true), on(&text, "glide_style", "kh2", true), on(&text, "roll_style", "kh2", true), on(&text, "misc_anims", "kh2", true), on(&text, "player_model", "kh2", false), on(&text, "battle_quotes", "kh2", on(&text, "kh2_voice", "on", false))],
             gummi_skip: on(&text, "gummi", "skip", false),
+            hud_toggle_key: match setting(&text, "hud_toggle_key").map(|v| (crate::keys::parse(&v), v)) {
+                None => Some(crate::keys::PAGE_DOWN),
+                Some((Some(crate::keys::KeySetting::Key(k)), _)) => Some(k),
+                Some((Some(crate::keys::KeySetting::Off), _)) => None,
+                Some((None, v)) => {
+                    log(&format!("hud_toggle_key = {v}: not a key this knows; Page Down instead"));
+                    Some(crate::keys::PAGE_DOWN)
+                }
+            },
         };
         log(&format!("settings ({path}): {s:?}"));
         s
