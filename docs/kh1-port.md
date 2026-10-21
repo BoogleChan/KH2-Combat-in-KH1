@@ -126,8 +126,25 @@ Ability" box):
 | Cerberus | Aerial Dive | 2 |
 | Genie Jafar (Agrabah) | Aerial Dodge LV1 (higher levels below) | 3 |
 
-Earlier than KH1's level-ups (Dream Shield: 45 / 39 / 69 / 78 / 60), if Sora doesn't have them yet: Counterguard at 22, Slide Dash at 30, Vicinity Break at 36, Finishing Leap at 48; Flash Step comes for beating Sabor. Aerial Sweep also comes at level 28 if Clayton hasn't given it yet (KH1's Dream Shield gives it
-only at 84). Guard Break stays at KH1's own level 18 (Dream Shield).
+At a level, if Sora doesn't have them yet: Counterguard at 22, Aerial Sweep at 28 (if Clayton
+hasn't given it yet), Slide Dash at 30, Vicinity Break at 36, Finishing Leap at 48. Flash Step
+comes for beating Sabor.
+
+These ten KH1 abilities are KH2 moves here, and the mod's schedule (the two tables above) is
+the only way the nine it schedules come; Slapshot has no mod schedule and keeps KH1's level.
+KH1 gives them too, on its own level-up table (below; the Dive's choice picks it) and, for
+Gravity Break, as an event reward. Before this, KH1's came whenever it gave them: a Rod player
+(Dive choice 2, a plain new game) had Explosion from KH1's level 18 and Vicinity Break from its
+level 12 long before Dragon Maleficent or level 36, and Guard Break from level 6 before Pot
+Centipede. Now, with `abilities = kh1`, KH1's copy is held back while the mod's gift isn't due
+(`Kh1Sora::held_back`): not added, no line in the level-up box or the event's message, and the
+log says so ("KH1's level-up gave Hurricane Blast (Explosion) at level 18: held back until
+Dragon Maleficent"). The mod's gift then gives it, with its "New Ability" box, when its boss
+falls or its level comes. The level-up's table cursor (`+0x38` of the party member) has already
+moved past the held entry, so no other level's reward shifts or is skipped. Event grants are
+held at KH1's two event commands that add an ability (`0x1401AF120`, from a reward record;
+`0x1401AEE50`, from the event stack). Saves that already have one of these early keep it (the
+mod takes nothing Sora has back).
 
 KH2 learns each of its abilities once, so a level-up never gives a second copy of one. KH1's
 level-up (`0x1402B3020`) takes the next reward from Sora's level-up table, which the Dive's
@@ -141,8 +158,9 @@ ability (a combo modifier, Guard, Dodge Roll or Combo Master) that Sora already 
 added. Its line is left out of the box, and the level's stat line still shows. Combo Plus,
 Air Combo Plus and KH1's own abilities (Treasure Magnet, Tech Boost, MP Rage, Critical Plus...)
 still stack, as KH1's table gives them. The table never repeats a modifier itself. Its levels
-for the KH2 moves (high: read from `btltbl.bin`; the level reached is the entry's number,
-counting from 1, plus 1; Dream Shield's match the levels above):
+for the KH2 moves (high: read from the user's unmodded `btltbl.bin`, Epic and Steam alike;
+the level reached is the entry's number, counting from 1, plus 1, as the Rod save's list
+order bears out, Air Combo Plus arriving at 24):
 
 | | Sword (0) | Shield (1) | Rod (2) |
 |---|---|---|---|
@@ -156,9 +174,17 @@ counting from 1, plus 1; Dream Shield's match the levels above):
 | Guard Break (Stun Impact) | 51 | 18 | 6 |
 | Flash Step (Vortex) | 57 | 78 | 84 |
 | Aerial Sweep | 60 | 84 | 36 |
+| Aerial Finish (Gravity Break) | none | none | none |
 
-Where the mod's gift comes first (above), KH1's own entry now gives nothing. Examples: Vicinity
-Break at 39 with the Sword, Aerial Sweep at 36 with the Rod.
+Gravity Break is in none of the three; KH1's only source is an event reward (reward record 100
+in `btltbl.bin`, Sora's; the event that uses it wasn't traced). No other reward record gives
+any of the ten (events that name an ability directly, through `0x1401AEE50`, weren't
+surveyed; both commands hold back alike).
+
+Before the mod's gift is due, KH1's entry is held back (above); after it, the mod's gift has
+come first and KH1's entry is a spare and gives nothing. Examples: Explosion at 18 with the
+Rod (held back until Dragon Maleficent), Vicinity Break at 39 with the Sword and Aerial Sweep at
+36 with the Rod (spares).
 
 Each of these Sora learns raises his max AP by its own AP (`bonus_ap`), so the KH2
 abilities take none of the AP KH1 gives him: +2 at level 4, +32 in all by level 50 (KH1's

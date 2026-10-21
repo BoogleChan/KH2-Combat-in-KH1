@@ -311,6 +311,12 @@ unsafe extern "system" fn reward_line(ev: usize) -> u64 {
                     log(&format!("no \"learned\" line for {}: a spare copy (the mod gave it already)", growth::name(ability)));
                     return 2;
                 }
+                // Held back until the mod's gift is due (`event_reward`): no line either.
+                if kind == 1 && member == 0 && Growth::kh1(base).is_some_and(|s| s.held_back(ability).is_some()) {
+                    std::ptr::write_unaligned((ev + 0x194) as *mut i32, sp - 2);
+                    log(&format!("no \"learned\" line for {}: held back until the mod gives it", growth::name(ability)));
+                    return 2;
+                }
             }
         }
     }
@@ -336,20 +342,92 @@ static LEVEL_SKIPPED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU3
 /// KH2 learns each ability once (the player's report: Vicinity Break and Aerial Sweep "got"
 /// again on level-ups, one of each in the list): a level-up's single KH2 ability Sora has
 /// already (`Kh1Sora::level_up_spare`, the mod's early gift mostly) isn't added at all.
+/// And the mod's schedule is the only one for the KH2 moves it gives (the user's Rod save:
+/// Explosion at level 18, before Dragon Maleficent): KH1's copy before the mod's gift is due
+/// isn't added either (`Kh1Sora::held_back`); the mod's gift gives it, with its box, when due.
+/// KH1 has already moved its table's cursor (`+0x38`) past this reward, so nothing after it
+/// shifts: the next level-up gives the next level's reward as before.
 unsafe extern "system" fn level_reward(member: i32, reward: u32) {
     let f: unsafe extern "system" fn(i32, u32) = std::mem::transmute(ORIG_LEVEL_REWARD.load(std::sync::atomic::Ordering::Acquire));
     if reward <= 7 {
         // (Each level-up's stat comes first: a skip from an earlier one is stale.)
         LEVEL_SKIPPED.store(0, std::sync::atomic::Ordering::Relaxed);
-    } else if member == 0 && super::settings::get().abilities == growth::Mode::Kh1 {
+    } else if member == 0 && super::settings::get().abilities == growth::Mode::Kh1 && reward <= 0xFF {
         let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
-        if let Some(s) = Growth::kh1(base).filter(|s| s.level_up_spare(reward)) {
-            LEVEL_SKIPPED.store(reward, std::sync::atomic::Ordering::Relaxed);
-            log(&format!("level {}: KH1's level-up gives {} again: not added, no line for it (Sora has it; KH2 learns it once)", s.level, growth::name(reward as u8)));
-            return;
+        if let Some(s) = Growth::kh1(base) {
+            let id = reward as u8 & 0x7F;
+            if let Some(until) = s.held_back(id) {
+                LEVEL_SKIPPED.store(reward, std::sync::atomic::Ordering::Relaxed);
+                log(&format!("KH1's level-up gave {} at level {}: held back until {until}", growth::kh1_and_kh2_name(id), s.level));
+                return;
+            }
+            if s.level_up_spare(reward) {
+                LEVEL_SKIPPED.store(reward, std::sync::atomic::Ordering::Relaxed);
+                log(&format!("level {}: KH1's level-up gives {} again: not added, no line for it (Sora has it; KH2 learns it once)", s.level, growth::name(id)));
+                return;
+            }
         }
     }
     f(member, reward)
+}
+
+/// KH1's event commands that add an ability: `0x1401AF120(event)` from a reward record (as
+/// `reward_line` reads it; pops 1) and `0x1401AEE50(event)` from the event stack itself (the
+/// ability id under the party member, pops 2), both through `0x140282CA0(id, member)`. Each
+/// returns 2.
+const EVENT_REWARD_RVA: Rva = Rva(0x1AF120);
+const EVENT_ABILITY_RVA: Rva = Rva(0x1AEE50);
+const EVENT_PROLOGUE: [u8; 6] = [0x40, 0x53, 0x48, 0x83, 0xEC, 0x20];
+static ORIG_EVENT_REWARD: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static ORIG_EVENT_ABILITY: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// An event's ability for Sora (party member 0) that the mod's schedule holds back
+/// (`Kh1Sora::held_back`; KH1's own `btltbl.bin` has a Gravity Break reward, for one); logged.
+unsafe fn event_held_back(base: usize, member: u32, ability: u32) -> bool {
+    if member != 0 || !(1..0x80).contains(&ability) || super::settings::get().abilities != growth::Mode::Kh1 {
+        return false;
+    }
+    let Some(s) = Growth::kh1(base) else { return false };
+    let Some(until) = s.held_back(ability as u8) else { return false };
+    log(&format!("KH1's event gave {} at level {}: held back until {until}", growth::kh1_and_kh2_name(ability as u8), s.level));
+    true
+}
+
+unsafe extern "system" fn event_reward(ev: usize) -> u64 {
+    let f: unsafe extern "system" fn(usize) -> u64 = std::mem::transmute(ORIG_EVENT_REWARD.load(std::sync::atomic::Ordering::Acquire));
+    let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
+    if ev > 0x10000 {
+        let sp = rd::<i32>(ev + 0x194);
+        if (0..64).contains(&sp) {
+            let rec: unsafe extern "system" fn(u32) -> usize = std::mem::transmute(base + REWARD_RECORD_RVA);
+            let r = rec(rd::<u32>(ev + 0x198 + sp as usize * 4));
+            if r > 0x10000 {
+                let v = rd::<u16>(r);
+                if v & 0xF == 1 && event_held_back(base, ((v >> 4) & 0xF) as u32, (v >> 8) as u32) {
+                    std::ptr::write_unaligned((ev + 0x194) as *mut i32, sp - 1);
+                    return 2;
+                }
+            }
+        }
+    }
+    f(ev)
+}
+
+unsafe extern "system" fn event_ability(ev: usize) -> u64 {
+    let f: unsafe extern "system" fn(usize) -> u64 = std::mem::transmute(ORIG_EVENT_ABILITY.load(std::sync::atomic::Ordering::Acquire));
+    let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
+    if ev > 0x10000 {
+        let sp = rd::<i32>(ev + 0x194);
+        if (1..64).contains(&sp) {
+            let ability = rd::<u32>(ev + 0x194 + sp as usize * 4);
+            let member = rd::<u32>(ev + 0x198 + sp as usize * 4);
+            if event_held_back(base, member, ability) {
+                std::ptr::write_unaligned((ev + 0x194) as *mut i32, sp - 2);
+                return 2;
+            }
+        }
+    }
+    f(ev)
 }
 
 /// The box of a level-up whose ability was skipped (`level_reward`): its stat line only (none
@@ -369,6 +447,8 @@ pub unsafe fn install() {
     super::hook::install(base + REWARD_LINE_RVA, &REWARD_LINE_PROLOGUE, reward_line as *const () as usize, &ORIG_REWARD_LINE, "reward message line");
     super::hook::install(base + LEVEL_REWARD_RVA, &LEVEL_REWARD_PROLOGUE, level_reward as *const () as usize, &ORIG_LEVEL_REWARD, "level-up reward");
     super::hook::install(base + LEVEL_BOX_RVA, &LEVEL_BOX_PROLOGUE, level_box as *const () as usize, &ORIG_LEVEL_BOX, "level-up box");
+    super::hook::install(base + EVENT_REWARD_RVA, &EVENT_PROLOGUE, event_reward as *const () as usize, &ORIG_EVENT_REWARD, "event ability reward");
+    super::hook::install(base + EVENT_ABILITY_RVA, &EVENT_PROLOGUE, event_ability as *const () as usize, &ORIG_EVENT_ABILITY, "event ability");
     super::hook::install(base + STATS_RVA, &STATS_PROLOGUE, stats as *const () as usize, &ORIG_STATS, "party stats");
 }
 

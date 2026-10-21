@@ -305,9 +305,10 @@ pub fn one_only(list: &[u8]) -> (Vec<u8>, Vec<u8>) {
     keep_one(list, &ONE_ONLY)
 }
 
-/// KH1 abilities of Sora's that the mod gives before KH1 does (`LEVEL_GIFTS`, the KH1 ones in
-/// `BOSS_GIFTS`): KH1's own copy later is a spare (the user: a second Slide Dash from
-/// Maleficent), and one copy is all a KH2 modifier needs.
+/// KH1 abilities of Sora's that the mod gives on its own schedule (`LEVEL_GIFTS`, the KH1 ones
+/// in `BOSS_GIFTS`): KH1's own copy before then is held back (`Kh1Sora::held_back`), and after
+/// it is a spare (the user: a second Slide Dash from Maleficent); one copy is all a KH2
+/// modifier needs.
 pub fn early_kh1() -> Vec<u8> {
     let mut ids: Vec<u8> = LEVEL_GIFTS.iter().map(|(_, id)| *id).collect();
     ids.extend(BOSS_GIFTS.iter().map(|g| g.ability).filter(|id| *id < FIRST_ID));
@@ -361,6 +362,16 @@ pub const KH1_NAMES: [&str; 65] = [
     "Cure Potion", "Aero Potion", "Slapshot", "Sliding Dash", "Hurricane Blast", "Ripple Drive", "Stun Impact", "Gravity Break", "Zantetsuken", "Tech Boost",
     "Encounter Plus", "Leaf Bracer", "Evolution", "EXP Zero", "Combo Master",
 ];
+
+/// KH1's name, and the KH2 one it is here when that differs ("Hurricane Blast (Explosion)").
+pub fn kh1_and_kh2_name(id: u8) -> String {
+    let id = id & 0x7F;
+    let shown = name(id);
+    match KH1_NAMES.get((id as usize).wrapping_sub(1)) {
+        Some(kh1) if *kh1 != shown => format!("{kh1} ({shown})"),
+        _ => shown,
+    }
+}
 
 /// An ability's name (KH1's or ours).
 pub fn name(id: u8) -> String {
@@ -501,11 +512,32 @@ pub fn all() -> Abilities {
 }
 
 impl Kh1Sora {
+    /// The mod's gift of `id` is due: its level reached or its boss beaten (`LEVEL_GIFTS`,
+    /// `BOSS_GIFTS`).
+    pub fn gift_due(&self, id: u8) -> bool {
+        LEVEL_GIFTS.iter().any(|(l, i)| *i == id && self.level >= *l) || BOSS_GIFTS.iter().any(|g| g.ability == id && beaten(&self.progress, g))
+    }
+
     /// KH1's own copy of `id` would be a spare: the mod gives it before KH1 does (its level
     /// reached or its boss beaten) and Sora has it (the user: no "learned" box for those).
     pub fn spare_gift(&self, id: u8) -> bool {
-        let early = LEVEL_GIFTS.iter().any(|(l, i)| *i == id && self.level >= *l) || BOSS_GIFTS.iter().any(|g| g.ability == id && beaten(&self.progress, g));
-        early && has(&self.abilities, id)
+        self.gift_due(id) && has(&self.abilities, id)
+    }
+
+    /// KH1 giving `id` itself (its level-up table, an event's reward) is held back: the mod
+    /// gives it on its own schedule (`early_kh1`) and that gift isn't due yet. The user's Rod
+    /// save had Explosion (Hurricane Blast) from KH1's level 18 long before Dragon Maleficent.
+    /// Returns what it waits for ("Dragon Maleficent", "level 36", "Clayton or level 28").
+    /// Abilities the mod has no schedule for (Slapshot, Guard) keep KH1's.
+    pub fn held_back(&self, id: u8) -> Option<String> {
+        let id = id & 0x7F;
+        if !early_kh1().contains(&id) || self.gift_due(id) {
+            return None;
+        }
+        let mut until: Vec<String> = BOSS_GIFTS.iter().filter(|g| g.ability == id).map(|g| g.boss.to_string()).collect();
+        until.extend(LEVEL_GIFTS.iter().filter(|(_, i)| *i == id).map(|(l, _)| format!("level {l}")));
+        until.dedup();
+        Some(until.join(" or "))
     }
 
     /// KH2's abilities as if every ability Sora has learned were equipped: his growth levels
@@ -612,10 +644,13 @@ impl Kh1Sora {
     }
 }
 
-/// KH1 abilities (shown by their KH2 names) also learned at a level, earlier than KH1's own
-/// level-up gives them (the user: Aerial Sweep at about 28; KH1's Dream Shield gives it at 84).
-/// (The user: Slide Dash at 30, Vicinity Break at 69 was absurd; the rest set to match. KH1's
-/// Dream Shield gives them at 45 / 39 / 69 / 78 / 60.)
+/// KH1 abilities (shown by their KH2 names) learned at a level (the user: Aerial Sweep at about
+/// 28; Slide Dash at 30, Vicinity Break at 69 was absurd; the rest set to match).
+/// KH1's own level-up table gives them at a level that depends on the Dive's choice (Sword /
+/// Shield / Rod, from `btltbl.bin`): Counterattack 15 / 45 / 57, Aerial Sweep 60 / 84 / 36,
+/// Sliding Dash 6 / 39 / 51, Ripple Drive 39 / 69 / 12, Blitz 33 / 60 / 78 (the Rod gives
+/// Ripple Drive at 12 and Hurricane Blast at 18). The mod's schedule is the only one: KH1's
+/// copy before the mod's gift is due is held back (`Kh1Sora::held_back`, `win/menu.rs`).
 pub const LEVEL_GIFTS: [(u8, u8); 5] = [
     (22, kh1::COUNTERATTACK),
     (28, kh1::AERIAL_SWEEP),
@@ -810,6 +845,37 @@ mod tests {
         assert!(early_kh1().iter().all(|id| single(*id)));
         // Ours aren't KH1's level-up's (it never gives ids past 65).
         assert!(MENU.iter().all(|a| !single(a.id)));
+    }
+
+    #[test]
+    fn kh1_grants_wait_for_the_mods_schedule() {
+        // The user's Rod save: KH1's level 18 gave Hurricane Blast before Dragon Maleficent.
+        let rod = sora(18, &[kh1::GUARD], &[]);
+        assert_eq!(rod.held_back(kh1::HURRICANE_BLAST).as_deref(), Some("Dragon Maleficent"));
+        assert_eq!(rod.held_back(kh1::HURRICANE_BLAST | 0x80).as_deref(), Some("Dragon Maleficent"));
+        assert_eq!(sora(12, &[], &[]).held_back(kh1::RIPPLE_DRIVE).as_deref(), Some("level 36"));
+        assert_eq!(sora(6, &[], &[]).held_back(kh1::STUN_IMPACT).as_deref(), Some("Pot Centipede"));
+        assert_eq!(sora(6, &[], &[]).held_back(kh1::SLIDING_DASH).as_deref(), Some("level 30"));
+        assert_eq!(sora(20, &[], &[]).held_back(kh1::AERIAL_SWEEP).as_deref(), Some("Clayton or level 28"));
+        assert_eq!(sora(57, &[], &[]).held_back(kh1::VORTEX).as_deref(), Some("Sabor"));
+        assert_eq!(sora(20, &[], &[]).held_back(kh1::GRAVITY_BREAK).as_deref(), Some("Jafar"));
+        // Due: not held back (the mod gives it, or KH1's copy is a spare once he has it).
+        assert!(sora(36, &[], &[]).held_back(kh1::RIPPLE_DRIVE).is_none());
+        assert!(sora(28, &[], &[]).held_back(kh1::AERIAL_SWEEP).is_none());
+        let mut clayton = sora(20, &[], &[]);
+        clayton.progress[1] = 0x56;
+        assert!(clayton.held_back(kh1::AERIAL_SWEEP).is_none());
+        let mut dm = sora(18, &[], &[]);
+        dm.progress[10] = 0x6E;
+        assert!(dm.held_back(kh1::HURRICANE_BLAST).is_none());
+        // No mod schedule: KH1's stays (Slapshot, Guard, Combo Plus, KH1's own abilities).
+        for id in [kh1::SLAPSHOT, kh1::GUARD, kh1::COMBO_PLUS, 5, 60] {
+            assert!(sora(6, &[], &[]).held_back(id).is_none(), "{id}");
+        }
+        // Every KH1 ability the mod schedules is a KH2 move here.
+        assert!(early_kh1().iter().all(|id| MODIFIERS.iter().any(|m| m.0 == *id)));
+        assert_eq!(kh1_and_kh2_name(kh1::HURRICANE_BLAST), "Hurricane Blast (Explosion)");
+        assert_eq!(kh1_and_kh2_name(kh1::AERIAL_SWEEP), "Aerial Sweep");
     }
 
     #[test]

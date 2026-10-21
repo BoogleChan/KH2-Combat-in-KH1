@@ -3584,6 +3584,13 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   bounce, the swing goes on. Ini `walls = kh1 | clink | pass` (default kh1; `wall_clink` no longer
   read). Enemies' guards clink as before. `docs/kh1-clash.md`.
 
+### 2026-10-21: Stage 316 (KH1's own grants of the mod's scheduled abilities held back)
+- The user: "if explosion comes from defeating dragon maleficent, why did i get it", "it was not a
+  randomized playthrough". KH1's Rod level-up table gives Stun Impact 6, Ripple Drive 12, Hurricane
+  Blast 18 (btltbl, per Dive path; table in docs/kh1-port.md). `Kh1Sora::held_back(id)` holds back
+  KH1's level-up and event grants (0x1401AF120, 0x1401AEE50) of the nine scheduled abilities until
+  the mod's gift is due; existing saves keep what they have.
+
 ### 2026-10-21: Stage 315 (cup victory no longer hangs on a vanished partner)
 - The user: "weird bug in the Pegasus cup, i beat a round and its frozen on donald doing his victory
   pose". Op 103 (0x1401A7430) waits for each actor's motion to end; Goofy, hidden for Valor (0x8000
