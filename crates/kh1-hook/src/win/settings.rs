@@ -133,10 +133,12 @@ battle_quotes = kh1\r\n\
 ; gummi: vanilla = fly the Gummi Ship between worlds; skip = land in the chosen world at once\r\n\
 ; (the Config menu's Gummi Routes row switches it in game too)\r\n\
 gummi = vanilla\r\n\
-; trace: on = the last 10 seconds of Sora's frames (position, KH1's and KH2's states, the pad)\r\n\
+; trace: on = the last trace_seconds of Sora's frames (position, KH1's and KH2's states, the pad)\r\n\
 ; are kept and written to the kh1-kh2-traces folder on Select + Triangle, or on their own when\r\n\
 ; something looks wrong; always = every frame is also written to kh1-kh2.trace.csv; off = none\r\n\
-trace = on\r\n";
+trace = on\r\n\
+; trace_seconds: how many seconds before the dump the trace clip holds (1 to 120, default 10)\r\n\
+trace_seconds = 10\r\n";
 
 #[derive(Debug)]
 pub struct Settings {
@@ -207,6 +209,8 @@ pub struct Settings {
     /// default), `Some(None)` every move that has one (`on`), else only these KH2 motions.
     pub kh2_slots: Option<Option<Vec<u16>>>,
     pub trace: super::trace::Mode,
+    /// How many seconds of Sora's frames a trace dump holds (`trace_seconds`, 1..=120, 10 by default).
+    pub trace_seconds: u32,
 }
 
 static SETTINGS: OnceLock<Settings> = OnceLock::new();
@@ -293,6 +297,7 @@ pub fn get() -> &'static Settings {
                 Some(v) => Some(Some(v.split([',', ' ']).filter_map(|t| t.trim().parse().ok()).collect())),
             },
             trace: super::trace::Mode::parse(setting(&text, "trace").as_deref()),
+            trace_seconds: setting(&text, "trace_seconds").and_then(|v| v.trim_end_matches('s').trim().parse::<f32>().ok()).map_or(super::trace::DEFAULT_SECONDS, |v| (v.round() as u32).clamp(1, super::trace::MAX_SECONDS)),
         };
         log(&format!("settings ({path}): {s:?}"));
         s

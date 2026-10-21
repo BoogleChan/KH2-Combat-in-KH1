@@ -1047,11 +1047,25 @@ pub mod physics {
         let y: f32 = rd(actor + 0x14);
         if kh1_set {
             if let (Some(a), Some(b)) = (g.as_mut(), before) {
-                a.arc = kh1phys::kh1_arc_on_kh2(&b.arc, n.gravity);
-                a.asked_up = 0.0;
-                static N: AtomicU32 = AtomicU32::new(0);
-                if N.fetch_add(1, Ordering::Relaxed) < 20 {
-                    super::super::log(&format!("KH1's own air move{} set its arc: on KH2's numbers from here ({})", if action { "" } else { " (no action flag)" }, if a.arc.rising() { format!("a rise of {:.0} over {:.1} frames", a.arc.height - a.arc.y(a.arc.t, n.gravity), a.arc.uptime - a.arc.t) } else { format!("falling at {:.1}/frame", n.gravity * a.arc.t) }));
+                // Not during a plain jump's rise of ours (holdable, no action flag): there KH1's
+                // jump rewrites its own arc fields between our writes (every other frame, the logs:
+                // "KH1's own air move (no action flag) set its arc" at f241, 243, 245, ... of one
+                // High Jump), and taking that as one of KH1's moves started the rise over each
+                // time, so KH2's early release never came (it needs 6 frames of the rise, and the
+                // arc taken from KH1's lost `holdable`): the user's trace t302, the jump went to
+                // its full 235 with the button let go 9 frames in.
+                if !action && a.arc.holdable && a.arc.rising() {
+                    static KEPT: AtomicU32 = AtomicU32::new(0);
+                    if KEPT.fetch_add(1, Ordering::Relaxed) < 5 {
+                        super::super::log("KH1 rewrote its arc in a plain jump's rise: KH2's arc kept (its early release still open)");
+                    }
+                } else {
+                    a.arc = kh1phys::kh1_arc_on_kh2(&b.arc, n.gravity);
+                    a.asked_up = 0.0;
+                    static N: AtomicU32 = AtomicU32::new(0);
+                    if N.fetch_add(1, Ordering::Relaxed) < 20 {
+                        super::super::log(&format!("KH1's own air move{} set its arc: on KH2's numbers from here ({})", if action { "" } else { " (no action flag)" }, if a.arc.rising() { format!("a rise of {:.0} over {:.1} frames", a.arc.height - a.arc.y(a.arc.t, n.gravity), a.arc.uptime - a.arc.t) } else { format!("falling at {:.1}/frame", n.gravity * a.arc.t) }));
+                    }
                 }
             }
         }
@@ -1080,7 +1094,10 @@ pub mod physics {
             let held = super::super::takeover::buttons() & super::super::takeover::jump_button() != 0;
             if !held && air.arc.t > character_core::HOLD_MIN_FRAMES && air.arc.t < air.arc.uptime - character_core::HOLD_APEX_MARGIN {
                 let hop = character_core::release_hop(n.gravity);
+                let full = air.arc.uptime;
                 air.arc = Arc::new(hop, n.gravity);
+                // KH2's jump clip on to its apex part, as the full jump shows it (`pose`).
+                super::super::pose::jump_released(full, air.arc.uptime);
             } else if air.arc.t >= air.arc.uptime - character_core::HOLD_APEX_MARGIN {
                 air.arc.holdable = false;
             }

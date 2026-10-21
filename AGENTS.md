@@ -51,6 +51,33 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 
 ## Development log
 
+### 2026-10-21: Stage 304 (testing branch: a released jump shows KH2's jump clip's apex part)
+- The user: "kh2 jump doesn't transition into its 2nd animation when you let go of the jump button,
+  I only saw the 2nd animation when I did a max jump at the end". The trace (t303): the early
+  release now cuts the rise to KH2's hop, but `pose` draws KH2's jump clip (motion 3, KH1's jump
+  slots 8/9 and 12/13, one group) at its own clock from the takeoff: the hop's ~31 frames ended
+  before the part a full jump shows round its apex (from about frame 28-33), then the fall loop.
+  On the cut (`shared::physics::air_step`), `pose::jump_released` moves the clip on so the full
+  jump's apex frame (3 frames of KH1's takeoff + its rise) comes with the hop's apex. KH2's own
+  controller's jumps (`kh2_rig`, KH2 has him) are unchanged.
+
+### 2026-10-21: Stage 303 (testing branch: KH2's early-release hop on KH1's jump, again)
+- The user's trace (t302, physics KH2, Jump KH2): a standing High Jump on KH1's states with KH2's
+  arc went to its full 235 though the jump button was let go 9 frames into the rise; KH2 cuts the
+  rise to a hop there (`character_core::release_hop`, after 6 frames). The log showed `air_step`
+  taking KH1's own rewrites of its arc fields during the rise (every other frame) as KH1 starting
+  one of its own air moves: the arc was rebuilt from KH1's each time (`kh1_arc_on_kh2`), its time
+  starting over and `holdable` lost, so the release check never passed. A plain jump's rise of ours
+  (holdable, KH1's action flag 4 off) now keeps KH2's arc through those rewrites.
+- Not a bug, from the same trace: the probe's "drawn at" y one frame behind `+0x490` is the
+  frame-start copy (`takeover` writes it), the model is where the actor is.
+
+### 2026-10-21: Stage 302 (testing branch: the trace clip's length is set in the ini)
+- The user: "can you change it so that the csv clip can be adjusted in the ini file". New ini
+  line `trace_seconds = 10` (1 to 120, 10 when missing; `settings.rs`): how many seconds of
+  Sora's frames the trace keeps and writes on Select + Triangle or an anomaly (`trace.rs`; the
+  row cap follows it at 120 rows a second). The anomaly cooldown stays 10 s.
+
 ### 2026-10-20: Stage 301 (testing branch: KH1's air attacks out of KH2's air moves get their lunge)
 - The user's traces (t299): KH1's aerial combo swings start at a fixed sideways speed along his
   facing, 7.80 / 3.90 / 11.70 a frame for motions 0xCC / 0xCD / 0xCE, slowed x0.975 a frame (the

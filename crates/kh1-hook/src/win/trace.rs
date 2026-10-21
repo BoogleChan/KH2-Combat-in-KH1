@@ -6,7 +6,7 @@
 //! where he is and how far he moved, what KH2 asked to move him by, KH1's actor (state, motion,
 //! height above the floor, collision flags, velocity, jump arc), KH2's side (state, motion and
 //! frame, in the air, on top of something, facing, combo, lock-on), the pad, and the log lines
-//! written during that frame. The last `KEEP_MS` (10 s) of rows stay in memory and are written
+//! written during that frame. The last `trace_seconds` (the ini's, 10 s by default) of rows stay in memory and are written
 //! to `kh1-kh2-traces\` next to the game as a CSV:
 //! - on Select + Triangle (the user's pick; Select is KH1's first-person view, so while Triangle
 //!   is held KH1 doesn't see Select: `hides_select`),
@@ -32,10 +32,17 @@ use std::io::Write as _;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
 
-/// How much is kept for a dump.
-pub const KEEP_MS: u64 = 10_000;
-/// At most this many rows (10 s at 120 game frames a second).
-const MAX_ROWS: usize = 1200;
+/// How much is kept for a dump when the ini doesn't say (`trace_seconds`).
+pub const DEFAULT_SECONDS: u32 = 10;
+/// The longest clip the ini can ask for.
+pub const MAX_SECONDS: u32 = 120;
+/// At most this many rows a second kept (120 game frames a second).
+const ROWS_PER_SECOND: usize = 120;
+
+/// How much is kept for a dump, in ms (`trace_seconds` in the ini).
+fn keep_ms() -> u64 {
+    super::settings::get().trace_seconds as u64 * 1000
+}
 /// An anomaly's dump waits this many game frames (what followed it goes in too).
 const AUTO_DELAY: u32 = 60;
 /// The same anomaly dumps again only after this long.
@@ -239,7 +246,8 @@ pub fn frame(mut row: Row) {
     let select = row.buttons & RAW_SELECT != 0 || row.kh1_buttons & KH1_SELECT != 0;
     let combo = select && row.buttons & RAW_TRIANGLE != 0;
     ring.push_back(row);
-    while ring.len() > MAX_ROWS || ring.front().is_some_and(|r| now.saturating_sub(r.ms) > KEEP_MS) {
+    let (keep, max_rows) = (keep_ms(), super::settings::get().trace_seconds as usize * ROWS_PER_SECOND);
+    while ring.len() > max_rows || ring.front().is_some_and(|r| now.saturating_sub(r.ms) > keep) {
         ring.pop_front();
     }
     if combo && !COMBO_PREV.swap(true, Ordering::Relaxed) {
@@ -253,7 +261,7 @@ pub fn frame(mut row: Row) {
         if let Ok(mut p) = PENDING.lock() {
             if free && p.is_none() {
                 last.store(now.max(1), Ordering::Relaxed);
-                log(&format!("trace: {why}; the last {}s go to a file in {} frames", KEEP_MS / 1000, AUTO_DELAY));
+                log(&format!("trace: {why}; the last {}s go to a file in {} frames", keep / 1000, AUTO_DELAY));
                 *p = Some((AUTO_DELAY, why));
             }
         }
