@@ -921,6 +921,9 @@ impl World for KhWorld {
     fn hitback(&mut self, o: ObjId, _: Vec3, dist: f32) {
         note(format!("Reflect: script pushed object {o} by {dist:.0} (not applied)"));
     }
+    fn foes(&self) -> Vec<ObjId> {
+        self.objs.iter().filter(|x| x.id != SORA).map(|x| x.id).collect()
+    }
     fn random(&mut self) -> f32 {
         self.rng ^= self.rng << 13;
         self.rng ^= self.rng >> 17;

@@ -22,7 +22,7 @@ mod host;
 use std::collections::HashMap;
 
 use combat_core::{Shape, ShapeKind};
-use glam::{Mat4, Vec3};
+use glam::{Mat3, Mat4, Vec3};
 use kh2_bdx::{BdxError, Cell, CtxId, Program, Vm};
 use kh2_formats::bar::Bar;
 use kh2_formats::pax::Pax;
@@ -103,6 +103,205 @@ pub trait World {
     fn offer_command(&mut self, _o: ObjId, _command: u16) {}
     /// `o` plays its moveset's combo row `row` (`trap_obj_party_attack`).
     fn party_attack(&mut self, _o: ObjId, _row: u16) {}
+
+    // An object's weapon as an object of its own (KH2's Strike Raid throws Sora's Keyblade). While
+    // it is in the hand the host answers `pos` / `bone` for it; once a script detaches it,
+    // `Magic` moves it (`Loose`) and answers for it itself. A host without one keeps the default:
+    // there is no weapon to throw.
+
+    /// `o`'s weapon `n` (`trap_party_get_weapon`; 0 the right hand's).
+    fn weapon(&self, _o: ObjId, _n: u32) -> Option<ObjId> {
+        None
+    }
+    /// The objects a script's target search can pick (`trap_target_seracher_search`): the
+    /// enemies, any order.
+    fn foes(&self) -> Vec<ObjId> {
+        Vec::new()
+    }
+    /// `o` hangs from its holder (`trap_obj_is_attach`). Answered by `Magic` for its own loose
+    /// objects; any other object is held.
+    fn attached(&self, _o: ObjId) -> bool {
+        true
+    }
+    /// `trap_obj_detach` / `trap_obj_attach`; `trap_obj_set_pos`; `trap_obj_move_request` (by `v`
+    /// this frame); `trap_obj_set_xyzrot` (`rot`: local axes in the world, our axes). `Magic`
+    /// does these to its loose objects; a host may ignore them.
+    fn detach(&mut self, _o: ObjId) {}
+    fn attach(&mut self, _o: ObjId, _to: ObjId) {}
+    fn set_pos(&mut self, _o: ObjId, _p: Vec3) {}
+    fn move_by(&mut self, _o: ObjId, _v: Vec3) {}
+    fn set_rotation(&mut self, _o: ObjId, _rot: Mat3) {}
+}
+
+/// A weapon a script has taken from its holder's hand (Strike Raid's Keyblade): where it is, how it
+/// is turned, and its own motion (the Keyblade's 235, its spin). Our axes (y up).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Loose {
+    pub holder: ObjId,
+    pub pos: Vec3,
+    /// Its object axes in the world (KH2's object space: x, y down, z back; our axes).
+    pub rot: Mat3,
+    pub motion: u16,
+    /// Frames into `motion`.
+    pub frame: f32,
+}
+
+impl Loose {
+    /// Object space → KH2's world (y down), for drawing.
+    pub fn game_matrix(&self) -> Mat4 {
+        let f = Mat3::from_diagonal(Vec3::new(1.0, -1.0, 1.0));
+        affine(f * self.rot * f, flip(self.pos))
+    }
+
+    fn matrix(&self) -> Mat4 {
+        affine(self.rot, self.pos)
+    }
+}
+
+fn affine(m: Mat3, t: Vec3) -> Mat4 {
+    Mat4::from_cols(m.x_axis.extend(0.0), m.y_axis.extend(0.0), m.z_axis.extend(0.0), t.extend(1.0))
+}
+
+/// The host's world with `Magic`'s loose objects in it: they answer for themselves.
+struct Overlay<'a> {
+    w: &'a mut dyn World,
+    loose: &'a mut HashMap<ObjId, Loose>,
+}
+
+impl World for Overlay<'_> {
+    fn exists(&self, o: ObjId) -> bool {
+        self.loose.contains_key(&o) || self.w.exists(o)
+    }
+    fn pos(&self, o: ObjId) -> Vec3 {
+        self.loose.get(&o).map_or_else(|| self.w.pos(o), |l| l.pos)
+    }
+    fn facing(&self, o: ObjId) -> f32 {
+        match self.loose.get(&o) {
+            Some(l) => {
+                let f = -l.rot.z_axis;
+                f.x.atan2(f.z)
+            }
+            None => self.w.facing(o),
+        }
+    }
+    fn motion(&self, o: ObjId) -> u16 {
+        self.loose.get(&o).map_or_else(|| self.w.motion(o), |l| l.motion)
+    }
+    fn airborne(&self, o: ObjId) -> bool {
+        self.loose.contains_key(&o) || self.w.airborne(o)
+    }
+    fn jumping(&self, o: ObjId) -> bool {
+        !self.loose.contains_key(&o) && self.w.jumping(o)
+    }
+    fn bone(&self, o: ObjId, code: u16) -> Option<Mat4> {
+        match self.loose.get(&o) {
+            Some(l) => Some(l.matrix()),
+            None => self.w.bone(o, code),
+        }
+    }
+    fn target_point(&self, o: ObjId) -> Vec3 {
+        self.loose.get(&o).map_or_else(|| self.w.target_point(o), |l| l.pos)
+    }
+    fn target_of(&self, o: ObjId) -> Option<ObjId> {
+        self.w.target_of(o)
+    }
+    fn party(&self, n: u32) -> Option<ObjId> {
+        self.w.party(n)
+    }
+    fn has_ability(&self, o: ObjId, n: u32) -> bool {
+        self.w.has_ability(o, n)
+    }
+    fn ground(&self, from: Vec3, depth: f32) -> Option<Vec3> {
+        self.w.ground(from, depth)
+    }
+    fn bg_hit(&self, from: Vec3, to: Vec3) -> bool {
+        self.w.bg_hit(from, to)
+    }
+    fn hitback(&mut self, o: ObjId, dir: Vec3, dist: f32) {
+        if !self.loose.contains_key(&o) {
+            self.w.hitback(o, dir, dist)
+        }
+    }
+    fn random(&mut self) -> f32 {
+        self.w.random()
+    }
+    fn motion_start(&mut self, o: ObjId, m: u16, blend: f32) {
+        match self.loose.get_mut(&o) {
+            Some(l) => {
+                l.motion = m;
+                l.frame = 0.0;
+            }
+            None => self.w.motion_start(o, m, blend),
+        }
+    }
+    fn motion_push(&mut self, o: ObjId, m: u16, blend: f32) {
+        if !self.loose.contains_key(&o) {
+            self.w.motion_push(o, m, blend)
+        }
+    }
+    fn motion_ended(&self, o: ObjId) -> bool {
+        // (A loose weapon's motion loops while it flies.)
+        !self.loose.contains_key(&o) && self.w.motion_ended(o)
+    }
+    fn motion_range(&self, o: ObjId, n: u8) -> bool {
+        !self.loose.contains_key(&o) && self.w.motion_range(o, n)
+    }
+    fn motion_trigger(&self, o: ObjId, n: u8) -> bool {
+        !self.loose.contains_key(&o) && self.w.motion_trigger(o, n)
+    }
+    fn face(&mut self, o: ObjId, dir: Vec3) {
+        self.w.face(o, dir)
+    }
+    fn entry_id(&self, o: ObjId) -> u32 {
+        self.w.entry_id(o)
+    }
+    fn offer_command(&mut self, o: ObjId, command: u16) {
+        self.w.offer_command(o, command)
+    }
+    fn party_attack(&mut self, o: ObjId, row: u16) {
+        self.w.party_attack(o, row)
+    }
+    fn weapon(&self, o: ObjId, n: u32) -> Option<ObjId> {
+        self.w.weapon(o, n)
+    }
+    fn foes(&self) -> Vec<ObjId> {
+        self.w.foes()
+    }
+    fn attached(&self, o: ObjId) -> bool {
+        !self.loose.contains_key(&o)
+    }
+    fn detach(&mut self, o: ObjId) {
+        if self.loose.contains_key(&o) || !self.w.exists(o) {
+            return;
+        }
+        // From where the hand holds it, turned as it is there.
+        let m = self.w.bone(o, 0x4000).unwrap_or_else(|| Mat4::from_translation(self.w.pos(o)));
+        let rot = Mat3::from_mat4(m);
+        let rot = Mat3::from_cols(rot.x_axis.normalize_or_zero(), rot.y_axis.normalize_or_zero(), rot.z_axis.normalize_or_zero());
+        let holder = (0..8).filter_map(|n| self.w.party(n)).find(|p| self.w.weapon(*p, 0) == Some(o)).unwrap_or(0);
+        self.loose.insert(o, Loose { holder, pos: m.w_axis.truncate(), rot, motion: self.w.motion(o), frame: 0.0 });
+    }
+    fn attach(&mut self, o: ObjId, _to: ObjId) {
+        self.loose.remove(&o);
+    }
+    fn set_pos(&mut self, o: ObjId, p: Vec3) {
+        match self.loose.get_mut(&o) {
+            Some(l) => l.pos = p,
+            None => self.w.set_pos(o, p),
+        }
+    }
+    fn move_by(&mut self, o: ObjId, v: Vec3) {
+        match self.loose.get_mut(&o) {
+            Some(l) => l.pos += v,
+            None => self.w.move_by(o, v),
+        }
+    }
+    fn set_rotation(&mut self, o: ObjId, rot: Mat3) {
+        match self.loose.get_mut(&o) {
+            Some(l) => l.rot = rot,
+            None => self.w.set_rotation(o, rot),
+        }
+    }
 }
 
 /// One loaded spell file.
@@ -243,6 +442,8 @@ pub(crate) struct Tables {
     pub limit_command: u16,
     /// Each object's hook thread (`trap_obj_hook`: a new one replaces the old).
     pub hooks: HashMap<ObjId, CtxId>,
+    /// Each target searcher's finds so far (`trap_target_seracher_search`), by its record.
+    pub searchers: HashMap<u32, Vec<ObjId>>,
 }
 
 impl Tables {
@@ -263,6 +464,7 @@ impl Tables {
             target,
             limit_command: 0,
             hooks: HashMap::new(),
+            searchers: HashMap::new(),
         }
     }
 }
@@ -299,6 +501,8 @@ pub struct Magic {
     pub attacks: Vec<MagicAttack>,
     pub effects: Vec<Effect>,
     pub frametime: f32,
+    /// Weapons scripts have taken from their holders (Strike Raid's thrown Keyblade), by object.
+    pub loose: HashMap<ObjId, Loose>,
     /// Print every trap call (research).
     pub trace: bool,
     next_id: u64,
@@ -315,7 +519,7 @@ impl Default for Magic {
 impl Magic {
     pub fn new() -> Magic {
         // Attack groups the game makes up start at 0x100.
-        Magic { spells: Vec::new(), casts: Vec::new(), attacks: Vec::new(), effects: Vec::new(), frametime: 1.0, trace: std::env::var_os("KH2_MAGIC_TRACE").is_some(), next_id: 1, next_group: 0x100, events: Vec::new() }
+        Magic { spells: Vec::new(), casts: Vec::new(), attacks: Vec::new(), effects: Vec::new(), frametime: 1.0, loose: HashMap::new(), trace: std::env::var_os("KH2_MAGIC_TRACE").is_some(), next_id: 1, next_group: 0x100, events: Vec::new() }
     }
 
     pub fn add_spell(&mut self, file: SpellFile) -> usize {
@@ -445,7 +649,34 @@ impl Magic {
         for a in self.attacks.iter_mut().filter(|a| attacks.contains(&a.key)) {
             a.freed = true;
         }
+        // (A weapon one of them had thrown is back in the hand.)
+        self.loose.retain(|_, l| l.holder != owner);
         n
+    }
+
+    /// A frame trigger of `owner`'s motion that its object script takes during a limit (KH2's
+    /// Limit Form: frame trigger 7 of Infinity's 247 / 248, with `params` [100, 0], is the
+    /// script's trigger 17 with the object and the params, which fires the shots). A thread of
+    /// the limit's run, as `limit_command`'s. Returns false when no limit of `owner`'s runs or
+    /// its script has no such trigger.
+    pub fn limit_motion_trigger(&mut self, owner: ObjId, key: i32, params: &[i32]) -> bool {
+        let Some(i) = self.casts.iter().rposition(|c| c.limit && c.t.caster == owner && !c.finished) else { return false };
+        let c = &mut self.casts[i];
+        let obj = host::obj_record(&mut c.vm, &mut c.t, owner);
+        let wp = c.vm.ctxs[c.main].wp;
+        let ctx = c.vm.spawn(Some(wp));
+        let mut args = vec![Cell::addr(obj)];
+        args.extend(params.iter().map(|p| Cell::int(*p)));
+        match c.vm.trigger(ctx, key, &args) {
+            Ok(true) => {}
+            Ok(false) => return false,
+            Err(e) => {
+                self.events.push(Event::Error(e.to_string()));
+                return false;
+            }
+        }
+        c.t.threads.push(ctx);
+        true
     }
 
     /// The cast motion reached its magic-cast event: trigger 21 on the
@@ -476,7 +707,10 @@ impl Magic {
     fn run_cast(&mut self, i: usize, world: &mut dyn World) {
         let mut cast = std::mem::replace(&mut self.casts[i], placeholder());
         cast.fresh = false;
-        let result = host::run(self, &mut cast, world);
+        // (The script sees the loose objects, `Overlay`.)
+        let mut loose = std::mem::take(&mut self.loose);
+        let result = host::run(self, &mut cast, &mut Overlay { w: world, loose: &mut loose });
+        self.loose = loose;
         if let Err(e) = result {
             self.events.push(Event::Error(format!("{}: {e}", self.spells[cast.t.spell].name)));
             cast.finished = true;
@@ -492,12 +726,21 @@ impl Magic {
         self.attacks.retain(|a| !a.freed);
         // A held cast's effects stand still in time (they still follow their owner).
         let held: Vec<u64> = self.casts.iter().filter(|c| c.held).flat_map(|c| c.t.effects.values().copied()).collect();
-        for e in &mut self.effects {
-            if e.alive() {
-                e.tick(if held.contains(&e.id) { 0.0 } else { ft }, world);
-            } else {
-                e.linger -= ft;
+        // Loose objects' motions play on.
+        for l in self.loose.values_mut() {
+            l.frame += ft;
+        }
+        {
+            let mut loose = std::mem::take(&mut self.loose);
+            let ov = Overlay { w: world, loose: &mut loose };
+            for e in &mut self.effects {
+                if e.alive() {
+                    e.tick(if held.contains(&e.id) { 0.0 } else { ft }, &ov);
+                } else {
+                    e.linger -= ft;
+                }
             }
+            self.loose = loose;
         }
         // Dead effects stay a little so scripts holding them read "dead".
         self.effects.retain(|e| e.alive() || e.linger > 0.0);
@@ -598,6 +841,7 @@ fn placeholder() -> Cast {
             target: None,
             limit_command: 0,
             hooks: HashMap::new(),
+            searchers: HashMap::new(),
         },
         main: 0,
         released: true,

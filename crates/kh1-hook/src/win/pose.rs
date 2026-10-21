@@ -1660,6 +1660,11 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
     if let (Some((body, weapon)), true) = (s.kh2_now.as_ref(), super::form::in_final()) {
         super::leftblade::final_float(&mut pose, &s.bind, body, weapon, s.retarget.as_ref().map_or(1.0, |r| r.hip_ratio()), &to_world);
     }
+    // Limit Form's Keyblade: thrown (Strike Raid) drawn where it flies; where it is drawn noted for
+    // the effects on it.
+    if s.kh2_now.is_some() {
+        super::limits::pose_hook(&mut pose, &s.bind, &to_world, s.retarget.as_ref().map_or(1.0, |r| r.hip_ratio()));
+    }
     for (i, m) in pose.iter().enumerate().take(SORA_BONES as usize) {
         std::ptr::write_unaligned((world + i * 0x40) as *mut [f32; 16], (to_world * *m).to_cols_array());
     }

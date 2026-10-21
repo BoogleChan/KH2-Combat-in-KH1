@@ -318,6 +318,11 @@ starts at any MP.
   away on his draw (`leftblade::queue`, `model::hide`). With KH2's player model, the HTLF body
   is drawn.
 - **Unchecked in game:** all of it. In particular:
+  - Strike Raid's thrown Keyblade as drawn (its turn and spin on KH1's Keyblade, KH1 drawing it
+    far from him), its trail, the catch's flash; how far it flies (about 1300 for Raid: KH2's
+    30 a frame for the rest of the throw motion);
+  - Infinity's ring of shots and their hits, its push;
+  - Last Arcanum's glow now on the Keyblade;
   - whether the HTLF effect archive exists on the install;
   - Anti Glide while moving: the exe notes have row 11 tried by the action button "when not
     moving"; it is taken moving too here (no Dodge Roll in Anti; Valor's rule);
@@ -442,17 +447,49 @@ lists (`.hed` names). Nothing of it is in the repository.
   - **Trigger 23** runs a follow-up command chosen (its count down by one): Rave starts 212
     again, Finish 213; Bash 222..226 in turn (a counter in work memory), The End 227; Raid and
     Judgment throw the Keyblade (232 / 233, then the catch 234); Shoot, Impact and Giga Impact
-    start 247 / 247 / 248 with 10 / 17 / 25 shots.
+    push him back 50 / 100 / 200 (`trap_obj_hitback`, away from his facing) and start 247 / 247
+    / 248 with 10 / 17 / 25 shots.
   - **Trigger 17** with 100 (frame trigger 7 [100, 0] of 247 / 248) fires Infinity's shots (ATKP
-    1862, radius 80, homing).
-  - **Strike Raid's throw** (frame trigger 9 of 232 / 233) detaches the Keyblade
-    (`trap_party_get_weapon`, `trap_obj_detach`, `trap_obj_motion_unsync`) and flies it at the
-    target as an attack (ATKP 1867 radius 190 for Raid, 1866 radius 160 for Judgment), turning it
-    with `trap_strike_raid_calc_xyzrot` / `trap_obj_set_xyzrot` and moving it with
-    `trap_obj_move_request`, back to his hand for the catch (`trap_obj_attach`,
-    `trap_party_hand_to_bone`).
-  - **Infinity** starts with 241 and plays combo rows 52..55 (242..245) by
-    `trap_obj_party_attack`, then row 56 (246), whose frame trigger 9 starts its effect.
+    1862, radius 80, homing): below.
+  - **Last Arcanum** also starts its own glow on the Keyblade for the whole limit (a thread at its
+    start: elements 35 on the weapon root 0x4005 and 36 on the tip 0x4003, 6 and 28 along the
+    blade's x), ended when his motion is no longer the hook's.
+  - **Strike Raid** (`cmd` 704): the hook plays 231 (K420; it has no follow-up range), then the
+    first throw (232, Raid's) by itself. The throw motion's frame trigger 9 (232 frame 8, 233
+    frame 27) starts a thread that takes the Keyblade from his hand as an object of its own
+    (`trap_party_get_weapon`, `trap_obj_detach`, `trap_obj_motion_unsync`), starts its own motion
+    235 on it (its spin) and its trail (element 32 on its blade bone,
+    `trap_obj_effect_start_bind_other`), and makes it an attack: **ATKP 1866 radius 160 for
+    Raid, 1867 radius 190 for Judgment** (power 200 and 500; s291's notes had the two the other
+    way round). Each frame it turns toward the lock-on target at most 5° (`trap_vector_homing`;
+    no more once within 120), moves 30 along its heading (`trap_vector_addf`), is kept 120 (Raid)
+    / 150 (Judgment) above a floor found within that much below, and its heading becomes 0.8 of
+    itself and 0.2 of the step it made (so the homing is weak: the throw goes about where he
+    faced). Judgment wobbles it up and down about that path (amplitude 30, a 20-frame period).
+    Its turn is `trap_strike_raid_calc_xyzrot` (heading, up) then `trap_obj_set_xyzrot`, the up
+    easing from straight up to the throw's own over 33 frames; it moves by
+    `trap_obj_move_request`. It flies until it is attached again: 232 / 233 end into the catch
+    (234, K423), which puts it back in his hand (`trap_obj_attach`, `trap_party_hand_to_bone`)
+    with a flash where it was (element 34, `trap_obj_effect_start_pos`) and ends the trail.
+    234's script ranges 1 and 2 (frames 0..38) offer Raid (count 3) then Judgment; the limit
+    ends with 234.
+  - **`trap_strike_raid_calc_xyzrot (dir, up)`** (exe `0x14053EF90`, read): both normalized
+    (`up` in place); an `up` equal to `dir` becomes (0, -1, 0); x = normalize(up × dir), z =
+    -dir, `up` is written back as dir × x (square to `dir`), y = normalize(z × x); the rows x, y,
+    z are turned into Euler angles (`0x1401AB290`). The script's first call (its result dropped)
+    is for the up it writes back, which it then makes point up.
+  - **Infinity** (`cmd` 683) has no follow-up pair: the hook plays 241 (K430), then combo rows
+    52..55 (242..245) by `trap_obj_party_attack`, each started again on its first frame with the
+    next pushed after it, then row 56 (246), whose frame trigger 9 starts its charge (element 20
+    on the tip). 246's range 20 offers Shoot (frames 42..72 and 92..100), Impact (72..82) and
+    Giga Impact (82..92). The shots (trigger 17): from the Keyblade tip, one per `n` (10, 17,
+    25), each sent along his "up" turned about his facing by 2π·i / n (`trap_vector_rot`: a ring
+    round his forward axis); three of them, picked at random, go for the lock-on target, the
+    others for an enemy the script's target search finds (up to 10 found within 1000, one picked
+    at random). Each waits 6 frames, then each frame turns at most 5° toward a point a random
+    0.2..0.8 of the way from its target to the side (`trap_vector_inter` with the cross of its
+    heading: they spiral in), moves 16, and ends when it hits or after 150..180 frames (a target
+    reached within 64 without a hit is dropped for another).
 - **The motions' own parts.** Range 16 and 17 are the script ranges 1 and 2 (Sonic Rave's 212:
   frames 16..46; Strike Raid's 234: 0..38). Range 20 (command, 0) offers a command on the
   reaction button while open: Last Arcanum's Bash (221..225) and The End (226), Infinity's Shoot,
@@ -466,7 +503,17 @@ lists (`.hed` names). Nothing of it is in the repository.
   n)` reads range 15 + n, and `trap_obj_motion_check_trigger (obj, n)` frame trigger 8 + n (the
   throw frames of 232 / 233 and Infinity's 246 carry trigger 9 and no trigger 1). A command the
   motions offer by range 20 goes, when chosen, to the limit's trigger 23 as the script's own
-  offers do (they are all `cmd` execute 707). Not checked against the executable.
+  offers do (they are all `cmd` execute 707). Frame trigger 7 of a limit motion is the script's
+  trigger 17 with the object and the trigger's parameters. Not checked against the executable.
+- **Read from the executable** (KH2 FM PC, `KINGDOM HEARTS II FINAL MIX.exe`; the trap tables are
+  16-byte records of handler and flags, table 0 at RVA `0x752E00`, 1 `0x755370`, 2 `0x756B60`,
+  6 `0x787E80`, 8 `0x787530`): `trap_vector_rot (v, axis, angle)` turns `v` about `axis`
+  (`0x14041D650`); `trap_vector_inter (a, b, t)` is a + (b − a)·t (`0x14041D490`);
+  `trap_vector_homing (v, to, max)` writes `v` turned toward `to` by at most `max` (no
+  frametime), a unit vector (`0x14041D3D0`); `trap_random_get (n)` / `_getf (x)` / `_range (a,
+  b)` are an integer below n, x · [0, 1), a + (b − a) · [0, 1); `trap_obj_hitback` sets the
+  object's push (dist × 0.1 a frame, × 0.9 each frame, `0x1403D4960`, as `character_core`'s
+  hit-back).
 - **Not read:** ranges 23 (parameters 1, 3, 78, 92), 29, 31, 44 and 49, and frame triggers 16,
   19 and 31 of these motions. Nothing in the script moves the camera.
 - **Square.** Standing, it is the guard (row 11, motion 173; KH2's Limit Form keeps the guard).
@@ -499,8 +546,8 @@ lists (`.hed` names). Nothing of it is in the repository.
     list in the magic list's place: records 0x82..0x85 (words 0x1FA..0x1F7, spell-type records
     with arguments 0x20..0x23, written over empty ones as the Drive forms are), named Sonic
     Rave, Last Arcanum, Strike Raid, Infinity. KH1's magic list has no cost column, so no cost
-    is shown. A row is greyed in the air (the Land flag), with the MP short, while a limit runs,
-    or when it isn't in yet.
+    is shown. A row is greyed in the air (the Land flag), with the MP short, or while a limit
+    runs (Infinity's shots still flying count).
   - **MP (ours).** Each limit costs one of KH1's bars (KH1's payment `0x1402A39D0` with 100). The
     mod's KH2 spells (Wisdom's, Final's, base Sora's, Reflect) cost KH1's own 1 MP each whatever
     KH2's cost (`reflect::COST`, `kh1_spell_cost`), and KH2's cost / 100 rounded up gives the same
@@ -524,12 +571,39 @@ lists (`.hed` names). Nothing of it is in the repository.
     KH1's step runs from that box; we take only a fresh press (KH1's logical Triangle
     `0x4000000` pressed that frame), once per window: after a follow-up, none is offered until
     its motion starts.
-  - **Done:** Sonic Rave and Last Arcanum, with all their follow-ups (`kh2-magic`'s
-    `tests/limits.rs` runs both from the real script against the form's moveset: Rave five
-    times, then Finish; Bash five times, then The End).
-  - **Not yet (listed, greyed):** Strike Raid (the thrown Keyblade: a second object, its
-    attachment, flight and catch, `trap_strike_raid_calc_xyzrot`) and Infinity
-    (`trap_obj_party_attack`, its shots and their hits, the hit-back).
+  - **All four run**, with all their follow-ups (`kh2-magic`'s `tests/limits.rs` runs them from
+    the real script against the form's moveset: Rave five times, then Finish; Bash five times,
+    then The End; Strike Raid's first throw, three Raids and Judgment, the Keyblade off and back
+    each time; Infinity's rows 52..56, Shoot, its push and its ten shots).
+  - **The script's objects (`kh2-magic`).** Sora's Keyblade is an object of its own to the script
+    (`World::weapon`). Detached, `Magic` keeps it (`Loose`: where, how turned, its motion and
+    frame) and answers for it itself, so the script moves it (`trap_obj_set_pos`,
+    `_move_request`, `_set_xyzrot`) until it is attached again; the host only draws it. A limit
+    that ends early (a revert) puts it back. The target traps are ours on the host's enemies
+    (`World::foes`): the lock-on target is the lock's (nothing locked: the nearest enemy in
+    front, as Wisdom's shots); a search takes the nearest enemy in its range it hasn't found yet
+    (KH2's own pick isn't traced).
+  - **The thrown Keyblade drawn.** KH1's own Keyblade (its weapon bones, the grip and its chain)
+    is moved where the script has it (`limits::pose_hook`, `leftblade::float_grip`): KH2's blade
+    bone of the Keyblade's motion 235 at its frame, on the object, put to KH1's grip by the same
+    relation that holds it in the hand (`leftblade::held_blade`), as Final Form's floating
+    Keyblades are. His hand is empty meanwhile.
+  - **Its hits.** The script's attacks (the thrown Keyblade's sphere on its path, Infinity's
+    shots) hit KH1's enemies through the spell hit records (`Strikes::spell_strike`, keys
+    `1 << 58`), with KH2's ATKP rows; a hit is passed back (a shot ends there).
+  - **The push.** `trap_obj_hitback` on Sora is `Character::hit_back` (KH2's: dist × 0.1 a frame,
+    decaying × 0.9).
+  - **A combo row** (`trap_obj_party_attack`) plays the row's motion as the script's own start;
+    its hits and windows are the motion's. A start of the motion that has just begun, on its
+    first frame (the script taking over a motion its push started: Sonic Rave's 212, Infinity's
+    rows), is not started again (it played its first frame twice, its voice too).
+  - **Weapon anchors.** Limit Form's are KH2's own, as Final's: the blade bone where KH1 draws the
+    Keyblade (in his hand, or thrown; `limits::drawn_blade`), its turn included, the tip 78 along
+    its −x (`kh2fx::form_bone`). They had Valor's rule (the point, Sora's facing for the turn),
+    and the script's elements on them started on his hand's tip: Last Arcanum's glow on the
+    Keyblade (elements 35 / 36, 6 and 28 along the blade) pointed along his facing, off the
+    Keyblade (the user, s291: "the last arcanum vfx being desyncd from the keyblade"). An element
+    a spell script starts now starts on its package's anchors (`kh2fx::spell_start`).
 - **No KH1 limits in any form** (the user: "KH1 limits that are equipped shouldn't even prompt
   in any drive form. No drive form should be able to use KH1 Limits"). KH1 offers its limits
   (Sonic Blade, Ars Arcanum, Strike Raid, Ragnarok, ...) in its Triangle box: `0x14028AF60`,
@@ -554,7 +628,6 @@ lists (`.hed` names). Nothing of it is in the repository.
 ## Not modelled
 
 - Form keyblade stats (forms deal Sora's base damage).
-- Limit Form's Strike Raid and Infinity (its `limi` script, above); the limits' light; summons,
-  party members.
+- The limits' light (`trap_limit_light`); summons, party members.
 - The form change's full-screen effect.
 - Drive Recovery items.

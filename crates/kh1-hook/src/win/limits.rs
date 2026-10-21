@@ -7,7 +7,7 @@
 //!   with arguments `LIMIT_ARG + k`, written over empty ones as `drive`'s forms are): Sonic Rave,
 //!   Last Arcanum, Strike Raid and Infinity, KH2's names. KH1's magic list shows no costs, so none
 //!   is shown. A row is greyed when it can't be used now (in the air: the commands' Land flag; MP
-//!   short; not in yet).
+//!   short; a limit running).
 //! - **MP.** KH2's costs (03system `cmd`: 60, 75, 65, 80 of KH2's 100) are each one of KH1's bars:
 //!   the mod's KH2 spells already cost KH1's own 1 MP each whatever KH2's cost (`reflect::COST`),
 //!   and KH2's cost / 100 rounded up gives the same bar. Short of it, the limit can't be used (the
@@ -16,9 +16,20 @@
 //!   before that the list stays open, as for a spell): KH1's bar paid, the form model's script
 //!   (`limi`) started at its limit trigger with the command (`kh2_magic::Magic::limit`). The
 //!   script drives Sora (`LimitWorld`): it starts and chains his motions (`Character::play`,
-//!   `push_scripted`), turns him, and offers the follow-ups. The motions carry KH2's hits (the
-//!   Keyblade's ATKP rows), invulnerability, effects and sounds, through the controller as for
-//!   every move.
+//!   `push_scripted`), turns him, pushes him back (`Character::hit_back`), plays combo rows
+//!   (Infinity's, `trap_obj_party_attack`: the row's motion), and offers the follow-ups. The
+//!   motions carry KH2's hits (the Keyblade's ATKP rows), invulnerability, effects and sounds,
+//!   through the controller as for every move; the script's own attacks (Strike Raid's thrown
+//!   Keyblade, Infinity's shots) hit KH1's enemies through the spell hit records, as Wisdom's
+//!   shots do (`formmagic`).
+//! - **Strike Raid's Keyblade.** The script takes Sora's Keyblade from his hand as an object of its
+//!   own (`WEAPON`; `kh2_magic::Loose` while it flies) and flies it; KH1's own Keyblade (its
+//!   weapon bones) is drawn there (`pose_hook`, `leftblade::float_grip`), spinning on the
+//!   Keyblade's own motion 235, until the catch puts it back in his hand.
+//! - **Weapon anchors.** The form's effects on its Keyblade (0x4003.. codes: Last Arcanum's glow,
+//!   Infinity's charge, and the thrown Keyblade's trail on its blade bone) sit on KH2's blade bone
+//!   where KH1 draws the Keyblade (`drawn_blade`), its turn included, as KH2's own weapon anchors
+//!   are (`kh2fx::form_bone`).
 //! - **Triangle.** A follow-up the script offers (`trap_command_override`) or a motion carries
 //!   (KH2's range 20) is shown in KH1's own Triangle box, the top menu's fourth entry (record
 //!   0x86, its name the follow-up's), written after KH1's context fill (`context_fill`). Triangle
@@ -39,25 +50,22 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-/// A limit: its 03system `cmd`, KH2's name, our command record and word, KH2's MP cost, and
-/// whether it runs here yet.
+/// A limit: its 03system `cmd`, KH2's name, our command record and word, and KH2's MP cost.
 struct Limit {
     command: u16,
     name: &'static str,
     record: u8,
     word: u16,
     kh2_mp: u8,
-    ready: bool,
 }
 
 /// KH2's Limit list, in its order. (Infinity is 03system's 0x2AB, KH2 FM's Ragnarok under its
-/// PC name.) Strike Raid and Infinity are listed, greyed: their scripts need the thrown Keyblade
-/// and the shots, not in yet.
+/// PC name.)
 const LIMITS: [Limit; 4] = [
-    Limit { command: 698, name: "Sonic Rave", record: 0x82, word: 0x1FA, kh2_mp: 60, ready: true },
-    Limit { command: 701, name: "Last Arcanum", record: 0x83, word: 0x1F9, kh2_mp: 75, ready: true },
-    Limit { command: 704, name: "Strike Raid", record: 0x84, word: 0x1F8, kh2_mp: 65, ready: false },
-    Limit { command: 683, name: "Infinity", record: 0x85, word: 0x1F7, kh2_mp: 80, ready: false },
+    Limit { command: 698, name: "Sonic Rave", record: 0x82, word: 0x1FA, kh2_mp: 60 },
+    Limit { command: 701, name: "Last Arcanum", record: 0x83, word: 0x1F9, kh2_mp: 75 },
+    Limit { command: 704, name: "Strike Raid", record: 0x84, word: 0x1F8, kh2_mp: 65 },
+    Limit { command: 683, name: "Infinity", record: 0x85, word: 0x1F7, kh2_mp: 80 },
 ];
 /// The follow-ups (03system `cmd`, KH2's name).
 const FOLLOW_UPS: [(u16, &str); 9] = [(699, "Rave"), (700, "Finish"), (702, "Bash"), (703, "The End"), (705, "Raid"), (706, "Judgment"), (684, "Shoot"), (685, "Impact"), (686, "Giga Impact")];
@@ -71,6 +79,19 @@ pub const FOLLOW_ARG: u8 = 0x28;
 const COST: i32 = 100;
 /// `00objentry` id of `P_EX100_KH1F` (its script checks it is Limit Form).
 const ENTRY_ID: u32 = 0x95D;
+/// Sora's Keyblade as the script's object (Strike Raid throws it; the enemies are from
+/// `reflect::FOE0`).
+const WEAPON: ObjId = 2;
+/// The Keyblade's own motion while it flies (`W_EX010_KH1F`'s 235, its spin).
+const THROWN_MOTION: u16 = 235;
+/// Hit-record keys of the limits' own attacks (apart from Wisdom's 1 << 59, Reflect's 1 << 60).
+const KEY: u64 = 1 << 58;
+/// The frame trigger of a limit motion the script takes as its trigger 17 (Infinity's 247 / 248
+/// carry 7 [100, 0], their shots; no other limit motion has a 7). The controller's events keep
+/// no parameters, so these are passed as the motions have them.
+const SHOTS_TRIGGER: u8 = 7;
+const SHOTS_SCRIPT_TRIGGER: i32 = 17;
+const SHOTS_PARAMS: [i32; 2] = [100, 0];
 /// A follow-up shown this many frames after the script last offered it (KH1's menu fill runs on
 /// its own step; the script offers it every frame its window is open).
 const OFFER_FRAMES: u32 = 2;
@@ -173,12 +194,8 @@ unsafe fn ensure_records(base: usize) -> bool {
     true
 }
 
-/// Whether limit `k` can be chosen now (and why not).
-unsafe fn usable(actor: usize, k: usize) -> Result<(), &'static str> {
-    let l = &LIMITS[k];
-    if !l.ready {
-        return Err("not in yet");
-    }
+/// Whether a limit can be chosen now (and why not): all four alike.
+unsafe fn usable(actor: usize) -> Result<(), &'static str> {
     if script().is_none() {
         return Err("Limit Form's script not loaded");
     }
@@ -212,7 +229,7 @@ pub unsafe fn fill(actor: usize) {
     let mut grey = 0u32;
     for (k, l) in LIMITS.iter().enumerate() {
         wr(magic + 0x14 + k, l.record);
-        if usable(actor, k).is_err() {
+        if usable(actor).is_err() {
             grey |= 1 << k;
         }
     }
@@ -239,7 +256,7 @@ pub unsafe fn fill(actor: usize) {
     }
     static LOGGED: AtomicU32 = AtomicU32::new(u32::MAX);
     if LOGGED.swap(grey, Ordering::Relaxed) != grey {
-        let why: Vec<String> = (0..LIMITS.len()).map(|k| format!("{} {}", LIMITS[k].name, usable(actor, k).err().unwrap_or("usable"))).collect();
+        let why: Vec<String> = (0..LIMITS.len()).map(|k| format!("{} {}", LIMITS[k].name, usable(actor).err().unwrap_or("usable"))).collect();
         log(&format!("Limit Form: the Limit menu ({})", why.join(", ")));
     }
 }
@@ -318,7 +335,7 @@ pub unsafe fn command(actor: usize, arg: u8) {
     }
     let k = (arg - LIMIT_ARG) as usize;
     let Some(l) = LIMITS.get(k) else { return };
-    if let Err(why) = usable(actor, k) {
+    if let Err(why) = usable(actor) {
         super::reflect::menu_sound(4);
         note(format!("Limit Form: {} refused ({why})", l.name));
         return;
@@ -346,6 +363,8 @@ struct Requests {
     start: Option<u16>,
     pushes: Vec<u16>,
     face: Option<f32>,
+    /// A push back (`trap_obj_hitback`: direction x / z, distance).
+    hitback: Option<([f32; 2], f32)>,
 }
 
 struct Runtime {
@@ -363,6 +382,9 @@ struct Runtime {
     started: u32,
     /// A limit paid for, started with the script's next frame (`after_step`, with the world).
     pending: Option<usize>,
+    /// KH2's motion and its frame at the last step.
+    now: (u16, u32),
+    hits: u32,
 }
 
 static RT: Mutex<Option<Runtime>> = Mutex::new(None);
@@ -384,7 +406,7 @@ fn runtime(g: &mut Option<Runtime>) -> &mut Runtime {
                 }
             }
         });
-        Runtime { magic, file, queue: Vec::new(), fed: None, req: Requests::default(), taken_in: None, fx: HashMap::new(), started: 0, pending: None }
+        Runtime { magic, file, queue: Vec::new(), fed: None, req: Requests::default(), taken_in: None, fx: HashMap::new(), started: 0, pending: None, now: (u16::MAX, 0), hits: 0 }
     })
 }
 
@@ -412,6 +434,9 @@ pub fn end_all() {
     rt.req = Requests::default();
     rt.taken_in = None;
     rt.pending = None;
+    if let Ok(mut t) = THROWN.lock() {
+        *t = None;
+    }
     for h in rt.fx.values().filter_map(|v| v.0) {
         super::kh2fx::spell_kill(h);
     }
@@ -426,6 +451,8 @@ struct LimitWorld<'a> {
     motion: u16,
     frame: u32,
     clips: Option<&'a HashMap<u16, character_core::Clip>>,
+    /// The form's combo rows (`trap_obj_party_attack`).
+    rows: &'a [character_core::ComboRow],
     /// Pushes waiting besides this frame's (the host's queue, or a motion handed on).
     queued: bool,
     req: &'a mut Requests,
@@ -436,14 +463,23 @@ impl LimitWorld<'_> {
     fn clip(&self) -> Option<&character_core::Clip> {
         self.clips?.get(&self.motion)
     }
+
+    /// Sora's Keyblade in his hand (its object frame: KH2's weapon point on his hand bone).
+    fn held(&self) -> Mat4 {
+        self.kh.bone(SORA, 0x4005).unwrap_or_else(|| Mat4::from_translation(self.kh.pos(SORA) + Vec3::Y * 100.0))
+    }
 }
 
 impl World for LimitWorld<'_> {
     fn exists(&self, o: ObjId) -> bool {
-        self.kh.exists(o)
+        o == WEAPON || self.kh.exists(o)
     }
     fn pos(&self, o: ObjId) -> Vec3 {
-        self.kh.pos(o)
+        if o == WEAPON {
+            self.held().w_axis.truncate()
+        } else {
+            self.kh.pos(o)
+        }
     }
     fn facing(&self, o: ObjId) -> f32 {
         match (o, self.req.face) {
@@ -465,10 +501,18 @@ impl World for LimitWorld<'_> {
         self.kh.jumping(o)
     }
     fn bone(&self, o: ObjId, code: u16) -> Option<Mat4> {
-        self.kh.bone(o, code)
+        if o == WEAPON {
+            Some(self.held())
+        } else {
+            self.kh.bone(o, code)
+        }
     }
     fn target_point(&self, o: ObjId) -> Vec3 {
-        self.kh.target_point(o)
+        if o == WEAPON {
+            self.pos(o)
+        } else {
+            self.kh.target_point(o)
+        }
     }
     fn target_of(&self, o: ObjId) -> Option<ObjId> {
         self.kh.target_of(o)
@@ -486,7 +530,12 @@ impl World for LimitWorld<'_> {
         self.kh.bg_hit(from, to)
     }
     fn hitback(&mut self, o: ObjId, dir: Vec3, dist: f32) {
-        self.kh.hitback(o, dir, dist)
+        // (Sora pushed: KH2's hit-back, `Character::hit_back`, his speed dist × 0.1 decaying.)
+        if o == SORA {
+            self.req.hitback = Some(([dir.x, dir.z], dist));
+        } else {
+            self.kh.hitback(o, dir, dist)
+        }
     }
     fn random(&mut self) -> f32 {
         self.kh.random()
@@ -531,9 +580,24 @@ impl World for LimitWorld<'_> {
         }
     }
     fn offer_command(&mut self, o: ObjId, command: u16) {
-        if o == SORA {
+        // (Infinity has no follow-up pair: its script offers command 0 in range 2, which its
+        // motions don't have.)
+        if o == SORA && command != 0 {
             self.offer = Some(command);
         }
+    }
+    fn party_attack(&mut self, o: ObjId, row: u16) {
+        // The row's motion, as the script's own start (its hits and windows are the motion's).
+        match self.rows.iter().find(|r| r.id as u16 == row) {
+            Some(r) => self.motion_start(o, r.motion, 0.0),
+            None => note(format!("Limit Form: the script's combo row {row} isn't in the moveset")),
+        }
+    }
+    fn weapon(&self, o: ObjId, n: u32) -> Option<ObjId> {
+        (o == SORA && n == 0).then_some(WEAPON)
+    }
+    fn foes(&self) -> Vec<ObjId> {
+        self.kh.foes()
     }
 }
 
@@ -555,7 +619,7 @@ pub unsafe fn before_step(actor: usize, ch: &mut Character) {
     let chosen = CHOSEN.try_lock().ok().and_then(|mut c| c.take());
     if let (Some(k), Some(_)) = (chosen, rt.file) {
         let l = &LIMITS[k];
-        if !ch.can_take_command() || usable(actor, k).is_err() {
+        if !ch.can_take_command() || usable(actor).is_err() {
             note(format!("Limit Form: {} dropped (KH2's move can't take it now, or it can't be used)", l.name));
         } else {
             let before = mp(actor);
@@ -580,8 +644,17 @@ pub unsafe fn before_step(actor: usize, ch: &mut Character) {
     if let Some(f) = req.face {
         ch.set_facing(f);
     }
+    if let Some((dir, dist)) = req.hitback {
+        ch.hit_back(dir, dist);
+    }
     if let Some(m) = req.start {
-        if ch.play(m, false) {
+        // (A start of the motion that has just begun, on its first frame: the script taking over
+        // a motion its own push started, as Sonic Rave's 212 and Infinity's rows do. Started again
+        // it played its first frame twice, its frame-0 voice and effects too.)
+        if rt.now == (m, 0) && ch.scripted() {
+            rt.queue = req.pushes;
+            rt.fed = None;
+        } else if ch.play(m, false) {
             rt.queue = req.pushes;
             rt.fed = None;
         } else {
@@ -618,6 +691,70 @@ unsafe fn mp(sora: usize) -> (i32, i32) {
     (rd::<i32>(stats + 0x44), rd::<i32>(stats + 0x48))
 }
 
+// ---------------------------------------------------------------- the Keyblade as drawn
+
+/// The thrown Keyblade (Strike Raid): its model → KH1's world (y down), its motion's frame and
+/// the motion, and when (`after_step`).
+static THROWN: Mutex<Option<(Mat4, f32, u16, std::time::Instant)>> = Mutex::new(None);
+/// KH2's blade bone where KH1 draws the Keyblade this frame (KH1's world, y down; in his hand, or
+/// thrown), and when (`pose_hook`).
+static DRAWN: Mutex<Option<(Mat4, std::time::Instant)>> = Mutex::new(None);
+
+/// The Keyblade's blade bone as drawn, if drawn in the last quarter second: Limit Form's weapon
+/// anchors (`kh2fx::form_bone`; KH2's own are the blade bone, its turn included, as Final's).
+pub fn drawn_blade() -> Option<Mat4> {
+    let g = DRAWN.try_lock().ok()?;
+    g.filter(|(_, t)| t.elapsed().as_secs_f32() < 0.25).map(|(m, _)| m)
+}
+
+/// `pose`, before Sora's bones are written (in Limit Form): the Keyblade thrown is drawn where it
+/// flies (KH1's own weapon bones moved there, `leftblade::float_grip`), spinning on its motion
+/// (the Keyblade's 235, its blade bone `leftblade::KH2_BLADE`); and where the Keyblade is drawn is
+/// noted for the effects on it (`drawn_blade`). `kh1`: KH1's bones (model space); `ratio`: KH1's
+/// size against KH2's.
+pub fn pose_hook(kh1: &mut [Mat4], kh1_bind: &[Mat4], to_world: &Mat4, ratio: f32) {
+    if !ON.load(Ordering::Relaxed) || !super::form::in_limit() {
+        return;
+    }
+    static N: AtomicU32 = AtomicU32::new(0);
+    let k = if ratio.is_finite() && ratio > 0.1 { ratio } else { 1.0 };
+    let thrown = THROWN.try_lock().ok().and_then(|g| *g).filter(|t| t.3.elapsed().as_secs_f32() < 0.25);
+    let blade_world = match thrown {
+        Some((model, frame, motion, _)) => {
+            let local = pose::kh2().and_then(|k| k.limit.as_ref()).and_then(|f| {
+                let w = f.rig.weapons.first()?;
+                let m = w.motions.get(&motion).or_else(|| w.motions.get(&THROWN_MOTION))?;
+                let bones = kh2_anim::evaluate(&w.skeleton, m, kh2_anim::key_time(m, frame, true), kh2_anim::Options::default()).bones;
+                bones.get(super::leftblade::KH2_BLADE).or(bones.first()).copied()
+            });
+            let Some(local) = local else {
+                if N.fetch_add(1, Ordering::Relaxed) < 5 {
+                    log("Limit Form: the thrown Keyblade's motion isn't loaded: drawn in his hand");
+                }
+                return;
+            };
+            let blade = model * super::leftblade::scaled(local, k);
+            if !super::leftblade::float_grip(kh1, kh1_bind, to_world.inverse() * blade, k) {
+                return;
+            }
+            if N.fetch_add(1, Ordering::Relaxed) < 3 {
+                log(&format!("Limit Form: the thrown Keyblade drawn at {:.0?}, {:.0} from Sora", blade.w_axis.truncate(), (blade.w_axis - to_world.w_axis).truncate().length()));
+            }
+            blade
+        }
+        None => match super::leftblade::held_blade(kh1, kh1_bind, k) {
+            Some(b) => *to_world * b,
+            None => return,
+        },
+    };
+    let m = super::leftblade::unit(blade_world);
+    if m.is_finite() {
+        if let Ok(mut d) = DRAWN.try_lock() {
+            *d = Some((m, std::time::Instant::now()));
+        }
+    }
+}
+
 /// An unbound effect's root where the script has it (y up) → KH2's world (y down), turned along
 /// its direction (as `formmagic`'s).
 fn place(pos: Vec3, dir: Vec3) -> Mat4 {
@@ -627,24 +764,39 @@ fn place(pos: Vec3, dir: Vec3) -> Mat4 {
 
 /// After KH2's step and the swings: the limit script's frame (its requests for the next step, the
 /// follow-up offered, its effects).
-pub unsafe fn after_step(actor: usize, out: &Output, airborne: bool, strikes: &mut combat::Strikes, _battle: &Battle, lock: Option<u32>) {
+pub unsafe fn after_step(actor: usize, out: &Output, airborne: bool, strikes: &mut combat::Strikes, battle: &Battle, lock: Option<u32>) {
     FRAME.fetch_add(1, Ordering::Relaxed);
     if !ON.load(Ordering::Relaxed) || !super::form::in_limit() {
         return;
     }
     let Ok(mut g) = RT.try_lock() else { return };
     let Some(rt) = g.as_mut() else { return };
+    rt.now = (out.motion, out.clip_frame);
     if rt.pending.is_none() && rt.magic.casts.is_empty() && rt.magic.effects.is_empty() && rt.fx.is_empty() {
         return;
     }
     if rt.fed == Some(out.motion) {
         rt.fed = None;
     }
-    let clips = pose::kh2().and_then(|k| k.limit.as_ref()).map(|f| &f.character.moveset.clips);
-    let kh = world_now(actor, out, airborne, strikes, lock, 0x1A17_0000 ^ rt.started.wrapping_mul(2_654_435_761));
+    let form = pose::kh2().and_then(|k| k.limit.as_ref());
+    let clips = form.map(|f| &f.character.moveset.clips);
+    let rows = form.map_or(&[][..], |f| f.character.moveset.combo_rows.as_slice());
+    // (Seeded by the frame too: Infinity's shots draw new random numbers every frame, their wobble.)
+    let seed = 0x1A17_0000 ^ rt.started.wrapping_mul(2_654_435_761) ^ FRAME.load(Ordering::Relaxed).wrapping_mul(0x9E37_79B9);
+    let mut kh = world_now(actor, out, airborne, strikes, lock, seed | 1);
+    // (Nothing locked on: the nearest enemy in front, as Wisdom's shots take; Strike Raid's throw
+    // and Infinity's lock-on shots go for it. Ours: KH2's lock-on is the player's.)
+    if kh.target.is_none() {
+        kh.target = super::formmagic::auto_target(&kh, out.facing);
+    }
     let queued = rt.fed.is_some() || !rt.queue.is_empty();
     let mut req = std::mem::take(&mut rt.req);
-    let mut w = LimitWorld { kh, out, motion: out.motion, frame: out.clip_frame, clips, queued, req: &mut req, offer: None };
+    let mut w = LimitWorld { kh, out, motion: out.motion, frame: out.clip_frame, clips, rows, queued, req: &mut req, offer: None };
+    // Infinity's shots: the motion's frame trigger 7, the script's trigger 17 (a thread of the
+    // limit's run, first run in this frame's update).
+    if out.events.iter().any(|e| *e == character_core::EventKind::Other(SHOTS_TRIGGER)) && rt.magic.limit_motion_trigger(SORA, SHOTS_SCRIPT_TRIGGER, &SHOTS_PARAMS) {
+        note(format!("Limit Form: motion {}'s shots (frame trigger {SHOTS_TRIGGER}, the script's trigger {SHOTS_SCRIPT_TRIGGER})", out.motion));
+    }
     // A limit paid for: its script's limit trigger, its first frame now.
     if let (Some(k), Some(file)) = (rt.pending.take(), rt.file) {
         match rt.magic.limit(file, SORA, LIMITS[k].command, &mut w) {
@@ -687,12 +839,31 @@ pub unsafe fn after_step(actor: usize, out: &Output, airborne: bool, strikes: &m
             Event::Strike { .. } => {}
         }
     }
-    // Effects the script starts: from the form's archive, bound ones on Sora's bones.
+    // The thrown Keyblade, for its draw (`pose_hook`): its model in KH1's world and its motion's
+    // frame.
+    let thrown = rt.magic.loose.get(&WEAPON).map(|l| (l.game_matrix() * Mat4::from_scale(Vec3::new(1.0, -1.0, -1.0)), l.frame, l.motion));
+    if let Ok(mut t) = THROWN.lock() {
+        let was = t.is_some();
+        *t = thrown.map(|(m, f, motion)| (m, f, motion, std::time::Instant::now()));
+        if was != t.is_some() {
+            note(format!("Limit Form: the Keyblade {}", if t.is_some() { "thrown (Strike Raid)" } else { "back in his hand" }));
+        }
+    }
+    // Effects the script starts: from the form's archive, bound ones on Sora's bones (and the
+    // Keyblade's, `kh2fx::form_bone`); one on the thrown Keyblade (its trail) on its blade bone as
+    // drawn; an unbound one (a shot, the catch's flash) where the script puts it. (One the script
+    // unbinds from Sora, Infinity's charge as it fades, stays bound: ours has no place for it but
+    // his hand's.)
     let package = super::kh2fx::LIMIT;
+    let blade = drawn_blade();
     let mut seen = Vec::new();
     for e in &rt.magic.effects {
         seen.push(e.id);
-        let placed = e.owner.is_none().then(|| place(e.pos, e.dir));
+        let placed = match e.owner {
+            Some(WEAPON) => blade,
+            None => Some(place(e.pos, e.dir)),
+            Some(_) => None,
+        };
         match rt.fx.get(&e.id) {
             None => {
                 let h = if e.alive() { super::kh2fx::spell_start(package, e.element.id) } else { None };
@@ -725,6 +896,38 @@ pub unsafe fn after_step(actor: usize, out: &Output, airborne: bool, strikes: &m
         }
     }
     rt.fx.retain(|id, (h, _)| seen.contains(id) || h.is_some_and(super::kh2fx::spell_running));
+    // The script's attacks (Strike Raid's thrown Keyblade, Infinity's shots) against KH1's
+    // enemies, through the spell hit records as Wisdom's shots (`formmagic`); one that hits is
+    // told so (a shot ends there).
+    let attacks: Vec<combat::SpellAttack> = rt
+        .magic
+        .attacks
+        .iter()
+        .filter(|a| !a.freed && a.owner == SORA)
+        .filter_map(|a| {
+            let first = battle.attack_for_level(a.atk, a.sub, 0)?;
+            if !combat_core::AttackKind::from_id(first.kind).deals_damage() {
+                return None;
+            }
+            let shapes = a.shapes();
+            (!shapes.is_empty()).then(|| combat::SpellAttack { kh1_data: None, key: a.id | KEY, group: if first.combo_group != 0 { first.combo_group as i64 } else { a.group }, atk: a.atk, sub: a.sub, shapes })
+        })
+        .collect();
+    if !attacks.is_empty() {
+        let hits = strikes.spell_strike(actor, &attacks, &|atk, sub, count| battle.attack_for_level(atk, sub, count).cloned());
+        for (key, atk, foe, dealt) in hits {
+            rt.hits += 1;
+            if let Some(a) = rt.magic.attacks.iter_mut().find(|a| a.id | KEY == key) {
+                a.hit = true;
+            }
+            if rt.hits <= 60 {
+                note(format!("Limit Form: ATKP {atk} hit {foe:#x} -> damage {dealt:?}"));
+            }
+        }
+    }
+    for a in rt.magic.freed().filter(|a| a.owns_id) {
+        strikes.spell_forget(a.id | KEY);
+    }
     if !rt.magic.limit_running(SORA) && rt.queue.is_empty() {
         if let Ok(mut o) = OFFER.lock() {
             *o = None;
@@ -792,7 +995,7 @@ pub unsafe fn install() {
     ON.store(true, Ordering::Release);
     log(&format!(
         "Limit Form: the Limit menu ({}; each KH1's 1 bar of MP, KH2's {} MP)",
-        LIMITS.iter().map(|l| if l.ready { l.name.to_string() } else { format!("{} (not in yet)", l.name) }).collect::<Vec<_>>().join(", "),
+        LIMITS.iter().map(|l| l.name).collect::<Vec<_>>().join(", "),
         LIMITS.iter().map(|l| l.kh2_mp.to_string()).collect::<Vec<_>>().join(" / ")
     ));
 }

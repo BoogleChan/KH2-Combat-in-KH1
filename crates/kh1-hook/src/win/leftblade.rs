@@ -645,8 +645,50 @@ pub fn final_float(kh1: &mut [Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_r
     log_n(&N, 3, || format!("Final Form: right Keyblade floated {:.0} units from his hand", (grip.w_axis - kh1[RIGHT_HAND].w_axis).truncate().length()));
 }
 
+/// KH2's Keyblade blade bone (`KH2_BLADE`) where KH1's drawn grip holds it, in KH1's model space:
+/// base Sora's held blade (his idle, relative to his hand bone, `HELD`) put on KH1's right hand by
+/// the bind poses' relation, as `final_float` does. KH1 holds its Keyblade rigidly in the hand,
+/// so this is the blade as drawn (Limit Form's weapon anchors, `limits`). `ratio`: KH1's size
+/// against KH2's.
+pub fn held_blade(kh1: &[Mat4], kh1_bind: &[Mat4], ratio: f32) -> Option<Mat4> {
+    if kh1.len() < SORA_BONES || kh1_bind.len() < SORA_BONES {
+        return None;
+    }
+    let kh2 = super::pose::kh2()?;
+    let w = kh2.rig.weapons.first()?;
+    let sr = w.bone?;
+    let held = (*HELD.get_or_init(|| {
+        let m = w.motions.get(&character_core::motion::IDLE).or_else(|| w.motions.get(&0))?;
+        let blade = kh2_blade(&kh2_anim::evaluate(&w.skeleton, m, 0.0, kh2_anim::Options::default()).bones)?;
+        log(&format!("Final Form: base Sora's held Keyblade blade at {:.1?} from his hand bone", blade.w_axis.truncate()));
+        Some(blade)
+    }))?;
+    static BIND: std::sync::OnceLock<Option<Mat4>> = std::sync::OnceLock::new();
+    let hand = (*BIND.get_or_init(|| kh2_anim::Pose::bind(&kh2.rig.skeleton).bones.get(sr).copied()))?;
+    let k = if ratio.is_finite() && ratio > 0.1 { ratio } else { 1.0 };
+    let offset = kh1_bind[RIGHT_HAND].inverse() * scaled(hand, k);
+    let m = kh1[RIGHT_HAND] * offset * scaled(held, k);
+    m.is_finite().then_some(m)
+}
+
+/// KH1's weapon bones (the grip and its chain, `kh1`, model space) moved together so the KH2
+/// blade bone they stand for (as `held_blade` relates them) is at `blade` (KH1's model space):
+/// a Keyblade out of the hand (Limit Form's Strike Raid, `limits`). Returns whether they moved.
+pub fn float_grip(kh1: &mut [Mat4], kh1_bind: &[Mat4], blade: Mat4, ratio: f32) -> bool {
+    let Some(held) = held_blade(kh1, kh1_bind, ratio) else { return false };
+    let turn = held.inverse() * kh1[GRIP];
+    let grip = blade * turn;
+    if !grip.is_finite() {
+        return false;
+    }
+    let inv = kh1[GRIP].inverse();
+    let moved: Vec<Mat4> = (0..WEAPON_BONES).map(|i| grip * inv * kh1[GRIP + i]).collect();
+    kh1[GRIP..GRIP + WEAPON_BONES].copy_from_slice(&moved);
+    true
+}
+
 /// A matrix's turn and place without any scale (its axes made unit and square to each other).
-fn unit(m: Mat4) -> Mat4 {
+pub fn unit(m: Mat4) -> Mat4 {
     let x = m.x_axis.truncate().normalize_or_zero();
     let y = (m.y_axis.truncate() - x * x.dot(m.y_axis.truncate())).normalize_or_zero();
     let z = x.cross(y);
@@ -655,7 +697,7 @@ fn unit(m: Mat4) -> Mat4 {
 }
 
 /// A matrix with its translation times `k` (KH2 units to KH1's).
-fn scaled(m: Mat4, k: f32) -> Mat4 {
+pub fn scaled(m: Mat4, k: f32) -> Mat4 {
     let mut m = m;
     m.w_axis = (m.w_axis.truncate() * k).extend(1.0);
     m

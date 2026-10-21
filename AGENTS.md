@@ -3422,3 +3422,15 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - The user: "change sora's outfit in limit form to have his jumpsuit be black, his belt yellow,
   and his shoes black". `tint::Look::Limit` (was no tint): reds black, the belt's blue a bright
   yellow (new `Op::Paint`), the shoes' yellow / red / blue black. `docs/kh1-tint.md`.
+
+### 2026-10-20: Stage 294 (Strike Raid and Infinity; Last Arcanum's effects on the Keyblade)
+- Strike Raid: the Keyblade thrown as its own spinning, homing attack object (motion 235; KH1's
+  Keyblade drawn where it flies, as Final's float), caught back (234); Raid x3 then Judgment
+  (ATKP 1866 / 1867). Infinity: combo rows 52..56, then Shoot / Impact / Giga Impact by the
+  press frame (push back 50 / 100 / 200, 10 / 17 / 25 spiralling shots). Both from the `limi`
+  script, ungreyed. `kh2-magic` (lib, host), `limits.rs`.
+- The user: "the last arcanum vfx being desyncd from the keyblade": Limit Form's Keyblade anchors
+  used Valor's rule (turned with Sora's facing, from the hand's tip); now the blade's own frame
+  where KH1 draws it (KH2's, as Final's), and script-started effects begin there.
+- A motion the script restarted on its queue's first frame played that frame twice (and its
+  voice); no longer.

@@ -364,8 +364,9 @@ fn row(battle: &Battle, atk: u16, sub: u8, count: u8) -> Option<&Atkp> {
     battle.attack_for_level(atk, sub, count)
 }
 
-/// An unlocked shot's target: the nearest enemy within `AUTO_RANGE` in front of him.
-fn auto_target(w: &KhWorld, facing: f32) -> Option<u32> {
+/// An unlocked shot's target: the nearest enemy within `AUTO_RANGE` in front of him (also Limit
+/// Form's limits' lock-on target with nothing locked, `limits`).
+pub(super) fn auto_target(w: &KhWorld, facing: f32) -> Option<u32> {
     let me = w.objs.first()?;
     let ahead = Vec3::new(facing.sin(), 0.0, facing.cos());
     w.objs

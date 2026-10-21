@@ -8,7 +8,7 @@
 //! return live in per-trap static slots, as in the game, so a script that
 //! keeps the pointer sees it overwritten by the next call.
 
-use glam::{Mat4, Quat, Vec3, Vec4};
+use glam::{EulerRot, Mat3, Mat4, Quat, Vec3, Vec4};
 use kh2_bdx::{BdxError, Cell, CtxId, Host, Vm};
 
 use crate::{flip, Cast, Effect, Event, Magic, MagicAttack, ObjId, Tables, World};
@@ -21,6 +21,10 @@ pub struct Statics {
     roty: u32,
     effect_pos: u32,
     shared: u32,
+    outer: u32,
+    rot: u32,
+    inter: u32,
+    xyzrot: u32,
 }
 
 impl Statics {
@@ -30,7 +34,7 @@ impl Statics {
             vm.mem.set_f32(a + 12, 1.0).ok();
             a
         };
-        Statics { add: slot(), sub: slot(), mul: slot(), roty: slot(), effect_pos: slot(), shared: slot() }
+        Statics { add: slot(), sub: slot(), mul: slot(), roty: slot(), effect_pos: slot(), shared: slot(), outer: slot(), rot: slot(), inter: slot(), xyzrot: slot() }
     }
 }
 
@@ -218,6 +222,26 @@ impl Bridge<'_> {
         vm.mem.set_u32(rec + 8, 0)?;
         vm.mem.set_u32(rec + 12, 2)?;
         Ok(rec)
+    }
+
+    /// A target record set to object `o` (or cleared).
+    fn set_target(&mut self, vm: &mut Vm, rec: u32, o: Option<ObjId>) -> Result<(), BdxError> {
+        let h = match o {
+            Some(o) => obj_record(vm, self.t, o),
+            None => 0,
+        };
+        vm.mem.set_u32(rec, h)?;
+        vm.mem.set_u32(rec + 8, 0)
+    }
+
+    /// Where a target record points (its attack's place, else its object's aim point).
+    fn target_at(&mut self, vm: &Vm, rec: u32) -> Result<Option<Vec3>, BdxError> {
+        let h = vm.mem.u32(rec)?;
+        let atk = vm.mem.u32(rec + 8)?;
+        if let Some(p) = (atk != 0).then(|| self.attack(atk).and_then(|x| x.pos)).flatten() {
+            return Ok(Some(p));
+        }
+        Ok(self.obj_of_handle(h).filter(|o| self.world.exists(*o)).map(|o| self.world.target_point(o)))
     }
 
     /// A thread at code `pc` with `arg`, sharing the work memory of the tree running now.
@@ -625,6 +649,215 @@ impl Host for Bridge<'_> {
             }
             // trap_puts: the script's own log lines.
             (0, 2) => None,
+
+            // --- vectors and random numbers (Limit Form's Strike Raid and Infinity) ---
+            // trap_vector_normalize(v): in place; the length it had.
+            (0, 7) => {
+                let v = vec_in(vm, a(0).v)?;
+                let len = v.truncate().length();
+                if len > 0.0 {
+                    put(vm, a(0).v, (v.truncate() / len).extend(v.w))?;
+                }
+                Some(Cell::float(len))
+            }
+            // trap_random_get(n): 0..n; trap_random_getf(x): 0..x; trap_random_range(a, b).
+            (0, 16) => {
+                let n = a(0).i().max(1);
+                Some(Cell::int(((self.world.random() * n as f32) as i32).clamp(0, n - 1)))
+            }
+            (0, 17) => Some(Cell::float(self.world.random() * a(0).f())),
+            (0, 18) => {
+                let (lo, hi) = (a(0).f(), a(1).f());
+                Some(Cell::float(lo + (hi - lo) * self.world.random()))
+            }
+            (0, 43) => Some(Cell::float(wrap(a(0).f()))),
+            // trap_vector_inter(a, b, t): a toward b by t.
+            (0, 78) => {
+                let (x, y) = (vec_in(vm, a(0).v)?, vec_in(vm, a(1).v)?);
+                put(vm, s.inter, x.lerp(y, a(2).f()))?;
+                Some(Cell::addr(s.inter))
+            }
+            // trap_vector_outer_product(a, b): a × b.
+            (0, 82) => {
+                let (x, y) = (vec_in(vm, a(0).v)?, vec_in(vm, a(1).v)?);
+                put(vm, s.outer, x.truncate().cross(y.truncate()).extend(0.0))?;
+                Some(Cell::addr(s.outer))
+            }
+            // trap_vector_rot(v, axis, angle): v turned about the axis.
+            (0, 83) => {
+                let (v, axis) = (vec_in(vm, a(0).v)?, vec_in(vm, a(1).v)?.truncate().normalize_or_zero());
+                let r = if axis == Vec3::ZERO { v.truncate() } else { Quat::from_axis_angle(axis, a(2).f()) * v.truncate() };
+                put(vm, s.rot, r.extend(v.w))?;
+                Some(Cell::addr(s.rot))
+            }
+            (0, 91) => {
+                let (x, y) = (vec_in(vm, a(0).v)?, vec_in(vm, a(1).v)?);
+                Some(Cell::float(x.truncate().dot(y.truncate())))
+            }
+
+            // --- an object's weapon as an object (Strike Raid's thrown Keyblade, `Loose`) ---
+            // trap_party_get_weapon(obj, n): its handle.
+            (1, 234) => {
+                let w = self.obj_of_ref(vm, a(0).v).and_then(|o| self.world.weapon(o, a(1).v));
+                Some(Cell::addr(match w {
+                    Some(w) => obj_record(vm, self.t, w),
+                    None => 0,
+                }))
+            }
+            // trap_party_hand_to_bone(obj, n): the hand's bone (ours: none to name, the host's
+            // weapon goes back to its own hand).
+            (1, 235) => Some(Cell::int(0)),
+            (1, 161) => Some(b(self.obj_of_ref(vm, a(0).v).map_or(true, |o| self.world.attached(o)))),
+            (1, 102) => {
+                if let Some(o) = self.obj_of_ref(vm, a(0).v) {
+                    self.world.detach(o);
+                }
+                None
+            }
+            // trap_obj_attach(obj, to, bone, ...).
+            (1, 18) => {
+                if let (Some(o), Some(to)) = (self.obj_of_ref(vm, a(0).v), self.obj_of_ref(vm, a(1).v)) {
+                    self.world.attach(o, to);
+                }
+                None
+            }
+            // trap_obj_motion_sync / _unsync (obj, weapon): the weapon's motion following its
+            // holder's; ours, nothing (the host poses a held weapon by its holder's motion).
+            (1, 126) | (1, 236) => None,
+            (1, 148) => {
+                let p = host(vec_in(vm, a(1).v)?);
+                if let Some(o) = self.obj_of_ref(vm, a(0).v) {
+                    self.world.set_pos(o, p);
+                }
+                None
+            }
+            // trap_obj_move_request(obj, dir, speed): moved by dir × speed this frame.
+            (1, 89) => {
+                let d = flip(vec_in(vm, a(1).v)?.truncate()).normalize_or_zero();
+                if let Some(o) = self.obj_of_ref(vm, a(0).v) {
+                    self.world.move_by(o, d * a(2).f() * ft);
+                }
+                None
+            }
+            // trap_strike_raid_calc_xyzrot(dir, up) (exe `0x14053EF90`): the turn of an object
+            // facing `dir` with `up` as its up, as Euler angles (ours: X, then Y, then Z, as the
+            // bones' and `trap_obj_set_xyzrot`'s); `up` is written back square to `dir`.
+            (6, 68) => {
+                let (dir, up) = (a(0).v, a(1).v);
+                let d = vec_in(vm, dir)?.truncate().normalize_or_zero();
+                let mut r = vec_in(vm, up)?.truncate().normalize_or_zero();
+                if r == d {
+                    r = Vec3::NEG_Y;
+                }
+                let mut x = r.cross(d).normalize_or_zero();
+                // (Ours: an `up` along `dir` is no up at all; the world's is taken. The game's
+                // cross product is then zero.)
+                if x == Vec3::ZERO {
+                    x = Vec3::NEG_Y.cross(d).normalize_or_zero();
+                    if x == Vec3::ZERO {
+                        x = Vec3::X;
+                    }
+                }
+                let z = -d;
+                put(vm, up, d.cross(x).extend(0.0))?;
+                let y = z.cross(x).normalize_or_zero();
+                let m = Mat3::from_cols(x, y, z);
+                let (rz, ry, rx) = Quat::from_mat3(&m).normalize().to_euler(EulerRot::ZYX);
+                put(vm, s.xyzrot, Vec4::new(rx, ry, rz, 0.0))?;
+                Some(Cell::addr(s.xyzrot))
+            }
+            // trap_obj_set_xyzrot(obj, rot): its turn (game axes) to ours.
+            (8, 2) => {
+                let v = vec_in(vm, a(1).v)?;
+                let m = Mat3::from_quat(Quat::from_euler(EulerRot::ZYX, v.z, v.y, v.x));
+                let f = Mat3::from_diagonal(Vec3::new(1.0, -1.0, 1.0));
+                if let Some(o) = self.obj_of_ref(vm, a(0).v) {
+                    self.world.set_rotation(o, f * m * f);
+                }
+                None
+            }
+            // trap_obj_effect_start_bind_other(obj, element, other, ...): obj's element, bound to
+            // `other` (the thrown Keyblade's trail).
+            (1, 149) => {
+                let owner = self.obj_of_ref(vm, a(2).v);
+                let pax = self.t.pax_rec;
+                Some(Cell::addr(self.start_effect(vm, pax, a(1).v as u16, owner)))
+            }
+            // trap_obj_effect_start_pos(obj, element, pos, ...): unbound, there.
+            (1, 22) => {
+                let p = host(vec_in(vm, a(2).v)?);
+                let pax = self.t.pax_rec;
+                let rec = self.start_effect(vm, pax, a(1).v as u16, None);
+                if let Some(e) = self.effect(rec) {
+                    e.placed = Some(p);
+                    e.pos = p;
+                }
+                Some(Cell::addr(rec))
+            }
+            // trap_attack_set_obj_pax(attack, obj): its hit effects from obj's (not drawn).
+            (2, 22) => None,
+
+            // --- targets (Infinity's shots, Strike Raid's throw) ---
+            // trap_btlobj_lockon_target(obj): a record holding its lock-on target (0: none).
+            (2, 56) => {
+                let t = self.obj_of_ref(vm, a(0).v).and_then(|o| self.world.target_of(o)).filter(|o| self.world.exists(*o));
+                let rec = vm.mem.alloc(16);
+                let h = match t {
+                    Some(o) => obj_record(vm, self.t, o),
+                    None => 0,
+                };
+                vm.mem.set_u32(rec, h)?;
+                Some(Cell::addr(rec))
+            }
+            // trap_target_set_obj(target, obj).
+            (1, 160) => {
+                let o = if a(1).v == 0 { None } else { self.obj_of_ref(vm, a(1).v) };
+                self.set_target(vm, a(0).v, o)?;
+                None
+            }
+            (6, 16) => {
+                self.set_target(vm, a(0).v, None)?;
+                None
+            }
+            (6, 57) => Some(Cell::int(0)),
+            // trap_target_dist(target, pos).
+            (6, 9) => {
+                let p = host(vec_in(vm, a(1).v)?);
+                let d = self.target_at(vm, a(0).v)?.map_or(f32::MAX, |t| t.distance(p));
+                Some(Cell::float(d))
+            }
+            // trap_target_searcher_init(searcher, n); _search(searcher, target, pos, dir, ...): the
+            // nearest enemy within the searcher's range ([+16], [+20]) it hasn't found yet (ours:
+            // KH2's own choice isn't traced); _get_old(searcher, target, i): its find i.
+            (6, 3) => {
+                self.t.searchers.insert(a(0).v, Vec::new());
+                None
+            }
+            (6, 5) => {
+                let rec = a(0).v;
+                let (lo, hi) = (vm.mem.f32(rec + 16)?, vm.mem.f32(rec + 20)?);
+                let p = host(vec_in(vm, a(2).v)?);
+                let found = self.t.searchers.get(&rec).cloned().unwrap_or_default();
+                let pick = self
+                    .world
+                    .foes()
+                    .into_iter()
+                    .filter(|o| self.world.exists(*o) && !found.contains(o))
+                    .map(|o| (o, self.world.target_point(o).distance(p)))
+                    .filter(|(_, d)| *d >= lo && (hi <= lo || *d <= hi))
+                    .min_by(|x, y| x.1.total_cmp(&y.1))
+                    .map(|x| x.0);
+                if let Some(o) = pick {
+                    self.t.searchers.entry(rec).or_default().push(o);
+                }
+                self.set_target(vm, a(1).v, pick)?;
+                None
+            }
+            (6, 12) => {
+                let o = self.t.searchers.get(&a(0).v).and_then(|l| l.get(a(2).i().max(0) as usize).copied());
+                self.set_target(vm, a(1).v, o)?;
+                None
+            }
             (2, 21) => {
                 let key = (a(0).v, a(1).v);
                 let r = match self.t.teamwork.get(&key) {

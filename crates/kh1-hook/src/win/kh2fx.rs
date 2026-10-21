@@ -429,8 +429,11 @@ pub fn spell_start(level: u8, el: u16) -> Option<u32> {
     let Ok(mut g) = STATE.lock() else { return None };
     let s = g.as_mut()?;
     let tip = s.tip_local;
-    let sp = s.spell.get_mut((level as usize).wrapping_sub(1))?.as_mut()?;
-    let h = sp.fx.start(el, &mut |c| bone(c, tip))?;
+    let package = (level as usize).wrapping_sub(1);
+    let sp = s.spell.get_mut(package)?.as_mut()?;
+    // (Started where it then follows: a form's on its weapon anchors, `package_bone`. On Sora's
+    // own codes, `bone`, a form's element began at his hand's tip, then jumped to the Keyblade.)
+    let h = sp.fx.start(el, &mut |c| package_bone(package, c, tip))?;
     Some(spell_handle(level, h))
 }
 
@@ -539,6 +542,16 @@ fn form_bone(code: u16, tip_local: Vec3) -> Option<Mat4> {
     if super::form::in_final() {
         return final_weapon_point(second, along);
     }
+    // Limit Form's are KH2's own as Final's: its one Keyblade's blade bone where KH1 draws it (in
+    // his hand or thrown, `limits::drawn_blade`), its turn included. With the Valor rule below
+    // (the point, Sora's facing) the glow Last Arcanum's script puts on the Keyblade (elements 35
+    // and 36, on its root and tip, 6 and 28 along the blade's x) pointed along his facing, off the
+    // Keyblade (the user: "the last arcanum vfx being desyncd from the keyblade").
+    if super::form::in_limit() {
+        if let Some(blade) = super::limits::drawn_blade().or_else(kh2_blade_now) {
+            return Some(blade * Mat4::from_translation(TIP_IN_BLADE * along));
+        }
+    }
     let _ = tip_local;
     let right_root = {
         let g = super::takeover::POSE.try_lock().ok()?;
@@ -569,6 +582,16 @@ fn form_bone(code: u16, tip_local: Vec3) -> Option<Mat4> {
 /// The tip in KH2's Keyblade blade bone's frame: W_EX010's type-0xF collision point (bone 2, at
 /// [-78, 0, 0]: the blade runs along the bone's -x), the same model in both hands.
 const TIP_IN_BLADE: Vec3 = Vec3::new(-78.0, 0.0, 0.0);
+
+/// KH2's own blade bone of the last step (its right Keyblade), by Sora's last placement.
+fn kh2_blade_now() -> Option<Mat4> {
+    let b = {
+        let g = super::takeover::POSE.try_lock().ok()?;
+        let w = &g.as_ref()?.1;
+        *w.get(super::leftblade::KH2_BLADE).or(w.first())?
+    };
+    super::pose::kh2_pose(|_, w| *w * b)
+}
 
 /// Final Form's weapon point (`form_bone`): Keyblade `second`'s blade bone as drawn, moved
 /// `along` the way to its tip (0 the point itself, 0x4005 / 0x4006).
