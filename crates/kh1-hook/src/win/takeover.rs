@@ -1353,6 +1353,8 @@ unsafe fn scene_frame(actor: usize, event: bool) {
     if !long || !(super::form::in_form() || super::form::busy()) {
         return;
     }
+    // (A limit under way in the form: `form::scene_revert` waits for its end, the run counting
+    // on, so a scene still on after the limit ends the form on its first frame after it.)
     let Some(kh2) = pose::kh2() else { return };
     let Ok(mut g) = DRIVER.try_lock() else { return };
     let Some(d) = g.as_mut() else { return };
@@ -1412,7 +1414,13 @@ unsafe fn takeover(actor: usize) -> bool {
     let (stale, what) = if rd::<u32>(actor) & 0x0100_0000 != 0 { stale_hold(base, actor, script, frozen) } else { (false, "") };
     let held_by_script = rd::<u32>(actor) & 0x0100_0000 != 0 && !stale;
     SCRIPTED.store(script != 0 || held_by_script, Ordering::Relaxed);
-    if script != 0 || held_by_script {
+    // (Not while one of KH1's limits runs in Limit Form: its limit module sets the hold bit for
+    // the whole limit (the user's log, s313: Strike Raid, flags 0130c087 / 01308087, no script
+    // actions), and taken as a script here it was a scene: `scene_frame` counted it and reverted
+    // the form 2.5 s in, mid-limit, and the limit's own branch below (the drain, the hand-off's
+    // frames) never ran. The limit's branch has him instead; `SCRIPTED` is kept as KH1 set it, so
+    // the camera and the drawing are as before.)
+    if (script != 0 || held_by_script) && !super::limits::kh1_limit_holds() {
         let mut kinds = Vec::new();
         let mut a = script;
         while a > 0x10000 && kinds.len() < 8 {

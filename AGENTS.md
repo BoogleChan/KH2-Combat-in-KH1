@@ -3584,6 +3584,13 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   bounce, the swing goes on. Ini `walls = kh1 | clink | pass` (default kh1; `wall_clink` no longer
   read). Enemies' guards clink as before. `docs/kh1-clash.md`.
 
+### 2026-10-21: Stage 314 (Limit Form no longer reverts mid-limit)
+- The user: "Limit from has a bug where sora will be reverted to base sora in the middle of a KH1 Limit".
+  KH1's limit sets the script-hold bit 0x01000000; takeover's script check ran before
+  `kh1_limit_holds()`, so `scene_frame` reverted after 2.5 s (Strike Raid's follow-ups). Now the
+  limit's branch takes him; `form::limit_under_way()` defers scene, out-of-MP and Revert-command
+  reverts until the limit ends (KO and world change still at once). docs/drive-model.md.
+
 ### 2026-10-21: Stage 313 (KH2 camera through door exits; footsteps on walk and run only)
 - The user (video, Coliseum Gates -> Lobby): "several rooms in the game have this camera glitch with the
   KH2 style camera enabled". The scene start handed the follow camera to KH1 with FOV 76.1 -> 53 for a

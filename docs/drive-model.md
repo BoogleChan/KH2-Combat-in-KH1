@@ -749,6 +749,27 @@ lists (`.hed` names). Nothing of it is in the repository.
     and `can_change_form`, so it comes on the first frame after the limit. Before this, every
     KH1 move in a form paused the drain, because the drain ran only in KH2's steps. That is still
     so for items and Wisdom / Final's KH1 spells.
+  - **Never reverted mid-limit (fixed after s313).** The user: "Limit from has a bug where sora will be
+    reverted to base sora in the middle of a KH1 Limit". The log (s313, every Strike Raid in Limit
+    Form): KH1's limit sets Sora's script-hold bit `0x1000000` for the whole limit (flags
+    `0130c087` / `01308087`, no script actions at `+0x440`). `takeover` read that as KH1's area
+    script holding him before it reached the limit's branch, so `scene_frame` counted the limit
+    as a scene in battle and, 2.5 s in, `form::scene_revert` reverted the form ("Revert (KH1 has
+    had Sora 2.5 s for a scene out of a battle (its script holds him))"), right after Strike
+    Raid's follow-up. It also meant the limit's branch (the drain, the hand-off's frames) never
+    ran for a limit that sets the bit. Now:
+    - while `limits::kh1_limit_holds`, the script-hold test is skipped and the limit's branch has
+      him (`SCRIPTED` is still stored as KH1 set it, so the camera and `pose` are unchanged);
+    - `form::limit_under_way` (a KH1 limit in Limit Form, or KH2's own Limit commands if
+      `KH2_LIMITS` is turned back on) puts off every revert but a knock-out or a new world: a
+      scene's (`scene_revert`), out of MP (`before_step`, as KH2's gauge running out mid-limit
+      ends the form only after it), and the Revert command (kept for the limit's end). The log
+      says "Drive: the revert (...) waits: a limit is under way in Limit Form" once, and "Drive:
+      the revert put off during a limit (...) taken now" when it comes; a scene that ended with
+      the limit leaves the form on ("... no longer asks: the form stays").
+    - Other forms: unchanged. No log showed the scene revert firing on magic or summons in them
+      (the one other scene revert in the logs, s310 in Valor Form, is the stale-hold case after a
+      battle scene, `stale_hold`).
   - **Its end.** Once bit 16 clears, the hand-off decides as at a KH1 command's end. The
     hand-off's frames count on through the limit, so the end is taken as soon as KH1 lets him go.
     On the ground, KH2 takes him on KH1's idle, the stick, an Attack, a jump or Square. In the
@@ -779,7 +800,9 @@ lists (`.hed` names). Nothing of it is in the repository.
     takes him back cleanly after, on the ground and in the air; that bit 16 covers the whole
     limit (if KH1 drops it early, the hand-off's cuts could take him mid-limit); that the takeover
     runs on KH1's limit frames (the drain runs from there);
-  - the MP drain and the out-of-MP revert through a KH1 limit;
+  - the MP drain and the out-of-MP revert through a KH1 limit; that no limit (Strike Raid's
+    throws and follow-ups in particular) reverts the form part way, and a revert put off comes
+    on the first frame after it;
   - Ripple Drive's body group 20 shapes on KH1's contact code;
   - Zantetsuken's power 600 against KH1's enemies;
   - Sora's `plyr` stand-in.

@@ -595,6 +595,26 @@ pub struct Drive {
     revert: bool,
     /// The form the change under way goes to.
     changing_to: Option<Kind>,
+    /// A revert (out of MP, the Revert command, a scene) put off because a limit was under way
+    /// (`limit_under_way`): logged once when put off, and again when taken.
+    waited: Option<&'static str>,
+}
+
+/// A limit is under way in Limit Form: one of KH1's (KH1 has him, `limits::kh1_limit_holds`), or
+/// KH2's own (`limits::running`, with `limits::KH2_LIMITS` on). KH2 never reverts a form in the
+/// middle of a limit: out of gauge, the form ends when the limit has (the user: "Limit from has a
+/// bug where sora will be reverted to base sora in the middle of a KH1 Limit"). Only a knock-out
+/// or a new world reverts meanwhile.
+pub fn limit_under_way() -> bool {
+    super::limits::kh1_limit_holds() || in_limit() && super::limits::running()
+}
+
+/// Puts off a revert for `why` while a limit is under way (`limit_under_way`), logged once.
+fn defer(d: &mut Drive, why: &'static str) {
+    if d.waited.is_none() {
+        log(&format!("Drive: the revert ({why}) waits: a limit is under way in {}", d.form.as_ref().map_or("the form", |f| f.kind.name())));
+    }
+    d.waited = Some(why);
 }
 
 struct InForm {
@@ -776,6 +796,12 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
         }
         // (Never in Anti Form, which has no Revert: `choose` refuses it already.)
         2 if d.form.as_ref().is_some_and(|f| f.kind != Kind::Anti) => {
+            // (Not mid-limit: kept for its end.)
+            if limit_under_way() {
+                REQUEST.store(2, Ordering::Relaxed);
+                defer(d, "the Revert command");
+                return;
+            }
             revert(d, ch, anim, kh2, "the Revert command");
             return;
         }
@@ -790,7 +816,18 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
         }
         return;
     }
+    // (A scene's revert put off during a limit, the scene gone by its end: the form stays.)
+    if d.waited.is_some() && !d.revert && !limit_under_way() {
+        log(&format!("Drive: the limit over, the revert put off during it ({}) no longer asks: the form stays", d.waited.unwrap_or("?")));
+        d.waited = None;
+    }
     if d.revert && ch.can_change_form() {
+        // (Not mid-limit: KH2's own limits run under KH2's step, `limits`; KH1's have him away
+        // from it, so this comes on the first frame after one anyway.)
+        if limit_under_way() {
+            defer(d, "out of MP");
+            return;
+        }
         d.revert = false;
         revert(d, ch, anim, kh2, "out of MP");
     }
@@ -855,6 +892,9 @@ unsafe fn revert(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     d.change = None;
     d.revert = false;
     d.changing_to = None;
+    if let Some(waited) = d.waited.take() {
+        log(&format!("Drive: the revert put off during a limit ({waited}) taken now"));
+    }
     let Some(f) = d.form.take() else {
         // (Out of the change: its partners back.)
         super::vanish::frame();
@@ -883,8 +923,13 @@ unsafe fn revert(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
 /// in a new world (KH2 reverts a form when a battle ends in a scene; the user, s307: Wisdom's look
 /// stayed on under KH1's own animations after Opposite Armor fell). His own look and stats come
 /// back now, not on KH2's next step (which waits for KH1 to let him go). Anti Form too.
+/// Never mid-limit (`limit_under_way`): put off until the limit's end, as KH2 does.
 pub unsafe fn scene_revert(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &pose::Kh2, actor: usize, why: &str) {
     if d.form.is_none() && d.change.is_none() {
+        return;
+    }
+    if limit_under_way() {
+        defer(d, "a scene");
         return;
     }
     revert(d, ch, anim, kh2, why);
@@ -994,7 +1039,11 @@ pub unsafe fn drain(d: &mut Drive, actor: usize, battle: bool) {
     }
     if !super::reflect::has_mp(actor, 1) && !d.revert {
         d.revert = true;
-        log(&format!("{}: out of MP{}", f.kind.name(), if super::limits::kh1_limit_holds() { " during KH1's limit (the revert waits for its end, KH2 having him)" } else { "" }));
+        let mid = limit_under_way();
+        log(&format!("{}: out of MP{}", f.kind.name(), if mid { " during a limit (the revert waits for its end, KH2 having him)" } else { "" }));
+        if mid {
+            defer(d, "out of MP");
+        }
     }
 }
 
