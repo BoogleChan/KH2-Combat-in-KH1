@@ -3484,3 +3484,14 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - The user: "his secondary keyblade's trail actually follows the keyblade": the left trail used
   Valor's timings in every form and lagged a frame; now each form's own left-blade timings,
   refreshed right after the blade is posed, and only during moves.
+
+### 2026-10-21: Stage 301 (Master's KH1 spells travel; forms' growth from learned abilities)
+- The user: Master's KH1 magic "doesn't actually move sora at all. same goes for aerial magic".
+  KH2-cast spells already travelled; the KH1-spell path (`form_cast_frame`, Wisdom's / Final's)
+  never read the cast motion's root travel. Now it moves him along it (KH1's mover, his facing;
+  height held through the no-gravity frames), his speed going in kept only with an allow-movement
+  or keep-momentum window (Master has neither), the travel taken out of the drawn pose. Only
+  Master's Gravity (Thunder's motion, ~1050) travels; Final, Wisdom unchanged.
+- The user: a form's growth ability one above base Sora's "EVEN IF SORA DOESNT ACTIVELY HAVE
+  QUICK RUN EQUIPPED": `growth::Kh1Sora::learned` (every ability in his lists counted as on),
+  `menu::LEARNED`, `form::growth_of`.

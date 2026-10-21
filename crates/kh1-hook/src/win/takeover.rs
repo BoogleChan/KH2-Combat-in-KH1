@@ -833,7 +833,23 @@ pub fn command_started(shots: usize, spell: Option<u8>) {
         // (His speed going in, KH2's last frame: no halt at the cast's start, the user.)
         let v = with_kh2(|_, o| [o.displacement[0], o.displacement[2]]).unwrap_or([0.0; 2]);
         let v = if v[0].is_finite() && v[1].is_finite() && v[0].hypot(v[1]) < 40.0 { v } else { [0.0; 2] };
-        Some(FormCast { len: clip.length, react, allow, accel: p.acceleration, brake: p.brake, walk: p.walk_speed, run: p.run_speed, threshold: p.run_threshold, v, air, air_keep: p.air_keep })
+        // A cast motion that travels (its root curve: Master Form's D372 under Thunder's ids,
+        // Gravity's here, ~1050 units): KH1's mover takes him along it, as KH2's own casts
+        // move him (`Character::step`'s root motion; the user: "Master form does the correct
+        // animation, but it doesn't actually move sora at all. same goes for aerial magic").
+        // Its speed going in is kept only where the motion lets him move (an allow-movement or
+        // keep-momentum range: Final's, Wisdom's), as `Character::cast` keeps it; else the root
+        // travel is his movement. (No other form's KH1-spell motions travel: Wisdom's, Final's
+        // and base Sora's C/E/A 36x / 37x for Thunder and Cure have no root curve.)
+        let travel = travels(clip);
+        let keeps = clip.windows.iter().any(|w| matches!(w.kind, character_core::WindowKind::AllowMovement | character_core::WindowKind::KeepMomentum));
+        let v = if travel && !keeps { [0.0; 2] } else { v };
+        let no_gravity = clip.windows.iter().find(|w| matches!(w.kind, character_core::WindowKind::NoGravity)).map(|w| (w.start, w.end.unwrap_or(clip.length)));
+        if travel {
+            let end = clip.root.last().copied().unwrap_or([0.0; 3]);
+            log(&format!("  its motion travels {:.0} (root at its end {end:.0?}), no gravity {no_gravity:?}; his speed going in {}", end[0].hypot(end[2]), if keeps { "kept" } else { "dropped" }));
+        }
+        Some(FormCast { len: clip.length, react, allow, accel: p.acceleration, brake: p.brake, walk: p.walk_speed, run: p.run_speed, threshold: p.run_threshold, v, air, air_keep: p.air_keep, kind: casting, motion, travel, no_gravity, hold_y: None })
     });
     if let Ok(mut f) = FORM_CAST.lock() {
         *f = fc;
@@ -857,16 +873,60 @@ struct FormCast {
     air: bool,
     /// The form's air steering (`air_keep`: the share of his air speed kept each step).
     air_keep: f32,
+    /// Whose cast motion (`None`: base Sora's) and its id, for its root curve (`cast_clip`).
+    kind: Option<super::form::Kind>,
+    motion: u16,
+    /// The motion travels (its root curve, `ROOT_TRAVEL_MIN`): KH1's mover takes him along it.
+    travel: bool,
+    /// Its no-gravity range (frames): a travelling cast holds his height there in the air, as
+    /// KH2 holds him in the form's own air casts; KH1's fall after it.
+    no_gravity: Option<(u32, u32)>,
+    /// The height (KH1's y) a travelling air cast holds him at, from its first air frame.
+    hold_y: Option<f32>,
 }
 
 static FORM_CAST: Mutex<Option<FormCast>> = Mutex::new(None);
 
+/// A cast motion's root curve this far off its start (units, on the ground plane) counts as
+/// travel (`FormCast::travel`).
+const ROOT_TRAVEL_MIN: f32 = 1.0;
+
+/// The clip travels (`ROOT_TRAVEL_MIN`): a form's KH1 cast on it moves him along its root curve
+/// (`form_cast_frame`), and the pose drawn has that travel taken out (`pose::follow_play`).
+pub fn travels(clip: &character_core::Clip) -> bool {
+    clip.root.iter().any(|r| r[0].hypot(r[2]) > ROOT_TRAVEL_MIN)
+}
+
+/// The clip of a form's KH1 cast (`FormCast`): the form's moveset's, or base Sora's.
+fn cast_clip(kind: Option<super::form::Kind>, motion: u16) -> Option<&'static character_core::Clip> {
+    let kh2 = pose::kh2()?;
+    let ch = match kind {
+        Some(k) => &k.data(kh2)?.character,
+        None => &kh2.character,
+    };
+    ch.moveset.clips.get(&motion)
+}
+
+/// A clip's root travel at frame `f` (its root curve's step to the next frame, the motion's own
+/// x right / z forward), turned to KH1's facing (yaw `+0x3C`), KH1 x / z; and its rise (y up).
+unsafe fn root_step(actor: usize, clip: &character_core::Clip, f: u32) -> ([f32; 2], f32) {
+    let d = clip.root_delta(f);
+    let yaw = rd::<f32>(actor + 0x3C);
+    // (As `Character::step`: forward (sin, cos), right (cos, -sin).)
+    let fw = [yaw.sin(), yaw.cos()];
+    let right = [fw[1], -fw[0]];
+    ([d[0] * right[0] + d[2] * fw[0], d[0] * right[1] + d[2] * fw[1]], d[1])
+}
+
 /// One frame of a form's KH1 cast (`frames` into it): on the ground he moves as the form's cast
 /// motion lets him (the stick in its allow-movement range with the form's inertia, braking after),
-/// through KH1's mover. Returns the cast's (length, input window).
+/// through KH1's mover, and along the motion's own root travel where it has one (Master's,
+/// `FormCast::travel`), on the ground and in the air. Returns the cast's (length, input window).
 unsafe fn form_cast_frame(actor: usize, frames: u32) -> Option<(u32, u32)> {
     let mut g = FORM_CAST.try_lock().ok()?;
     let fc = g.as_mut()?;
+    // The motion's own travel this frame (Master's casts), on top of the slide.
+    let (root, rise) = fc.travel.then(|| cast_clip(fc.kind, fc.motion)).flatten().map_or(([0.0; 2], 0.0), |c| root_step(actor, c, frames));
     if !fc.air && rd::<i32>(actor + 0x70) == 0 {
         let tilt = move_tilt();
         let dir = stick_dir(actor, tilt);
@@ -884,10 +944,11 @@ unsafe fn form_cast_frame(actor: usize, frames: u32) -> Option<(u32, u32)> {
                 if b[0].hypot(b[1]) < 0.05 { [0.0; 2] } else { b }
             };
         }
-        if fc.v[0] != 0.0 || fc.v[1] != 0.0 {
+        let step = [fc.v[0] + root[0], fc.v[1] + root[1]];
+        if step[0] != 0.0 || step[1] != 0.0 {
             let base = BASE.load(Ordering::Relaxed);
             let mv: MoveFn = std::mem::transmute(base + MOVE_RVA);
-            mv(actor, &[fc.v[0], 0.0, fc.v[1], 0.0], 0);
+            mv(actor, &[step[0], 0.0, step[1], 0.0], 0);
         }
     }
     // In the air (KH1's jump or fall state): he keeps the speed he had going in, as KH2's air
@@ -905,11 +966,29 @@ unsafe fn form_cast_frame(actor: usize, frames: u32) -> Option<(u32, u32)> {
             let k = fc.air_keep.clamp(0.0, 1.0);
             fc.v = [fc.v[0] * k + t.x * (1.0 - k), fc.v[1] * k + t.y * (1.0 - k)];
         }
-        wr(actor + 0x3C0, [0.0f32; 4]);
-        if fc.v[0] != 0.0 || fc.v[1] != 0.0 {
+        // A travelling cast (Master's) as KH2 has the form's own air casts: along its root
+        // travel, his height held through the motion's no-gravity range (KH1's y down; its fall
+        // speed `+0x3C4` cleared there), then KH1's fall from rest (its fall speed left to grow).
+        let y = rd::<f32>(actor + 0x14);
+        let held = fc.travel && fc.no_gravity.is_some_and(|(a, b)| (a..b).contains(&frames));
+        let dy = if fc.travel {
+            let target = fc.hold_y.unwrap_or(y) - rise;
+            fc.hold_y = Some(if held { target } else { y - rise });
+            if held { target - y } else { -rise }
+        } else {
+            0.0
+        };
+        if fc.travel && !held {
+            wr(actor + 0x3C0, 0.0f32);
+            wr(actor + 0x3C8, [0.0f32; 2]);
+        } else {
+            wr(actor + 0x3C0, [0.0f32; 4]);
+        }
+        let step = [fc.v[0] + root[0], fc.v[1] + root[1]];
+        if step[0] != 0.0 || step[1] != 0.0 || dy != 0.0 {
             let base = BASE.load(Ordering::Relaxed);
             let mv: MoveFn = std::mem::transmute(base + MOVE_RVA);
-            mv(actor, &[fc.v[0], 0.0, fc.v[1], 0.0], 0);
+            mv(actor, &[step[0], dy, step[1], 0.0], 0);
         }
         static N: AtomicU32 = AtomicU32::new(0);
         if frames == 0 && N.fetch_add(1, Ordering::Relaxed) < 20 {

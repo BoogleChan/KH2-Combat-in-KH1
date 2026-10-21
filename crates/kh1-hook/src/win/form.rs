@@ -554,10 +554,26 @@ fn growth_up(level: u8) -> u8 {
 }
 const GROWTH_MAX: u8 = 4;
 
+/// Base Sora's growth levels for a form's own (`growth_up`): what he has learned, equipped or not
+/// (the user: "wisdom form should have lv2 EVEN IF SORA DOESNT ACTIVELY HAVE QUICK RUN EQUIPPED";
+/// `menu::LEARNED`), at least what he has on.
+fn growth_of(sora: &Abilities) -> Abilities {
+    let mut a = sora.clone();
+    if let Some(l) = super::menu::LEARNED.lock().ok().and_then(|l| l.clone()) {
+        a.high_jump = a.high_jump.max(l.high_jump);
+        a.quick_run = a.quick_run.max(l.quick_run);
+        a.aerial_dodge = a.aerial_dodge.max(l.aerial_dodge);
+        a.glide = a.glide.max(l.glide);
+        a.dodge_roll = a.dodge_roll.max(l.dodge_roll);
+    }
+    a
+}
+
 /// The form's abilities (KH2's, exe): Sora's support abilities carry over, his action and
 /// growth ones don't; the form's own growth ability at its level; every combo row of the form's
 /// table unlocked.
 fn form_abilities(sora: &Abilities, form: &Character, kind: Kind) -> Abilities {
+    let learned = growth_of(sora);
     let mut a = Abilities {
         // (Never in Anti Form: the user, "you shouldnt be able to guard in anti form".)
         // (Only with a guard window in its motion 42: Master's 42 is its repel's clip, D350, as its
@@ -575,13 +591,14 @@ fn form_abilities(sora: &Abilities, form: &Character, kind: Kind) -> Abilities {
         combo_master: sora.combo_master,
         one_swing_on_miss: sora.one_swing_on_miss,
         // Each form's growth ability (Valor High Jump, Wisdom Quick Run, Limit Dodge Roll, Master
-        // Aerial Dodge, Final Glide) one level above base Sora's, MAX at most (`growth_up`). Anti has none (00battle `fmlv`'s Anti
+        // Aerial Dodge, Final Glide) one level above base Sora's learned level, equipped or not
+        // (`growth_of`), MAX at most (`growth_up`). Anti has none (00battle `fmlv`'s Anti
         // rows give no ability at any level), so none of Sora's growth abilities either.
-        high_jump: if kind == Kind::Valor { growth_up(sora.high_jump) } else { 0 },
-        quick_run: if kind == Kind::Wisdom { growth_up(sora.quick_run) } else { 0 },
-        aerial_dodge: if kind == Kind::Master { growth_up(sora.aerial_dodge) } else { 0 },
-        glide: if kind == Kind::Final { growth_up(sora.glide) } else { 0 },
-        dodge_roll: if kind == Kind::Limit { growth_up(sora.dodge_roll) } else { 0 },
+        high_jump: if kind == Kind::Valor { growth_up(learned.high_jump) } else { 0 },
+        quick_run: if kind == Kind::Wisdom { growth_up(learned.quick_run) } else { 0 },
+        aerial_dodge: if kind == Kind::Master { growth_up(learned.aerial_dodge) } else { 0 },
+        glide: if kind == Kind::Final { growth_up(learned.glide) } else { 0 },
+        dodge_roll: if kind == Kind::Limit { growth_up(learned.dodge_roll) } else { 0 },
         ..sora.clone()
     };
     a.equipped = form.moveset.combo_rows.iter().map(|r| r.ability).filter(|&x| x != 0).collect();
@@ -720,7 +737,7 @@ unsafe fn arrive(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     if ch.clip_exists(ARRIVE_MOTION) {
         ch.play_held(ARRIVE_MOTION, true);
     }
-    let lv = (sora.clone(), own.clone());
+    let lv = (growth_of(&sora), own.clone());
     d.form = Some(InForm { kind, left: 0, sora, own, logged_s: 0, world: world_now() });
     CURRENT.store(kind.code(), Ordering::Relaxed);
     IN_FORM.store(true, Ordering::Relaxed);
@@ -741,7 +758,7 @@ unsafe fn arrive(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
             return;
         }
     };
-    log(&format!("{} (Lv{LEVEL}): yellow MP drained 1 every {DRAIN_FRAMES} frames of battle (half as fast out of it), {growth} level {form_lv} (Sora's {sora_lv}, one above, 4 = MAX)", kind.name()));
+    log(&format!("{} (Lv{LEVEL}): yellow MP drained 1 every {DRAIN_FRAMES} frames of battle (half as fast out of it), {growth} level {form_lv} (Sora's learned {sora_lv}, equipped or not; one above, 4 = MAX)", kind.name()));
 }
 
 /// Back to Sora: what played is cut, he is free with his movement (the user: on the ground
@@ -784,11 +801,11 @@ pub fn abilities(d: &mut Drive, ch: &mut Character) {
             own.combo_master = f.sora.combo_master;
             // (Its growth ability follows Sora's: one level above.)
             match f.kind {
-                Kind::Valor => own.high_jump = growth_up(f.sora.high_jump),
-                Kind::Wisdom => own.quick_run = growth_up(f.sora.quick_run),
-                Kind::Limit => own.dodge_roll = growth_up(f.sora.dodge_roll),
-                Kind::Master => own.aerial_dodge = growth_up(f.sora.aerial_dodge),
-                Kind::Final => own.glide = growth_up(f.sora.glide),
+                Kind::Valor => own.high_jump = growth_up(growth_of(&f.sora).high_jump),
+                Kind::Wisdom => own.quick_run = growth_up(growth_of(&f.sora).quick_run),
+                Kind::Limit => own.dodge_roll = growth_up(growth_of(&f.sora).dodge_roll),
+                Kind::Master => own.aerial_dodge = growth_up(growth_of(&f.sora).aerial_dodge),
+                Kind::Final => own.glide = growth_up(growth_of(&f.sora).glide),
                 // (No growth ability of its own.)
                 Kind::Anti => {}
             }

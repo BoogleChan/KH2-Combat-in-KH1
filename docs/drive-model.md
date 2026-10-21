@@ -820,6 +820,13 @@ Nothing of it is in the repository.
   meanwhile: Fire 1097 / 1096, Blizzard 1066 / 1065, Thunder 1098 (left), Cure 1099 (left),
   Reflect 1078 (left). A no-gravity range covers most of each. Master's magic sub is + 20
   (above).
+- **Their travel (Data).** Unlike Final's and Wisdom's KH1-spell motions, Master's casts move him
+  by their root curves. Fire goes about 800 forward, from frame 16, mostly by frame 28. Blizzard
+  goes 390 out by frame 24, then back to 107. Thunder goes about 1050 (720 right, 770 forward)
+  over 88 frames. Reflect goes 92. Cure goes nowhere. None has an allow-movement or
+  keep-momentum range, so KH2's controller drops his speed going in (`Character::cast`) and the
+  root travel is his movement. No-gravity ranges: Fire 0..68, Blizzard 0..60, Thunder 0..80,
+  Cure 0..46, Reflect 0..54.
 - **Effects and sounds.** Its motions start elements 20..32 of its own archive
   (`obj/P_EX100_TRIF.a.us`; whether the install has it and whether it holds a "p_ex" PAX isn't
   checked here). The Keyblades' sounds are bank 500's (500 040..055), with the voices (frame
@@ -842,6 +849,28 @@ Nothing of it is in the repository.
   is KH1's on Master's Cure motion; Gravity, Stop and Aero are KH1's on its Thunder / Cure motions
   (`pose::follow`); Reflect at sub + 20. In the air its casts are KH2's own, as Final's
   (`takeover`'s air-magic block): the clip is the same as on the ground.
+- **The KH1 spells' travel.** The user: "When doing KH1 magic, Master form does the correct
+  animation, but it doesn't actually move sora at all. same goes for aerial magic". KH2's casts
+  (Fire, Blizzard, Thunder, Reflect) already moved him by root motion through the controller (the
+  s300 log: Fire about 770, Thunder about 1040). KH1's spells on Master's motions run on
+  `takeover::form_cast_frame`, which had only the stick in an allow-movement range and the speed
+  going in. Master's motions have no such range, so on the ground he stood still, and in the air
+  he kept only the speed going in. Now (`FormCast::travel`, `takeover::travels`):
+  - on a motion that travels, KH1's mover takes him along its root curve each frame, turned to
+    his facing, on the ground and in the air;
+  - his speed going in is dropped, as `Character::cast` drops it for a motion with no
+    allow-movement or keep-momentum range. So there is no slide out of it or after its landing
+    (Master's ground inertia is none anyway);
+  - in the air he is held at his height through the motion's no-gravity range. KH1's fall speed is
+    cleared there, and a frame's sink is put back. After it, KH1's fall starts from rest, as KH2's
+    fall follows the range;
+  - the pose has the travel taken out (`pose::follow_play`'s `cast`, as a swing's lunge), so the
+    body stays on the moving actor instead of running ahead and snapping back.
+
+  Only Gravity, on Thunder's motion 62 / 64, travels today. Stop, Aero and Cure are on Cure's
+  motion 65 / 67, which doesn't travel: they keep the old rules (the speed going in kept in the
+  air, KH1's height). Wisdom's, Final's and base Sora's KH1-spell motions have no root curve, so
+  nothing changes for them.
 - **Effects and sounds.** Its archive is `kh2fx::MASTER` (frame trigger 1 → `kh2fx::form_event`).
   Its weapon anchors are KH2's, as Final's: each Keyblade's blade bone as drawn
   (`leftblade::final_blade`, filled for Master by `note_pose`: the right one where KH1's held
@@ -901,6 +930,8 @@ All of it, in particular:
 - the Drive list's fourth row (record 0x87, word 0x1F5) and Final's new argument 0x14;
 - Master's moves and combos through KH2's controller; the 184 finisher's body hits (group 3);
 - its casts on KH1's cast timing, its KH1 spells on Master's motions, the air casts' physics;
+- Gravity's travel on Thunder's motion (its direction against the drawn spin, walls, ledges), the
+  air hold through 0..80 and the fall after it, and the pose staying on him;
 - its effects (whether the TRIF archive loads), its sounds;
 - the left Keyblade's float (its blend between held and floating, the reach check) and its effects;
 - the left trail: in Master's attacks, following the floating blade; in Final, now on its own
@@ -914,3 +945,13 @@ All of it, in particular:
 - The limits' light (`trap_limit_light`); summons, party members.
 - The form change's full-screen effect.
 - Drive Recovery items.
+
+## Growth abilities count what Sora has learned (s301)
+
+The user: "for each drive form, their respective growth ability should always be 1 lvl above base
+sora ... this includes if sora doesnt have the ability actively equipped. for example, if base
+sora has lv1 quick run, wisdom form should have lv2 EVEN IF SORA DOESNT ACTIVELY HAVE QUICK RUN
+EQUIPPED". A form's growth ability is `growth_up` of base Sora's level counting every ability in
+his lists, equipped or not (`growth::Kh1Sora::learned`, kept in `menu::LEARNED` with the ini's
+`abilities = kh1`; `form::growth_of`), at least what he has on. Base Sora himself still gets only
+what he has equipped.

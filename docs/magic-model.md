@@ -41,6 +41,13 @@ read from your files. **Ours** means our own choice where the game's behaviour i
    - **Ours:** if the release comes on the motion's first frame, the trigger-20 code runs
      once first. Reflect releases on frame 0.
 7. **Every frame,** each running script and its threads run once, after the player.
+8. **Movement (Data; the KH1 port's rule ours).** The cast motion moves the caster by its root
+   curve, as any action motion does. Of the KH1 spells' motions (Thunder's and Cure's ids), only
+   Master Form's travel: Thunder 62..64 (D372) goes about 1050 units over its 88 frames. Its
+   Fire 56..58 (D371) goes about 800 and Blizzard 59..61 (D370) about 390 out and back to 107.
+   Wisdom's Fire goes about 380 (826 for the finisher). Final's and base Sora's casts don't
+   travel. In the KH1 port, a KH1 spell drawn on a travelling motion (Master's Gravity) moves
+   him along it: `takeover::form_cast_frame`, `drive-model.md`'s Master section.
 
 The game's PC build runs scripts with a frame time of 1. A few timings written for 30 fps
 are patched while the frame time is below 2. Fire is one example: its 44-frame duration

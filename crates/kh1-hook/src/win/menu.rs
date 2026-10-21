@@ -824,9 +824,16 @@ impl Growth {
         let list = |l: &[u8]| l.iter().take_while(|b| **b != 0).map(|b| if b & 0x80 != 0 { format!("({})", b & 0x7F) } else { b.to_string() }).collect::<Vec<_>>().join(" ");
         log(&format!("KH1 Sora: level {}, abilities [{}], shared [{}] (in brackets: not equipped)", now.level, list(&now.abilities), list(&now.shared)));
         log(&format!("KH1's menu gives KH2: {}", growth::describe(&from_kh1)));
+        if let Ok(mut l) = LEARNED.lock() {
+            *l = (self.mode == Mode::Kh1).then(|| now.learned());
+        }
         if self.mode == Mode::Kh1 {
             ch.abilities = from_kh1;
         }
         self.seen = Some(now);
     }
 }
+
+/// Sora's growth levels counting every ability he has learned, equipped or not (`Kh1Sora::learned`;
+/// `None` outside the ini's `abilities = kh1`), for a form's growth ability (`form::growth_of`).
+pub static LEARNED: std::sync::Mutex<Option<character_core::Abilities>> = std::sync::Mutex::new(None);

@@ -499,6 +499,17 @@ impl Kh1Sora {
         early && has(&self.abilities, id)
     }
 
+    /// KH2's abilities as if every ability Sora has learned were equipped: his growth levels
+    /// whether or not he has them on (the user: a form's growth ability is one above base Sora's
+    /// "EVEN IF SORA DOESNT ACTIVELY HAVE QUICK RUN EQUIPPED").
+    pub fn learned(&self) -> Abilities {
+        let on = |l: &[u8]| {
+            let n = l.iter().take_while(|b| **b != 0).count();
+            l.iter().enumerate().map(|(i, b)| if i < n { b & 0x7F } else { *b }).collect::<Vec<u8>>()
+        };
+        Kh1Sora { level: self.level, abilities: on(&self.abilities), shared: on(&self.shared), progress: self.progress.clone() }.kh2()
+    }
+
     /// KH2's abilities from KH1's menu and Sora's level.
     pub fn kh2(&self) -> Abilities {
         let a = &self.abilities;
@@ -767,6 +778,10 @@ mod tests {
         assert!(a.aerial_recovery && a.combo_master && a.finishing_plus == 1);
         assert!(a.equipped.contains(&kh2::DODGE_SLASH) && !a.equipped.contains(&kh2::MAGNET_BURST));
         // Learned but off: nothing.
+        // (Learned but not equipped: no growth for Sora, its level for a form's.)
+        let unequipped = sora(30, &[kh1::DODGE_ROLL | 0x80], &[kh1::HIGH_JUMP | 0x80]);
+        assert_eq!((unequipped.kh2().high_jump, unequipped.kh2().dodge_roll), (0, 0));
+        assert_eq!((unequipped.learned().high_jump, unequipped.learned().dodge_roll > 0), (2, true));
         let off = sora(99, &[68 | 0x80, 66 | 0x80], &[]).kh2();
         assert!(!off.aerial_recovery && off.quick_run == 0);
         // No KH1 Dodge Roll: no roll at any level.

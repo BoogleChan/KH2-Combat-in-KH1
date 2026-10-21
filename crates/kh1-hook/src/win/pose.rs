@@ -1106,14 +1106,14 @@ fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
     // be KH1 or KH2? Like item throwing animation". (Group 9: a change of KH1's slot meanwhile
     // doesn't restart it.)
     if misc_kh2() && super::takeover::item_use_now() {
-        return follow_play(s, slot, to_world, Some(Play::Motion { motion: KH2_ITEM_USE, field: false, looping: false, group: 9 }));
+        return follow_play(s, slot, to_world, Some(Play::Motion { motion: KH2_ITEM_USE, field: false, looping: false, group: 9 }), false);
     }
     // Anti Form's own ledge grab (the user: "antiform has it's own unique ledge grab animation
     // please bring that in"): KH1 grabs the ledge and pulls him up as ever (its states 15, then 19
     // and 18: the log), drawn with Anti's hang (motion 7, looping) and its climb (8).
     if super::form::in_anti() {
         if let Some(play) = anti_ledge() {
-            return follow_play(s, slot, to_world, Some(play));
+            return follow_play(s, slot, to_world, Some(play), false);
         }
     }
     // KH1's own combo (`stylecombo`, the move style set to KH1): KH1's swings, not KH2's drawn
@@ -1140,10 +1140,12 @@ fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
                 (_, false) => 65,
                 (_, true) => 67,
             };
-            return follow_play(s, slot, to_world, Some(Play::Motion { motion, field: false, looping: false, group: 0 }));
+            // (A cast motion that travels, Master's, moves him through KH1's mover,
+            // `takeover::form_cast_frame`: its root travel comes out of the pose.)
+            return follow_play(s, slot, to_world, Some(Play::Motion { motion, field: false, looping: false, group: 0 }), true);
         }
     }
-    follow_play(s, slot, to_world, None)
+    follow_play(s, slot, to_world, None, false)
 }
 
 /// Anti's gripping ankle sits this far under the ledge (KH1's highest bone in its hang), so the
@@ -1194,8 +1196,9 @@ fn misc_kh2() -> bool {
     super::styles::kh2(super::styles::Kind::MiscAnims) && !super::form::in_form()
 }
 
-/// `follow` with the motion chosen by the caller (`forced`) instead of from KH1's slot.
-fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Option<Play>) -> Option<Vec<Mat4>> {
+/// `follow` with the motion chosen by the caller (`forced`) instead of from KH1's slot; `cast`:
+/// a form's KH1 cast on its cast motion, whose root travel KH1's mover gives him (`unroot`).
+fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Option<Play>, cast: bool) -> Option<Vec<Mat4>> {
     use character_core::motion as m2;
     let now = Instant::now();
     let f = &mut s.follow;
@@ -1296,10 +1299,13 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
     }
     f.play = Some(play);
     // (In a Drive Form, the form's motions: KH1's own moves and spells then look like the form's.)
-    let rig: &kh2_data::sora::Rig = match super::form::current().and_then(|k| k.data(kh2)) {
-        Some(w) if w.rig.motions.contains_key(&motion) => &w.rig,
+    let form = super::form::current().and_then(|k| k.data(kh2)).filter(|w| w.rig.motions.contains_key(&motion));
+    let rig: &kh2_data::sora::Rig = match form {
+        Some(w) => &w.rig,
         _ => &kh2.rig,
     };
+    // (The drawn clip's root curve, the form's or base Sora's, for a cast's `unroot`.)
+    let cast_root = cast.then(|| form.map_or(&kh2.character, |w| &w.character).moveset.clips.get(&motion)).flatten().filter(|c| super::takeover::travels(c)).map(|c| &c.root);
     let clip = field
         .then(|| rig.field_motions.get(&motion))
         .flatten()
@@ -1312,9 +1318,11 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
     let body_len = pose.len();
     let weapon = kh2_weapon(rig, motion, frames, looping, &pose);
     pose.extend(weapon);
-    // A swing's lunge: KH1 moves him, so take KH2's root travel out of the pose.
-    if matches!(play, Play::Swing { .. }) {
-        if let Some(root) = kh2.roots.get(&motion).and_then(|r| r.get((frames as usize).min(r.len().saturating_sub(1)))) {
+    // A swing's lunge: KH1 moves him, so take KH2's root travel out of the pose. (So too a form's
+    // KH1 cast on a cast motion that travels, Master's: `takeover::form_cast_frame` moves him.)
+    let roots = if matches!(play, Play::Swing { .. }) { kh2.roots.get(&motion) } else { cast_root };
+    if roots.is_some() {
+        if let Some(root) = roots.and_then(|r| r.get((frames as usize).min(r.len().saturating_sub(1)))) {
             let un = Mat4::from_translation(-Vec3::from(*root));
             for m in pose.iter_mut() {
                 *m = un * *m;
