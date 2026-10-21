@@ -3524,3 +3524,10 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   (left/right), live; the mouse feeds the same stick, its sensitivity from `0x140138B70`. The
   round right-stick dead zone let any slant zoom in (eye low, looking up): now up/down only past
   half tilt (KH2's rule), left/right 15%; look-up held at 31° (KH2's steepest).
+
+### 2026-10-21: Stage 304 (the Drive list's title in its tab)
+- The user (screenshot): "the "drives" isn't lined up properly". The hidden header record is only
+  the word "SUMMON" (rect [7, 6, 65, 8]); the tab is the background panels. Our title went where a
+  row's name goes (+0x10, +2), running into the first row (y+20). Now centred on the word's rect
+  (KH1's string width `0x1402CEC60`, font height `0x14054603C`), middle at y + 10; white at the
+  rows' own brightness (it was 0x80 grey). `docs/kh1-drive.md`.

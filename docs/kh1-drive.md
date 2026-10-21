@@ -212,22 +212,41 @@ target list) still open it.
 `0x140277F40 (kind, menu, _, _, layout, x, y, alpha)` with a 0x200-byte layout per kind
 (`0x142859C60 + kind*0x200`: 0 top, 1 magic, 2 items, 3 summon `0x14285A260`, 4 targets). It
 points the text packet (`0x142853218`) at its buffer, then `0x1402769D0` draws: the background
-pair (`+0x18`, `+0x50`), for kinds other than 0 the header tab (`+0x20`, texture `+8`: no text
-call, so the word "SUMMON" is in the tab's texture), the row panels (`+0x28`, `+0x10` of them,
+pair (`+0x18`, `+0x50`: the dark tab is drawn with these), for kinds other than 0 the header word
+(`+0x20`, texture `+8`: no text call, the word "SUMMON" is a 65x8 sprite, rectangle [7, 6, 65, 8]),
+the row panels (`+0x28`, `+0x10` of them,
 0xC0 bytes; `+0x58` a second set or 0) and the names (`0x1402787B0 (cmd, x, y, bright)` ->
 `0x1402CFB20 (packet, 1, rgba, x', y', text)`, then `0x1403028F0 (start)` runs the packet when the
 list's alpha `0x142528820` isn't 0). A sprite record (`0x14027C660`): `+0..+0xC` its rectangle
 (`0x14027C2C0`, animated with `+0x60` & 0x14), `+0x20` r, g, b, a ints (four vertices 0x10 apart
 with `+0x60` & 0x20, else one), colour animated instead with `+0x60` & 0xA or & 0xC0.
 
+**Where things go (RE).** A record's rectangle is `[x, y, w, h]` in screen pixels: `0x14027C8E0`
+makes the vertices `(x + 0x700) << 4`, `(y + 0x740) << 4` (4 bits of fraction), `0x140278880`
+then adds the list's x / y `<< 4` (kind 0 draws its own header in `0x1402769D0` the same way).
+The list's x is the call's x + `[0x14232E6CC]`, its y the call's y, the top: the background and
+the header word sit at y + their rectangle, row k's panel at y + 0x14 + 0x16k (+ its rectangle),
+its name at the panel's corner + (0x10, 2) through `0x1402787B0`, brightness the menu's byte
+`+0x24 + k`. With more rows the y is smaller (0x16 a row: 238 with five forms, 260 with four),
+so everything moves together. Text (`0x1402CFB20 -> 0x1402CFEA0`): left, right or centred
+(`0x1402CEC60 (text, height)` the width in pixels), the top at y - height / 2 + 7 outside
+languages 0 and 7, so its middle at y + 7; the height is `[0x14054603C]` (14, or 18).
+
 **Ours (`drive::list_draw`, a hook on 0x140277F40).** Kind 3 with the summon list holding the
 form ids on page 2: for that call only, every background / row panel's colour loses its hue (each
 vertex's r, g, b set to their brightest: a tint becomes white, greys and black stay), the header
-tab is swapped for a copy with no size (nothing drawn), and after it "DRIVES" is drawn as a row's
-name is, white (0x80, the list's alpha), at the tab's rectangle + the list's x (`+[0x14232E6CC]`)
-/ y; colours and the tab are put back right after. If KH1's tab texture itself is coloured (not
-tinted by vertex colour), the panels stay that colour; the log line "Drive list: title ..."
-gives the rectangle and colours seen, `TITLE_DX` / `TITLE_DY` move the title.
+word is swapped for a copy with no size (nothing drawn; the tab behind it stays), and after it
+"DRIVES" is drawn in the word's place: centred on the word's rectangle both ways (its width
+measured with KH1's own `0x1402CEC60`), as bright as the brightest row name (KH1's byte per row;
+0x80, the grey it had before, at least), the list's alpha. Colours and the word are put back
+right after. Up to s302 it was drawn where a row's name goes in its panel, the rectangle's
+corner + (0x10, 2): its 14-high box from y + 8 to y + 22, over the first row's panel (from
+y + 0x14), so it sat low, under that panel's top, and 0x10 to the right. Now its middle is at the word's middle, y + 10 (top
+y + 3 with the 14-high font), for any row count. If KH1's tab texture itself is coloured (not
+tinted by vertex colour), the panels stay that colour. The log line "Drive list: menu count ..."
+comes each time the row count changes: the list's x / y, the word's rectangle and where it would
+be drawn, the background pair's and the first row panel's boxes, the title's box and middle, the
+brightness; `TITLE_DX` / `TITLE_DY` nudge the title.
 
 **Items and Summon lists (`combat::spell_not_yet`).** As a spell: while KH2 has Sora and his move
 can't take a command (`can_take_command`, what `command` made such a command wait for), an item

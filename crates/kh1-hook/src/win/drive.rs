@@ -18,7 +18,7 @@
 
 use super::addr::Rva;
 use super::{hook, log};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 /// The forms (command record, word index, name).
@@ -354,10 +354,18 @@ const TEXT_ALPHA_RVA: Rva = Rva(0x3B31F8);
 /// The Drive list's title (the user: "the text in the sub menu says "SUMMON" when it needs to say
 /// "DRIVES" lets change the color of that sub menu as well to be white").
 const TITLE: &str = "DRIVES";
-/// Where the title sits in the header tab's rectangle (`0x1402CFB20` adds its own 0x10, 2, as for
-/// a row's name in its panel).
+/// Nudges for the title, in screen pixels, after it is centred on the header word's rectangle.
+/// (That word, the header record `+0x20`, is a 65x8 sprite KH1 draws at the list's x / y plus its
+/// rectangle `[x, y, w, h]` (`0x140278880`; vertices `(x + 0x700) << 4`, `(y + 0x740) << 4`), the
+/// tab behind it is the background pair; the rows start at y + 0x14, 0x16 apart.)
 const TITLE_DX: i32 = 0;
 const TITLE_DY: i32 = 0;
+/// The font's height (14; 18 in some languages) and a string's width in pixels at a height
+/// (`0x1402CEC60 (text, height)`, what `0x1402CFEA0` centres and right-aligns with).
+const FONT_H_RVA: Rva = Rva(0x54603C);
+const TEXT_WIDTH_RVA: Rva = Rva(0x2CEC60);
+/// The row count the title was last logged for.
+static TITLE_LOGGED_ROWS: AtomicI32 = AtomicI32::new(-1);
 static TITLE_TEXT: OnceLock<usize> = OnceLock::new();
 static ORIG_LIST_DRAW: AtomicUsize = AtomicUsize::new(0);
 /// The header tab's stand-in while the Drive list draws: its record with no size.
@@ -448,30 +456,62 @@ unsafe extern "system" fn list_draw(kind: i32, menu: usize, a3: i32, a4: i32, la
     for (rec, old) in saved.iter().rev() {
         wr(rec + 0x20, *old);
     }
-    // The title, as `0x1402787B0` draws a row's name: white, the list's alpha.
-    if alpha != 0.0 {
-        if let Some(&text) = TITLE_TEXT.get() {
-            let a = (alpha * rd::<f32>(base + TEXT_ALPHA_RVA)).clamp(0.0, 255.0) as u8;
-            let colour = u32::from_le_bytes([0x80, 0x80, 0x80, a]);
-            let lx = x.wrapping_add(rd::<i32>(base + LIST_X_RVA)) + rect[0] + TITLE_DX;
-            let ly = y + rect[1] + TITLE_DY;
-            let tx = (lx.wrapping_add(0x710).wrapping_shl(4) >> 4) - 0x700;
-            let ty = (ly.wrapping_add(0x742).wrapping_shl(4) >> 4) - 0x740;
-            let draw: unsafe extern "system" fn(usize, i32, u32, i32, i32, usize) -> usize = std::mem::transmute(base + TEXT_RVA);
-            let run: unsafe extern "system" fn(usize) = std::mem::transmute(base + TEXT_RUN_RVA);
-            let start = rd::<u64>(base + PACKET_RVA) as usize;
-            if start > 0x10000 {
-                let end = draw(start, 1, colour, tx, ty, text);
-                wr(base + PACKET_RVA, end as u64);
-                run(start);
-            }
+    // The title where KH1 draws the header word: centred on its rectangle, both ways. (Before, it
+    // went where a row's name goes in its panel, the rectangle's corner + 0x10, 2: low, under the
+    // first row's top, and right of where the word sits.)
+    // KH1 draws the word at the list's x (+ [LIST_X]) / y plus its rectangle; `0x1402CFB20` puts
+    // the text's top at y - height / 2 + 7 (in KH1's other languages than 0 and 7), so its middle
+    // at y + 7, whatever the font's height.
+    let lx = x.wrapping_add(rd::<i32>(base + LIST_X_RVA));
+    let height = rd::<i32>(base + FONT_H_RVA);
+    let text = TITLE_TEXT.get().copied().unwrap_or(0);
+    let width = if text != 0 && (8..=32).contains(&height) {
+        let measure: unsafe extern "system" fn(usize, i32) -> i32 = std::mem::transmute(base + TEXT_WIDTH_RVA);
+        measure(text, height)
+    } else {
+        0
+    };
+    let tx = lx + rect[0] + (rect[2] - width) / 2 + TITLE_DX;
+    let ty = y + rect[1] + rect[3] / 2 - 7 + TITLE_DY;
+    // White as KH1's own available rows' names are (`0x1402787B0`'s brightness, a byte per row at
+    // the menu's `+0x24`; 0x80 is the grey it was), with the list's alpha.
+    let count = rd::<i32>(menu + 0x10).clamp(0, 16);
+    let bright = (0..count as usize).map(|k| rd::<u8>(menu + 0x24 + k)).max().unwrap_or(0).max(0x80);
+    if alpha != 0.0 && text != 0 {
+        let a = (alpha * rd::<f32>(base + TEXT_ALPHA_RVA)).clamp(0.0, 255.0) as u8;
+        let colour = u32::from_le_bytes([bright, bright, bright, a]);
+        let draw: unsafe extern "system" fn(usize, i32, u32, i32, i32, usize) -> usize = std::mem::transmute(base + TEXT_RVA);
+        let run: unsafe extern "system" fn(usize) = std::mem::transmute(base + TEXT_RUN_RVA);
+        let start = rd::<u64>(base + PACKET_RVA) as usize;
+        if start > 0x10000 {
+            let end = draw(start, 1, colour, tx, ty, text);
+            wr(base + PACKET_RVA, end as u64);
+            run(start);
         }
     }
-    static LOGGED: AtomicBool = AtomicBool::new(false);
-    if !LOGGED.swap(true, Ordering::Relaxed) {
+    // Each time the row count changes (the list's y moves 0x16 a row): where everything went.
+    if TITLE_LOGGED_ROWS.swap(count, Ordering::Relaxed) != count {
+        let boxed = |rec: usize, dy: i32| -> String {
+            if rec < 0x10000 {
+                return "none".into();
+            }
+            let mut r = [0i32; 4];
+            rect_of(rec, &mut r);
+            format!("({}, {}) {}x{}", lx + r[0], y + dy + r[1], r[2], r[3])
+        };
         log(&format!(
-            "Drive list: title \"{TITLE}\" at header rect {rect:?} + list ({}, {y}); header tab hidden; {} panels whitened, {animated} animated (kept); colours before: {:?}",
-            x.wrapping_add(rd::<i32>(base + LIST_X_RVA)),
+            "Drive list: menu count {count} ({} rows drawn), list at ({lx}, {y}); header word (hidden) rect {rect:?} = ({}, {}) {}x{}; tab / back panels {} and {}; first row panel {}; title \"{TITLE}\" {width}x{height} at ({tx}, {}) (text call ({tx}, {ty})), middle ({}, {}), brightness {bright:#x}; {} panels whitened, {animated} animated (kept); colours before: {:?}",
+            count - 1,
+            lx + rect[0],
+            y + rect[1],
+            rect[2],
+            rect[3],
+            boxed(rd::<u64>(layout + 0x18) as usize, 0),
+            boxed(rd::<u64>(layout + 0x50) as usize, 0),
+            boxed(rows, 0x14),
+            ty - height / 2 + 7,
+            tx + width / 2,
+            ty + 7,
             saved.len(),
             saved.iter().take(4).map(|(_, c)| [c[0], c[1], c[2], c[3]]).collect::<Vec<_>>()
         ));
