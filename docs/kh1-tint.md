@@ -184,24 +184,87 @@ yellow (hue 48° ± 26°) only where bright (≥ 0.42), so the dark brown beside
 
 ## Anti Form: Shadow Sora's look
 
-The user: "make sora look like shadow sora in this form (the miniboss from neverland)".
+The user: "make sora look like shadow sora in this form (the miniboss from neverland)", then
+"lets see if you can try copying the exact textures of KH1 anti-sora onto sora's anti form model
+instead of replacing the model".
 
-What KH1's Shadow Sora is, and what could not be checked here:
+### KH1's Anti-Sora: `xa_pp_3020.mdls`
 
-- KH1 draws him as a pitch-black silhouette of Sora. The KH wiki (khwiki.com, "Shadow Sora")
-  says he does **not** have the glowing yellow eyes other Heartless have. It mentions no aura
-  beyond his vanishing now and then. Whether KH1 adds a dark aura or particle effect around him is
-  **not checked**: his model, motion and effect files are in packages not available here (only
-  `kh1_first.hed` is local, without its `.pkg`), and the exe names no model for him (model names
-  come from the game's data, not the code).
-- So it is **not established** whether he is his own model with black textures or Sora's model
-  drawn black. Either way the result is a black Sora, so the mod darkens Sora's own textures
-  rather than loading his.
+Found in the user's install (Epic and Steam alike, in `kh1_fifth`). The file names come from
+OpenKH's KH1 name list (`resources/kh1idx.txt` of the user's OpenKH tools); the candidates were
+read from an OpenKH extraction of the same install, for study only, outside the repo.
 
-The look (`tint::Look::Anti`, op `Shadow`): every texel of every Sora texture becomes hue 260°
-(blue-violet) at saturation 0.5 with brightness `0.03 + 0.10 × v`. So it reads as black, the folds
-and seams still faintly there, with a dark sheen. Alpha is kept, so hair edges stay as they were.
-It covers more textures than the other looks:
+- `xa_pp_3020.mdls` shares Sora's PS2 model layout: its remastered assets have the same
+  offset-named entries as `xa_ex_0010.mdls` (`-575f0.cvbl`, `-66380.dds` .. `-7e380.dds`; of all
+  the models only Sora's own variants `xa_ex_0012` / `xa_ex_0019` have them too), the same
+  293-bone skeleton, and its `-c0.cvbl` posed in the bind pose has the same 2828 triangles in the
+  same bounds as Sora's.
+- It is **Sora's PS2 mesh with its PS2 UVs**, 9 meshes on **seven 512² textures** `-1c0..-1c6`
+  (meshes 0..6 on slots 0..6, then 7 on 3 and 8 on 5, the second pass), which lie exactly like
+  Sora's PS2 textures `-100..-106`: 0 skin, 1 hair and shoe, 2 hair, 3 hood/jacket, 4 jumpsuit,
+  5 pockets/belt/crown/pouches, 6 the face. Each is a dark grey shading pass (the folds as soft
+  greys, brightness mostly under 20 %), no colour, **no eyes or mouth** on the face (only a nose
+  shadow), and no frame sheets (`-2c0`/`-2c1`) at all. The rest of its HD assets (`-887c0` ..
+  `-b97a0`) are small effect textures (a blue streak, rings, notes, stars, sparks).
+- The PC draws Sora with his **remastered** mesh: the same geometry re-UV'd onto four HD atlases
+  (`-1c0` 1024², `-1c1` 1024², `-1c2` 1024×512, `-1c3` 1024×512). So **Anti-Sora's textures do
+  not line up with Sora's**: different sizes (512² against 1024²) and a different UV layout
+  (seven PS2 atlases against four HD ones). Sora's atlases each gather parts of several of
+  Anti-Sora's (by the shared triangles: `-1c0` takes from his 0, 1, 2, 6; `-1c1` from 3, 4, 5;
+  `-1c2` from 5; `-1c3` from 1 and 5).
+
+### Carrying them over: by the surface (`kh1_data::texmap`)
+
+Because the geometry is the same, each texel can be mapped exactly: a texel of Sora's atlas lies
+on one of his triangles (rasterised in UV space, edge texels by up to a texel outside), so it is a
+point on the bind-pose surface; the nearest point of Anti-Sora's surface (a grid of his
+triangles, widened until the nearest is inside the search) gives his UV there, and his texture is
+sampled (bilinear). Measured on the user's files: the gap between the two surfaces at every
+covered texel is 0.0003 units on average (Sora is 152 units tall), 0.08 at most, so each texel
+takes Anti-Sora's colour from the same spot of the same triangle.
+
+- `.cvbl` details used (our own reading): after the 16-byte packet-list header, chunks of tag
+  `0x11` (bone `+8` into matrix slot `+0xC`), tag 1 (`count` at `+8`, 48-byte vertices from
+  `+0x20`) and `0x8000` (end). A vertex's flags: low bits the matrix slot, high 16 bits `0x1000`
+  (starts a strip, no triangle) or 1 / 2 (a triangle with the two before, alternating winding).
+  Positions are in their bone's space; KH2's bind pose of the `.mdls` skeleton
+  (`kh2_anim::Pose::bind`) places them.
+- The meshes' stored normals don't follow the winding (about half disagree), but the winding is
+  the same in both models: oriented by it, 2475 of Sora's 2828 triangles have an exact twin in
+  Anti-Sora's mesh facing the same way. A source triangle facing the other way counts as further
+  (so the two sides of a double-sided part stay apart); the rest (strips split differently) find
+  their spot by distance.
+- Sora's alpha is kept (his hair cards' cut-outs belong to his UV layout). Texels no triangle
+  covers take their neighbours' colour (16 passes), then the mean.
+- The face's frame sheets: KH1 pastes a 320×128 eye frame at (0, 80) of `-1c0` and a 192×128
+  mouth frame at (56, 240) (found at run time by matching each sheet's first frame against
+  Sora's face: mean difference about 6 of 255). Anti-Sora has neither, so every frame of both
+  sheets becomes the new face's own pixels there.
+- The yellow eyes (`ANTI_EYES`, on): Anti-Sora's textures have none, so Sora's irises and whites
+  (as found on his own `-1c0` and on each of his `-2c0` frames, so they still blink) glow yellow
+  on top.
+
+In the mod (`tint.rs`): at start, on its background thread, after Sora's own textures are read,
+`bake_anti` reads both models and Anti-Sora's seven textures from the packages (one key table,
+`kh1_data::Files`), carries them over (about 3 s on the user's PC for all four atlases) and keeps
+them. Entering Anti Form swaps them in as the other looks do (KH1's own come back on leaving);
+before they're ready nothing is swapped. If anything fails (a file missing, a mesh that doesn't
+parse, a size that doesn't match KH1's texture), the log says why
+(`form tint (Anti): Anti-Sora's textures not made, …` or `no Anti-Sora texture for …`) and that
+texture gets the Shadow recolour below instead.
+
+`kh1_fifth.hed` holds one junk entry (a length of `0xFDFDFDFD`), which `egs::Archive::open`
+used to refuse with the whole package; it now leaves that entry out, so `xa_pp_3020.mdls` reads.
+
+`cargo run --release -p kh1-data --example anti_textures -- <KH1 install dir> <out dir>` runs the
+same transfer outside the game and writes the results as raw BGRA to look at.
+
+### The fallback: Sora's textures darkened (`Op::Shadow`)
+
+Every texel of every Sora texture becomes hue 260° (blue-violet) at saturation 0.5 with brightness
+`0.03 + 0.10 × v`. So it reads as black, the folds and seams still faintly there, with a dark
+sheen. Alpha is kept, so hair edges stay as they were. Both ways cover more textures than the
+other looks:
 
 | texture | what | found by |
 |---|---|---|
@@ -227,10 +290,13 @@ by that name. The records are filled per draw into `0x142432270` (by slot), but 
 array is stable.
 
 The eyes on `-1c0` were located by plotting mesh 0's vertices by bone (as for the sleeves). Both
-eyes are on the head bone (150) at u 0.01..0.30 × v 0.115..0.195. A glowing-yellow-eyes variant
-is in `tint.rs` behind `ANTI_EYES`, off because KH1's Shadow Sora has none. When on, the irises
-(hue 220° ± 40°, any brightness, so the pupil too) and the whites in that region and on every
-`-2c0` frame become yellow (hue 52°, brightness 0.8..1).
+eyes are on the head bone (150) at u 0.01..0.30 × v 0.115..0.195. The glowing yellow eyes
+(`ANTI_EYES`, on): the irises (hue 220° ± 40°, any brightness, so the pupil too) and the whites in
+that region and on every `-2c0` frame become yellow (hue 52°, brightness 0.8..1), on Anti-Sora's
+textures and on the fallback alike.
 
 Not checked in game: that the patch records' `+0x18` is set for Sora on PC and that the names
-match. `form tint (Anti): …mdls2c0.dds ready` in the log confirms both.
+match. `form tint (Anti): …mdls2c0.dds ready` in the log confirms both. Also not checked in game:
+how the carried-over textures look under KH1's lighting, and whether KH1 draws its Anti-Sora with
+anything more than his textures (a tint, transparency or an effect around him); only the
+textures are copied.

@@ -224,13 +224,41 @@ starts at any MP.
 - **Its data (Data, checked on extracted files).** `P_EX100_HTLF`, moveset 6:
   - the same 256-bone skeleton as Sora's (`pose::load_form` checks this);
   - no weapon sets (`wmst` has none for moveset 6), so it holds no Keyblade. Its attack windows
-    are on its body's own shapes (groups 1, 10, 13);
+    are on its body's own shapes: see "Its attack shapes" below;
   - `prty`: run 16, jump 185, turn 0.26;
   - 13 combo rows. Rows 11 (motion 173) and 12 (motion 161) are kind 0, reached only by id
     (its Square moves, below);
   - motion 40 (Aerial Recovery) but no motion 42 (the guard's), so no guard;
   - its own sounds (bank 503, frame-trigger sounds) and frame-trigger effects from its own
     archive (`obj/P_EX100_HTLF.a.us`, `kh2fx::ANTI`).
+- **Its attack shapes (Data, the Steam install's `obj/P_EX100_HTLF.mdlx`).** Anti has its own
+  collision table (34 entries, BAR entry 23), not Sora's (36). Its hands and legs are its weapons:
+  every hit window is in the body's motion set and switches on the body's shapes of its group.
+  Bones are Sora's skeleton's (`kh2-bevy` `rig.rs`: arms 76..99 and 168..191, legs 11..17 and
+  40..46). Attack (type 6) entries, by group:
+  - 1: sphere r150 on bone 67 (the spine). Windows 154:477, 155:474, Side Spin 161:542 and 161:544;
+  - 2: sphere r400 on bone 67 (154:478, 184:555, 184:556);
+  - 3: sphere r80 on bone 2 (40:454, 151:476, 183:454 / 455, 184:455);
+  - 4: right hand, spheres r55 on bone 85 and r35 on bone 110 (151:475 / 530, 152:459, 182:548);
+  - 6: left hand, r55 on 177 and r35 on 202 (53:124, 151:456, 153:534, 181:549);
+  - 7: right leg, r60 on 18 and r40 on 11 (152:457 / 531, 181:550);
+  - 8: left leg, r60 on 47 and r40 on 40 (152:531..533, 153:460, 181:551, 182:545 / 547);
+  - 10: sphere r120 on bone 2 (153:458, Side Spin's spin 161:543, 181:552);
+  - 11: a column on the root, r100 (183:553); 12: r80 on 41 and r50 on 67 (182:479 / 480 / 546);
+  - 13: a column on bone 2, r260 (155:538, 183:554). No group 5 or 9.
+
+  (motion:ATKP.) Every group Anti's moves use has a shape, so all its windows can land. The
+  Square-move helper read Anti's table as Sora's: `local/re`'s `.mdlx` files came from a modded
+  install (the Epic one's live archives, whose form models carry Sora's 784-byte table; its
+  `backup` and the Steam install have the originals). The port reads the Steam install (Mods
+  Manager backup first), so this was never wrong in game. At load, `pose::log_shape_groups`
+  logs each form's groups, `KH2 Anti Form attack groups b1 b2 ...: each has a shape`, or
+  `NO SHAPE for` a group with its windows (`Rig::shape_groups`; a modded model would show it).
+  The other forms' groups all have shapes (Data, same install): Valor body 6, both Keyblades
+  2, 3, 5, 6, right also 4; Wisdom body 6 (its shots are its script's); Limit body 3, 6, 20,
+  Keyblade 1, 2, 4, 6; Final body 2, 3, 6, 19, both Keyblades 1, 2, 4, 6; Sora body 2, 3, 6,
+  18, 19, 21, 22, 23, Keyblade 1, 2, 5, 6. `kh2-data` test `every_attack_group_has_a_shape`
+  checks it on files in `KH2_LOCAL_DATA`.
 - **Square (Data + KH Wiki; the user: "lets add anti-form's square move").** Anti's PTYA rows 11
   and 12 sit where Sora's guard (11, motion 173) and Upper Slash (12, motion 161) are, with
   ability 0 (Sora's need 1 and 18). In Anti's motion set they are its own moves. The KH Wiki's
@@ -296,9 +324,8 @@ starts at any MP.
   - Anti Glide's homing: how KH2 puts him behind the target (only its root motion and turns
     here, so how far past the target he ends depends on the distance), and its free state from
     frame 92 (range 2 isn't read, so it plays to its end at 108);
-  - Side Spin's group-1 hits (542, 544): the HTLF model's collision as parsed here has no
-    attack shape in groups 1, 4, 5 or 7 (it is the same table as Sora's), so those windows find
-    no shapes, as the group-1 windows of rows 154 / 155 do; the Spin (543, group 10) has one;
+  - that Anti's claw and kick hits land and their reach looks right (the shapes above, read
+    from the install; the load log line says whether every group found one);
   - the wiki's "can also deflect many attacks automatically": not traced (no guard window in
     Anti Glide or Side Spin);
   - whether `+8` in KH1's hit record is the final damage.

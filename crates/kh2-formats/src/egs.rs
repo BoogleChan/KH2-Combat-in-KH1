@@ -179,8 +179,10 @@ impl Archive {
             let offset = r.i64()?;
             let stored_len = r.i32()?;
             let real_len = r.i32()?;
+            // A junk entry (KH1's own `kh1_fifth.hed` has one, a length of 0xFDFDFDFD) names
+            // no readable file: left out rather than refusing the whole package.
             if offset < 0 || stored_len < 0 || real_len < 0 {
-                return bad("negative value in hed entry");
+                continue;
             }
             entries.push(HedEntry { md5, offset: offset as u64, stored_len: stored_len as u32, real_len: real_len as u32 });
         }

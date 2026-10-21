@@ -113,6 +113,48 @@ pub struct WeaponRig {
     pub shapes: Vec<BoneShape>,
 }
 
+/// One collision group a moveset's attack or guard windows switch on, on the body (`weapon` 0)
+/// or a weapon (1..), and the windows that use it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShapeGroup {
+    pub weapon: u8,
+    pub group: u8,
+    /// Shapes the window would switch on: attack (6) and guard (13) entries of that group whose
+    /// bone the skeleton has (or the object root). 0: the window hits nothing.
+    pub shapes: usize,
+    /// (motion, ATKP id) of each window, sorted, without repeats.
+    pub windows: Vec<(u16, u16)>,
+}
+
+impl Rig {
+    /// Every collision group `moveset`'s attack and guard windows use, by weapon then group,
+    /// with how many shapes each finds here. A group with no shape is a window that can't land.
+    pub fn shape_groups(&self, moveset: &Moveset) -> Vec<ShapeGroup> {
+        let mut used: std::collections::BTreeMap<(u8, u8), Vec<(u16, u16)>> = Default::default();
+        for (&m, c) in &moveset.clips {
+            for w in &c.windows {
+                let (attack, group, weapon) = match w.kind {
+                    WindowKind::Hitbox { attack, group, weapon, .. } | WindowKind::Guard { attack, group, weapon } => (attack, group, weapon),
+                    _ => continue,
+                };
+                used.entry((weapon, group)).or_default().push((m, attack));
+            }
+        }
+        used.into_iter()
+            .map(|((weapon, group), mut windows)| {
+                windows.sort_unstable();
+                windows.dedup();
+                let (list, bones) = match weapon {
+                    0 => (Some(&self.body_shapes), self.skeleton.len()),
+                    w => self.weapons.get(w as usize - 1).map_or((None, 0), |r| (Some(&r.shapes), r.skeleton.len())),
+                };
+                let shapes = list.map_or(0, |l| l.iter().filter(|s| s.group == group && matches!(s.kind, 6 | 13) && s.bone.map_or(true, |b| b < bones)).count());
+                ShapeGroup { weapon, group, shapes, windows }
+            })
+            .collect()
+    }
+}
+
 /// Everything needed to run Sora.
 #[derive(Clone, Debug)]
 pub struct SoraData {
@@ -542,4 +584,35 @@ fn load_rig(read: &dyn Fn(&str) -> Result<Vec<u8>>, spec: PlayerSpec, player: &M
         })
         .collect();
     Ok(Rig { motions: pose_motions(player), field_motions: field_motions(player), footsteps: footsteps(player), weapons, body_shapes: bone_shapes(&body), skeleton })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shape(group: u8, kind: u8, bone: Option<usize>) -> BoneShape {
+        BoneShape { group, kind, shape: 3, argument: 0, bone, offset: [0.0; 3], lift: 0.0, radius: 10.0, height: 10.0 }
+    }
+
+    #[test]
+    fn shape_groups_count_what_a_window_switches_on() {
+        let hit = |attack, group, weapon| Window { start: 0, end: Some(5), kind: WindowKind::Hitbox { attack, group, combo: None, weapon } };
+        let clip = |motion, windows| Clip { motion, length: 10, root: vec![[0.0; 3]; 11], windows, events: Vec::new() };
+        let mut clips = HashMap::new();
+        clips.insert(151, clip(151, vec![hit(475, 4, 0), hit(476, 3, 0), hit(475, 4, 0)]));
+        clips.insert(161, clip(161, vec![hit(542, 1, 0), hit(543, 10, 0), Window { start: 0, end: None, kind: WindowKind::Guard { attack: 124, group: 6, weapon: 0 } }]));
+        let moveset = Moveset { clips, combo_rows: Vec::new() };
+        let rig = Rig {
+            skeleton: Vec::new(),
+            motions: HashMap::new(),
+            field_motions: HashMap::new(),
+            footsteps: HashMap::new(),
+            weapons: Vec::new(),
+            // Group 1 is only a hurt shape, group 4 hangs off a bone the skeleton lacks.
+            body_shapes: vec![shape(1, 2, None), shape(3, 6, None), shape(4, 6, Some(85)), shape(6, 13, None), shape(10, 6, None), shape(10, 6, None)],
+        };
+        let g: Vec<(u8, u8, usize)> = rig.shape_groups(&moveset).iter().map(|g| (g.weapon, g.group, g.shapes)).collect();
+        assert_eq!(g, [(0, 1, 0), (0, 3, 1), (0, 4, 0), (0, 6, 1), (0, 10, 2)]);
+        assert_eq!(rig.shape_groups(&moveset)[2].windows, [(151, 475)]);
+    }
 }

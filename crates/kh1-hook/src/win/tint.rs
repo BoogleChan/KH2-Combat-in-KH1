@@ -19,9 +19,14 @@
 //! (the model's remastered assets, `Kh1Install::read_remastered`), recoloured in the background.
 //!
 //! Anti Form (the user: "make sora look like shadow sora in this form (the miniboss from
-//! neverland)"): every texture of Sora's darkened to a near-black with a faint blue-violet sheen,
-//! its shading kept, the shorts' pockets (`-1c2`) and the face's animated eye and mouth frames
-//! (`-2c0`, `-2c1`, pasted onto the face each frame) included.
+//! neverland)", then "lets see if you can try copying the exact textures of KH1 anti-sora onto
+//! sora's anti form model instead of replacing the model"): KH1's own Anti-Sora textures
+//! (`xa_pp_3020.mdls`, read from the user's install at start) carried onto Sora's remastered UV
+//! layout by the surface (`kh1_data::texmap`: the two meshes share their geometry), the shorts'
+//! pockets (`-1c2`) and the face's animated eye and mouth frames (`-2c0`, `-2c1`, pasted onto the
+//! face each frame) included, the eyes glowing yellow (Anti-Sora's face has none). If that can't
+//! be made, every texture of Sora's darkened instead (`Op::Shadow`: near-black with a faint
+//! blue-violet sheen, its shading kept), and the log says why.
 
 use super::addr::Rva;
 use super::{log, pose};
@@ -72,6 +77,16 @@ const YELLOW_MIN_V: f32 = 0.42;
 const BLUE_HUE: f32 = 225.0;
 const BLUE_WIDTH: f32 = 22.0;
 const MODEL: &str = "xa_ex_0010.mdls";
+/// KH1's Anti-Sora (the dark Sora of Neverland's ship): Sora's PS2 mesh, the same geometry as the
+/// remastered one the PC draws for Sora, on seven 512² textures of the PS2 layout (`-1c0..-1c6`;
+/// `docs/kh1-tint.md`).
+const ANTI_MODEL: &str = "xa_pp_3020.mdls";
+const ANTI_SLOTS: u32 = 7;
+/// A face frame sheet's frame height (the eyes, `-2c0`: 22 frames of 320×128; the mouth, `-2c1`).
+const FRAME_H: u32 = 128;
+/// How far (mean per channel, 0..255) a sheet's first frame may differ from the face where it is
+/// pasted and still count as found (Sora's: about 6).
+const FRAME_MATCH: f32 = 24.0;
 /// Hue shift: how wide the colour moved is (degrees, soft edge after), the saturation it takes
 /// from (soft edge after).
 const RED_WIDTH: f32 = 12.0;
@@ -91,9 +106,9 @@ const SHADOW_HUE: f32 = 260.0;
 const SHADOW_SAT: f32 = 0.5;
 const SHADOW_LO: f32 = 0.03;
 const SHADOW_HI: f32 = 0.13;
-/// Glowing yellow eyes for Anti. Off: KH1's Shadow Sora is a featureless black silhouette,
-/// without the yellow eyes other Heartless have (`docs/kh1-tint.md`); on, the irises and whites
-/// of `-1c0`'s eyes (`EYES`) and of every `-2c0` frame glow yellow instead.
+/// Glowing yellow eyes for Anti: the irises and whites of `-1c0`'s eyes (`EYES`) and of every
+/// `-2c0` frame glow yellow (as they blink). Anti-Sora's own textures have no eyes (his face is
+/// blank, `docs/kh1-tint.md`), so they are added on his textures too.
 const ANTI_EYES: bool = true;
 const GLOW_HUE: f32 = 52.0;
 /// The eyes on `-1c0` (both, with the lids; all on the head bone, found by plotting mesh 0).
@@ -187,15 +202,16 @@ fn ops(look: Look, k: usize) -> Vec<Op> {
 
 static BASE: AtomicUsize = AtomicUsize::new(0);
 
-/// A recoloured texture: width, height, B8G8R8A8 rows.
-struct Pixels {
-    w: u32,
-    h: u32,
-    bgra: Vec<u8>,
-}
+/// A texture: width, height, B8G8R8A8 rows.
+type Pixels = kh1_data::texmap::Image;
 
 /// The textures' original pixels from the PKG (`None`: not read).
 static FROM_PKG: [OnceLock<Option<Arc<Pixels>>>; NTEX] = [const { OnceLock::new() }; NTEX];
+
+/// Anti-Sora's textures on Sora's layout (per `TEXTURES`; `None`: that one not made), made at
+/// start; `Err`: why not (Anti Form then falls back to `Op::Shadow`).
+type Baked = [Option<Arc<Pixels>>; NTEX];
+static ANTI: OnceLock<Result<Baked, String>> = OnceLock::new();
 
 struct Swap {
     /// Per texture: the source texture swapped (its address), KH1's GPU texture to put back,
@@ -289,18 +305,12 @@ fn apply(p: &mut Pixels, op: Op) -> usize {
                 }
                 Op::Shadow { to, sat, lo, hi, eyes } => {
                     let dark = rgb(to, sat, lo + (hi - lo) * v);
-                    // An eye texel: the iris (blue, any brightness: the pupil too) or the white.
                     let (u, t) = ((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32);
                     let e = match eyes {
-                        Some([u0, v0, u1, v1]) if u >= u0 && u < u1 && t >= v0 && t < v1 => {
-                            let dh = (hue - 220.0).rem_euclid(360.0);
-                            let iris = ((40.0 - dh.min(360.0 - dh)) / 10.0).clamp(0.0, 1.0) * ((s - 0.25) / 0.1).clamp(0.0, 1.0);
-                            let white = ((0.25 - s) / 0.1).clamp(0.0, 1.0) * ((v - 0.55) / 0.1).clamp(0.0, 1.0);
-                            iris.max(white)
-                        }
+                        Some([u0, v0, u1, v1]) if u >= u0 && u < u1 && t >= v0 && t < v1 => eye(hue, s, v),
                         _ => 0.0,
                     };
-                    let glow = rgb(GLOW_HUE, 0.85, 0.8 + 0.2 * v);
+                    let glow = glow(v);
                     let mix = |a: f32, z: f32| a * (1.0 - e) + z * e;
                     (1.0, (mix(dark.0, glow.0), mix(dark.1, glow.1), mix(dark.2, glow.2)))
                 }
@@ -318,28 +328,118 @@ fn apply(p: &mut Pixels, op: Op) -> usize {
     changed
 }
 
-/// An uncompressed 32-bit DDS's pixels as B8G8R8A8 (whatever its masks), with its size.
-fn dds_bgra(dds: &[u8]) -> Option<Pixels> {
-    if dds.len() < 128 || &dds[..4] != b"DDS " {
-        return None;
+/// How much a texel of Sora's eyes is the iris (blue, any brightness: the pupil too) or the
+/// white, 0..1.
+fn eye(hue: f32, s: f32, v: f32) -> f32 {
+    let dh = (hue - 220.0).rem_euclid(360.0);
+    let iris = ((40.0 - dh.min(360.0 - dh)) / 10.0).clamp(0.0, 1.0) * ((s - 0.25) / 0.1).clamp(0.0, 1.0);
+    let white = ((0.25 - s) / 0.1).clamp(0.0, 1.0) * ((v - 0.55) / 0.1).clamp(0.0, 1.0);
+    iris.max(white)
+}
+
+/// The eyes' yellow glow for an eye texel of brightness `v`.
+fn glow(v: f32) -> (f32, f32, f32) {
+    rgb(GLOW_HUE, 0.85, 0.8 + 0.2 * v)
+}
+
+/// Where Sora's eyes are in `orig` (within `rect`), `p` (the same size) glows yellow. Returns how
+/// many texels changed.
+fn glow_eyes(p: &mut Pixels, orig: &Pixels, rect: [f32; 4]) -> usize {
+    if (p.w, p.h) != (orig.w, orig.h) {
+        return 0;
     }
-    let u = |o: usize| u32::from_le_bytes(dds[o..o + 4].try_into().unwrap());
-    let (h, w) = (u(12), u(16));
-    let (flags, bits) = (u(80), u(88));
-    let masks = [u(92), u(96), u(100), u(104)];
-    // RGB (0x40), 32 bits, no four-cc (0x4).
-    if flags & 0x40 == 0 || flags & 0x4 != 0 || bits != 32 || w == 0 || h == 0 {
-        return None;
+    let (w, h) = (p.w as usize, p.h as usize);
+    let [u0, v0, u1, v1] = rect;
+    let (x0, x1) = ((u0 * w as f32) as usize, ((u1 * w as f32).ceil() as usize).min(w));
+    let (y0, y1) = ((v0 * h as f32) as usize, ((v1 * h as f32).ceil() as usize).min(h));
+    let mut changed = 0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = (y * w + x) * 4;
+            let o = &orig.bgra[i..i + 4];
+            let (hue, s, v) = hsv(o[2] as f32 / 255.0, o[1] as f32 / 255.0, o[0] as f32 / 255.0);
+            let e = eye(hue, s, v);
+            if e <= 0.0 {
+                continue;
+            }
+            changed += 1;
+            let g = glow(v);
+            let px = &mut p.bgra[i..i + 4];
+            let mix = |a: u8, z: f32| ((a as f32 / 255.0 * (1.0 - e) + z * e) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
+            (px[0], px[1], px[2]) = (mix(px[0], g.2), mix(px[1], g.1), mix(px[2], g.0));
+        }
     }
-    let n = (w * h) as usize;
-    let data = dds.get(128..128 + n * 4)?;
-    let chan = |v: u32, m: u32| if m == 0 { 255 } else { ((v & m) >> m.trailing_zeros()) as u8 };
-    let mut bgra = Vec::with_capacity(n * 4);
-    for px in data.chunks_exact(4) {
-        let v = u32::from_le_bytes(px.try_into().unwrap());
-        bgra.extend_from_slice(&[chan(v, masks[2]), chan(v, masks[1]), chan(v, masks[0]), chan(v, masks[3])]);
+    changed
+}
+
+/// Anti-Sora's textures carried onto Sora's (`kh1_data::texmap`; `docs/kh1-tint.md`): Sora's
+/// mesh-table textures recoloured texel by texel from the point of Anti-Sora's surface they lie
+/// on (the same geometry), and the face's frame sheets made of the face's new pixels where KH1
+/// pastes them. Needs Sora's own textures from the PKG (`FROM_PKG`) first.
+fn bake_anti(files: &kh1_data::Files) -> Result<Baked, String> {
+    use kh1_data::texmap;
+    let started = std::time::Instant::now();
+    let mesh = |model: &str| -> Result<Vec<texmap::Tri>, String> {
+        let bind = texmap::bind_pose(&files.read(model).map_err(|e| format!("{model}: {e}"))?).map_err(|e| format!("{model}: {e}"))?;
+        let (_, cvbl) = files.read_remastered(model, "-c0").map_err(|e| format!("{model} -c0.cvbl: {e}"))?;
+        texmap::cvbl_triangles(&cvbl, &bind).map_err(|e| format!("{model}: {e}"))
+    };
+    let sora = mesh(MODEL)?;
+    let anti = mesh(ANTI_MODEL)?;
+    let textures: Vec<Option<Pixels>> = (0..ANTI_SLOTS).map(|s| files.read_remastered(ANTI_MODEL, &format!("-1c{s}")).ok().and_then(|(_, b)| Pixels::from_dds(&b))).collect();
+    let missing: Vec<u32> = (0..ANTI_SLOTS).filter(|&s| textures[s as usize].is_none() && anti.iter().any(|t| t.slot == s)).collect();
+    if !missing.is_empty() {
+        return Err(format!("{ANTI_MODEL}: textures {missing:?} not read"));
     }
-    Some(Pixels { w, h, bgra })
+    let src = texmap::Source::new(&anti, &textures);
+    let mut out: Baked = Default::default();
+    let orig = |k: usize| FROM_PKG[k].get().cloned().flatten();
+    // Sora's mesh-table textures, by their slot (`-1c<slot>`).
+    for (k, (tex, asset)) in TEXTURES.iter().enumerate() {
+        let (Tex::Mesh(_), Some(slot)) = (tex, asset.strip_prefix("-1c").and_then(|s| u32::from_str_radix(s, 16).ok())) else { continue };
+        let Some(base) = orig(k) else {
+            log(&format!("form tint (Anti): Sora's {asset} wasn't read from the PKG, so Anti-Sora's isn't carried onto it"));
+            continue;
+        };
+        let (img, st) = texmap::transfer(&sora, slot, &base, &src);
+        if st.triangles == 0 {
+            log(&format!("form tint (Anti): no triangle of Sora's on {asset}"));
+            continue;
+        }
+        log(&format!(
+            "form tint (Anti): Anti-Sora's textures onto Sora's {asset} ({}x{}): {} triangles, {} texels covered, {} filled beside, gap to his surface {:.4} mean, {:.3} max",
+            img.w, img.h, st.triangles, st.covered, st.filled, st.mean_gap, st.max_gap
+        ));
+        out[k] = Some(Arc::new(img));
+    }
+    // The eye and mouth frames: the new face where each is pasted (Anti-Sora has neither).
+    let face = TEXTURES.iter().position(|t| t.1 == "-1c0");
+    for (k, (tex, asset)) in TEXTURES.iter().enumerate() {
+        let Tex::Frames(_) = tex else { continue };
+        let (Some(sheet), Some(f)) = (orig(k), face) else { continue };
+        let (Some(face_orig), Some(face_new)) = (orig(f), out[f].clone()) else { continue };
+        match texmap::find_frame(&face_orig, &sheet, FRAME_H) {
+            Some((x, y, d)) if d <= FRAME_MATCH => {
+                let mut img = texmap::frames_from(&face_new, x, y, &sheet, FRAME_H);
+                let glowing = if ANTI_EYES && *asset == "-2c0" { glow_eyes(&mut img, &sheet, WHOLE) } else { 0 };
+                log(&format!("form tint (Anti): {asset} frames made from the face at ({x}, {y}) (difference {d:.1}), {glowing} texels glowing"));
+                out[k] = Some(Arc::new(img));
+            }
+            found => log(&format!("form tint (Anti): {asset}'s first frame not found on the face ({found:?})")),
+        }
+    }
+    // The face's own eyes glow too (after the frames, which take the face without them).
+    if let (true, Some(f)) = (ANTI_EYES, face) {
+        if let (Some(mut img), Some(face_orig)) = (out[f].take(), orig(f)) {
+            glow_eyes(Arc::make_mut(&mut img), &face_orig, EYES);
+            out[f] = Some(img);
+        }
+    }
+    if out.iter().all(|t| t.is_none()) {
+        return Err("none of Sora's textures could take Anti-Sora's".into());
+    }
+    log(&format!("form tint (Anti): Anti-Sora's textures ready in {:.1} s", started.elapsed().as_secs_f32()));
+    Ok(out)
 }
 
 fn recoloured(p: &Pixels, what: &str, k: usize, look: Look) -> Arc<Pixels> {
@@ -362,13 +462,14 @@ pub fn install() {
             Ok(i) => i,
             Err(e) => {
                 log(&format!("Wisdom tint: KH1's files not found ({e})"));
+                let _ = ANTI.set(Err(format!("KH1's files not found ({e})")));
                 return;
             }
         };
         for (k, (_, asset)) in TEXTURES.iter().enumerate() {
             let asset = format!("{asset}.dds");
             let p = match install.read_remastered(kh1_data::Source::Live, MODEL, &asset) {
-                Ok((name, bytes)) => match dds_bgra(&bytes) {
+                Ok((name, bytes)) => match Pixels::from_dds(&bytes) {
                     Some(p) => {
                         log(&format!("form tint: {MODEL} {name} read from the PKG ({}x{})", p.w, p.h));
                         Some(Arc::new(p))
@@ -385,6 +486,11 @@ pub fn install() {
             };
             let _ = FROM_PKG[k].set(p);
         }
+        let anti = install.files(kh1_data::Source::Live).map_err(|e| format!("KH1's packages: {e}")).and_then(|f| bake_anti(&f));
+        if let Err(e) = &anti {
+            log(&format!("form tint (Anti): Anti-Sora's textures not made, Anti Form darkens Sora's instead ({e})"));
+        }
+        let _ = ANTI.set(anti);
     });
 }
 
@@ -488,16 +594,35 @@ unsafe fn ours_for(s: &mut Swap, k: usize, src: usize, look: Look) -> Option<u64
     }
     let (w, h) = (rd::<u16>(src + TEX_W) as u32, rd::<u16>(src + TEX_H) as u32);
     let name: String = (0..32).map(|i| rd::<u8>(src + 0x14 + i)).take_while(|&b| b != 0).map(|b| b as char).collect();
-    // The pixels: the DDS KH1 keeps (the same file), else the PKG's.
-    let dds = rd::<u64>(src + TEX_DDS) as usize;
-    let mem = if dds > 0x10000 && super::crash::readable(dds + 128) && rd::<u32>(dds) == 0x2053_4444 {
-        let (dh, dw) = (rd::<u32>(dds + 12), rd::<u32>(dds + 16));
-        let len = 128 + (dw as usize) * (dh as usize) * 4;
-        (dw == w && dh == h && super::crash::readable(dds + len - 1)).then(|| dds_bgra(std::slice::from_raw_parts(dds as *const u8, len))).flatten().map(|p| recoloured(&p, &format!("{name} (KH1's copy in memory)"), k, look))
+    // Anti: Anti-Sora's own, once made (at start; until then, nothing swapped yet), else the
+    // Shadow recolour below.
+    let baked = if look == Look::Anti {
+        match ANTI.get() {
+            None => return None,
+            Some(Ok(t)) => {
+                let p = t[k].clone().filter(|p| p.w == w && p.h == h);
+                if p.is_none() {
+                    log(&format!("form tint (Anti): no Anti-Sora texture for {name} ({w}x{h}), darkened instead"));
+                }
+                p
+            }
+            Some(Err(_)) => None,
+        }
     } else {
         None
     };
-    let pixels = mem.or_else(|| FROM_PKG[k].get().cloned().flatten().filter(|p| p.w == w && p.h == h).map(|p| recoloured(&p, &format!("{name} (the PKG's)"), k, look)));
+    // The pixels: the DDS KH1 keeps (the same file), else the PKG's.
+    let dds = rd::<u64>(src + TEX_DDS) as usize;
+    let mem = if baked.is_some() {
+        None
+    } else if dds > 0x10000 && super::crash::readable(dds + 128) && rd::<u32>(dds) == 0x2053_4444 {
+        let (dh, dw) = (rd::<u32>(dds + 12), rd::<u32>(dds + 16));
+        let len = 128 + (dw as usize) * (dh as usize) * 4;
+        (dw == w && dh == h && super::crash::readable(dds + len - 1)).then(|| Pixels::from_dds(std::slice::from_raw_parts(dds as *const u8, len))).flatten().map(|p| recoloured(&p, &format!("{name} (KH1's copy in memory)"), k, look))
+    } else {
+        None
+    };
+    let pixels = baked.or(mem).or_else(|| FROM_PKG[k].get().cloned().flatten().filter(|p| p.w == w && p.h == h).map(|p| recoloured(&p, &format!("{name} (the PKG's)"), k, look)));
     let Some(p) = pixels else {
         if FROM_PKG[k].get().is_some() {
             log(&format!("form tint: no pixels for {name} ({w}x{h}; neither KH1's copy nor the PKG's fits)"));

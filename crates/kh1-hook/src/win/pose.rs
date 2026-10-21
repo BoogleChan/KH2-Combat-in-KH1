@@ -248,6 +248,26 @@ fn load_form(install: &kh2_data::Install, source: kh2_data::Source, spec: kh2_da
     Ok(Form { rig, character: data.character.clone(), battle: Arc::new(data.combat.battle.clone()), script, archive })
 }
 
+/// One line per form: the collision groups its attack and guard windows switch on (`b` the
+/// body, `w1`/`w2` a Keyblade) and any of them with no shape, with the windows that would hit
+/// nothing (motion:ATKP). A modded model can carry another's table (Anti with Sora's has no
+/// shape in groups 1, 4 and 7, `docs/drive-model.md`).
+fn log_shape_groups(name: &str, rig: &Rig, moveset: &character_core::Moveset) {
+    let groups = rig.shape_groups(moveset);
+    let at = |g: &kh2_data::sora::ShapeGroup| if g.weapon == 0 { format!("b{}", g.group) } else { format!("w{}.{}", g.weapon, g.group) };
+    let used: Vec<String> = groups.iter().map(at).collect();
+    let gaps: Vec<String> = groups
+        .iter()
+        .filter(|g| g.shapes == 0)
+        .map(|g| format!("{} ({})", at(g), g.windows.iter().map(|(m, a)| format!("{m}:{a}")).collect::<Vec<_>>().join(" ")))
+        .collect();
+    if gaps.is_empty() {
+        log(&format!("KH2 {name} Form attack groups {}: each has a shape", used.join(" ")));
+    } else {
+        log(&format!("KH2 {name} Form attack groups {}: NO SHAPE for {}", used.join(" "), gaps.join(", ")));
+    }
+}
+
 /// How fast a looping gait covers ground: each frame, the lower foot's horizontal travel
 /// relative to bone 0 while it is within 4 units of its lowest (planted), averaged, × 60.
 fn ground_speed(rig: &Rig, clip: &kh2_formats::anim::Interpolated) -> f32 {
@@ -692,6 +712,11 @@ pub fn load_kh2() {
             } else {
                 None
             };
+            for (name, f) in [("Valor", &valor), ("Wisdom", &wisdom), ("Limit", &limit), ("Final", &final_form), ("Anti", &anti)] {
+                if let Some(f) = f {
+                    log_shape_groups(name, &f.rig, &f.character.moveset);
+                }
+            }
             Ok(Kh2 { rig, character: sora.character.clone(), battle: Arc::new(sora.combat.battle.clone()), magi: sora.magi.clone(), wisdom, valor, limit, final_form, anti, roots, ground })
         })();
         if let Err(e) = &r {

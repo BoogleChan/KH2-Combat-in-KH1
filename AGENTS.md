@@ -3378,8 +3378,9 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   the ground: Anti Glide (row 11 through Valor's "guard row is a move" path, now for any row 11
   motion without a guard window); Square in a combo window with a swing left: Side Spin
   (`Character::square_swing`, set for Anti in `form::arrive`). Still no guard in Anti (s283).
-- Known: Anti's attack groups 1 / 4 / 5 / 7 have no shape as we read its collision (Side Spin's
-  first and last hits, several combo hits); being looked into.
+- (Checked after: Anti's own model has a shape for every group its moves use, hands and legs as
+  its weapons; the "no shape" report came from stale modded copies in `local/re`.
+  `pose::log_shape_groups` logs each form's groups at load.)
 
 ### 2026-10-20: Stage 289 (Limit Form's finisher effect)
 - The user (video): "at the end of limit form's base combo, the vfx are a bit glitched". The
@@ -3388,3 +3389,13 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   plane. kh2-fx places 0x20000 elements from the camera (`camera_transform`). Also four effect
   programs added (MatrixYZX 89, MatrixLoopZXY 234, SclMoveLoop 212, RandDownFV 65); the
   lightning (elements 55, 36) and lens flare (38) still skipped, logged once. `docs/kh2-effects.md`.
+
+### 2026-10-20: Stage 290 (Anti Form wears KH1 Anti-Sora's textures)
+- The user: "copying the exact textures of KH1 anti-sora onto sora's anti form model instead of
+  replacing the model". KH1's Anti-Sora (`xa_pp_3020.mdls`, `kh1_fifth`) is Sora's PS2 mesh with
+  seven 512² PS2-layout textures; the PC draws Sora's HD model (same geometry, other UVs, four HD
+  textures). `kh1_data::texmap` carries each HD texel to Anti-Sora's colour at the same point of
+  the shared surface (built at startup from the user's install, ~3 s; nothing shipped); the face
+  sheets are blanked and yellow eyes kept (Anti-Sora has none). Falls back to `Op::Shadow` per
+  texture if anything fails. `kh2_formats::egs` skips `kh1_fifth.hed`'s one bad entry.
+- Each form's attack groups are checked at load (`pose::log_shape_groups`): all have shapes.

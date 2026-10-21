@@ -15,6 +15,7 @@ pub mod mdls;
 pub mod mset;
 pub mod retarget;
 pub mod secondary;
+pub mod texmap;
 
 use kh2_formats::egs::{Archive, KeyTable};
 use kh2_formats::{Error, Result};
@@ -86,6 +87,17 @@ impl Kh1Install {
         Err(Error::NotFound(name.to_string()))
     }
 
+    /// The packages opened once, with the key table built once, for several reads. A package
+    /// whose index doesn't read is left out (the user's `kh1_fifth.hed` has an entry with a
+    /// negative length, which `Archive::open` refuses).
+    pub fn files(&self, source: Source) -> Result<Files> {
+        let archives: Vec<Archive> = ARCHIVES.iter().map(|part| self.hed(source, part)).filter(|h| h.is_file()).filter_map(|h| Archive::open(h).ok()).collect();
+        if archives.is_empty() {
+            return Err(Error::Format(format!("no KH1 package read under {}", self.image_dir.display())));
+        }
+        Ok(Files { keys: self.key_table()?, archives })
+    }
+
     /// Reads a file by its original name from whichever package holds it.
     pub fn read(&self, source: Source, name: &str) -> Result<Vec<u8>> {
         let keys = self.key_table()?;
@@ -100,5 +112,27 @@ impl Kh1Install {
             }
         }
         Err(Error::NotFound(name.to_string()))
+    }
+}
+
+/// KH1's packages, opened (`Kh1Install::files`).
+pub struct Files {
+    keys: KeyTable,
+    archives: Vec<Archive>,
+}
+
+impl Files {
+    fn holding(&self, name: &str) -> Result<&Archive> {
+        self.archives.iter().find(|a| a.find(name).is_some()).ok_or_else(|| Error::NotFound(name.to_string()))
+    }
+
+    /// A file by its original name.
+    pub fn read(&self, name: &str) -> Result<Vec<u8>> {
+        self.holding(name)?.read(&self.keys, name)
+    }
+
+    /// One of a file's remastered (HD) assets (`Kh1Install::read_remastered`).
+    pub fn read_remastered(&self, name: &str, asset: &str) -> Result<(String, Vec<u8>)> {
+        self.holding(name)?.read_remastered(&self.keys, name, asset)
     }
 }

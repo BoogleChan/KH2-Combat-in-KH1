@@ -59,6 +59,30 @@ fn drive_forms_load() {
     }
 }
 
+/// Every attack and guard window of Sora and the forms finds a shape: its collision group has
+/// an attack or guard entry on what the window is on (Anti's claws and feet are its own
+/// model's groups 1, 4, 6, 7, 8 and 12). Needs unmodded files in `KH2_LOCAL_DATA`: a mod that
+/// gives the forms Sora's model gives them his table too, and Anti's groups 1, 4 and 7 go empty.
+#[test]
+fn every_attack_group_has_a_shape() {
+    let Some(d) = std::env::var_os("KH2_LOCAL_DATA") else { return };
+    let dir = std::path::Path::new(&d);
+    if !dir.join("P_EX100_HTLF.mdlx").exists() {
+        return;
+    }
+    let mut specs = vec![kh2_data::sora::SORA];
+    specs.extend(kh2_data::sora::FORMS);
+    for spec in specs {
+        let d = kh2_data::sora::load_player_dir(dir, spec).unwrap_or_else(|e| panic!("{}: {e}", spec.model));
+        let rig = d.rig.as_ref().unwrap_or_else(|| panic!("{}: {:?}", spec.model, d.rig_error));
+        let gaps: Vec<_> = rig.shape_groups(&d.character.moveset).into_iter().filter(|g| g.shapes == 0).collect();
+        assert!(gaps.is_empty(), "{}: {gaps:?}", spec.model);
+    }
+    let anti = kh2_data::sora::load_player_dir(dir, kh2_data::sora::FORMS[5]).unwrap();
+    let groups: Vec<u8> = anti.rig.unwrap().shape_groups(&anti.character.moveset).iter().map(|g| g.group).collect();
+    assert_eq!(groups, [1, 2, 3, 4, 6, 7, 8, 10, 11, 12, 13]);
+}
+
 /// Sora's out-of-combat motions: the field (no weapon) slots of idle, walk
 /// and run hold their own data; jump/fall/land share one slot.
 #[test]

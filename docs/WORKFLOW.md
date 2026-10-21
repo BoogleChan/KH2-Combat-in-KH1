@@ -74,4 +74,7 @@ Small, frequent deliveries. Each one builds and passes `cargo test`.
   them a cheaper model when the job is mechanical.
 - **Playground screenshots under Xvfb are slow** (about 4 frames a second). Keep scenes to
   about 200 frames, and run several in one shell call.
-- **Extracted game files** are in `local/re` on the PC. Stage only the ones you need.
+- **Extracted game files** are in `local/re` on the PC. Stage only the ones you need. Its
+  `.mdlx` files came from a modded install and are not the originals (the forms carry Sora's
+  collision table): for a model, extract it again from the Steam install with the CLI's
+  `extract` (`local/re-fresh` has the player and form models, `docs/drive-model.md`).
