@@ -513,6 +513,128 @@ pub fn frames_from(face: &Image, x: u32, y: u32, sheet: &Image, frame_h: u32) ->
     out
 }
 
+/// Anti Form's eyes (`docs/kh1-tint.md`): one flat yellow, as R, G, B. KH1's Anti-Sora has two
+/// solid glowing yellow eyes, but nothing in his model file holds them (his geometry and textures
+/// are Sora's mesh on grey shading; the only yellow in the file is one of his effects, which
+/// couldn't be tied to the eyes), so this is the centre of his eyes as the user's reference
+/// picture of him shows them (the brightest texels of both eyes: 253, 230, 95).
+pub const ANTI_EYE_RGB: [u8; 3] = [253, 230, 95];
+/// Where Sora's eyes are on his face texture (`-1c0`; u0, v0, u1, v1 fractions; both eyes with
+/// their lids, all on the head bone, found by plotting mesh 0's vertices by bone).
+pub const SORA_FACE_EYES: [f32; 4] = [0.01, 0.115, 0.30, 0.195];
+/// How much bigger than Sora's eye opening Anti's blob is drawn (a rounder, fuller shape).
+const BLOB_GROW: f32 = 1.12;
+/// An eye showing fewer texels of iris and white than this is shut (a blink frame): no blob.
+const BLOB_MIN: f32 = 12.0;
+
+fn hsv(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let mx = r.max(g).max(b);
+    let c = mx - r.min(g).min(b);
+    if c <= 1e-6 || mx <= 0.0 {
+        return (0.0, 0.0, mx);
+    }
+    let h = if mx == r {
+        ((g - b) / c).rem_euclid(6.0)
+    } else if mx == g {
+        (b - r) / c + 2.0
+    } else {
+        (r - g) / c + 4.0
+    } * 60.0;
+    (h, c / mx, mx)
+}
+
+/// How much a texel (B, G, R) of Sora's eye drawing is the eyeball: the iris (blue, any
+/// brightness, so the pupil too) or the white, 0..1. His skin, lids and lashes are 0.
+pub fn eye_weight(bgr: &[u8]) -> f32 {
+    let (hue, s, v) = hsv(bgr[2] as f32 / 255.0, bgr[1] as f32 / 255.0, bgr[0] as f32 / 255.0);
+    let dh = (hue - 220.0).rem_euclid(360.0);
+    let iris = ((40.0 - dh.min(360.0 - dh)) / 10.0).clamp(0.0, 1.0) * ((s - 0.25) / 0.1).clamp(0.0, 1.0);
+    let white = ((0.25 - s) / 0.1).clamp(0.0, 1.0) * ((v - 0.55) / 0.1).clamp(0.0, 1.0);
+    iris.max(white)
+}
+
+/// Sora's eyes within the rectangle `area` (x, y, w, h texels) of `orig` drawn on `out` (the same
+/// size) as two solid blobs of `rgb`: each half of the area (one eye each) gets an ellipse fitted
+/// to its eyeball (the iris and white texels' spread, `eye_weight`), a little enlarged, filled
+/// flat and opaque (alpha kept; one texel of edge blended for smoothness), clipped to that half.
+/// Nothing of Sora's eye drawing (pupil, highlight, outline) is kept. A shut eye (a blink frame)
+/// gets none. Returns how many eyes were drawn (0..2).
+pub fn solid_eyes(out: &mut Image, orig: &Image, area: [u32; 4], rgb: [u8; 3]) -> usize {
+    if (out.w, out.h) != (orig.w, orig.h) {
+        return 0;
+    }
+    let (w, h) = (orig.w as usize, orig.h as usize);
+    let [ax, ay, aw, ah] = area.map(|v| v as usize);
+    let (x_end, y_end) = ((ax + aw).min(w), (ay + ah).min(h));
+    let mid = ax + aw / 2;
+    let mut drawn = 0;
+    for (x0, x1) in [(ax, mid.min(x_end)), (mid, x_end)] {
+        // The eyeball's weighted moments.
+        let (mut n, mut sx, mut sy) = (0f64, 0f64, 0f64);
+        let mut pts = Vec::new();
+        for y in ay..y_end {
+            for x in x0..x1 {
+                let i = (y * w + x) * 4;
+                let e = eye_weight(&orig.bgra[i..i + 3]);
+                if e > 0.3 {
+                    pts.push((x as f64 + 0.5, y as f64 + 0.5, e as f64));
+                    n += e as f64;
+                    sx += e as f64 * (x as f64 + 0.5);
+                    sy += e as f64 * (y as f64 + 0.5);
+                }
+            }
+        }
+        if n < BLOB_MIN as f64 {
+            continue;
+        }
+        let (cx, cy) = (sx / n, sy / n);
+        let (mut cxx, mut cyy, mut cxy) = (0f64, 0f64, 0f64);
+        for &(x, y, e) in &pts {
+            cxx += e * (x - cx) * (x - cx);
+            cyy += e * (y - cy) * (y - cy);
+            cxy += e * (x - cx) * (y - cy);
+        }
+        let (cxx, cyy, cxy) = (cxx / n, cyy / n, cxy / n);
+        // Principal axes; a filled ellipse of semi-axis a has variance a²/4 along it.
+        let half = (cxx - cyy) / 2.0;
+        let root = (half * half + cxy * cxy).sqrt();
+        let (l1, l2) = ((cxx + cyy) / 2.0 + root, ((cxx + cyy) / 2.0 - root).max(0.0));
+        let angle = 0.5 * (2.0 * cxy).atan2(cxx - cyy);
+        let (ca, sa) = (angle.cos(), angle.sin());
+        let a = (2.0 * l1.sqrt() * BLOB_GROW as f64).max(1.0);
+        let b = (2.0 * l2.sqrt() * BLOB_GROW as f64).max(1.0);
+        drawn += 1;
+        for y in ay..y_end {
+            for x in x0..x1 {
+                let (dx, dy) = (x as f64 + 0.5 - cx, y as f64 + 0.5 - cy);
+                let (u, v) = (dx * ca + dy * sa, -dx * sa + dy * ca);
+                let d = ((u / a).powi(2) + (v / b).powi(2)).sqrt();
+                // Texels inside the edge: about (1 - d) × the ellipse's radius that way.
+                let r = if d > 1e-9 { (u * u + v * v).sqrt() / d } else { a };
+                let k = ((1.0 - d) * r + 0.5).clamp(0.0, 1.0) as f32;
+                if k <= 0.0 {
+                    continue;
+                }
+                let i = (y * w + x) * 4;
+                for (c, &to) in [rgb[2], rgb[1], rgb[0]].iter().enumerate() {
+                    let from = out.bgra[i + c] as f32;
+                    out.bgra[i + c] = (from + (to as f32 - from) * k + 0.5).clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+    }
+    drawn
+}
+
+/// `solid_eyes` on every frame (`frame_h` rows each, the sheet's whole width) of an eye frame
+/// sheet (Sora's `-2c0`). Returns how many frames have their eyes open (any blob drawn).
+pub fn solid_eye_frames(out: &mut Image, orig: &Image, frame_h: u32, rgb: [u8; 3]) -> usize {
+    if frame_h == 0 {
+        return 0;
+    }
+    (0..orig.h / frame_h).filter(|f| solid_eyes(out, orig, [0, f * frame_h, orig.w, frame_h], rgb) > 0).count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -591,6 +713,41 @@ mod tests {
         let dark = solid(32, 32, [1, 2, 3, 255]);
         let f = frames_from(&dark, x, y, &sheet, 4);
         assert!(f.bgra.chunks_exact(4).all(|p| p == [1, 2, 3, 200]));
+    }
+
+    #[test]
+    fn eyes_become_solid_blobs_and_shut_frames_stay_shut() {
+        // A sheet of two 40×16 frames on skin: the first has two blue eyes (with a dark pupil and
+        // a white highlight), the second is shut (skin and a dark lid line only).
+        let skin = [90, 140, 220, 255];
+        let mut orig = solid(40, 32, skin);
+        let put = |img: &mut Image, x: usize, y: usize, c: [u8; 4]| img.bgra[(y * 40 + x) * 4..(y * 40 + x) * 4 + 4].copy_from_slice(&c);
+        for (cx, cy) in [(10.0f32, 8.0f32), (30.0, 8.0)] {
+            for y in 0..16 {
+                for x in 0..40 {
+                    let (dx, dy) = ((x as f32 + 0.5 - cx) / 6.0, (y as f32 + 0.5 - cy) / 4.0);
+                    if dx * dx + dy * dy <= 1.0 {
+                        put(&mut orig, x, y, [200, 90, 30, 255]);
+                    }
+                }
+            }
+            put(&mut orig, cx as usize, cy as usize, [40, 10, 5, 255]);
+            put(&mut orig, cx as usize + 2, cy as usize - 1, [250, 250, 250, 255]);
+        }
+        for x in 4..36 {
+            put(&mut orig, x, 24, [20, 30, 40, 255]);
+        }
+        let mut out = solid(40, 32, [5, 5, 5, 200]);
+        let yellow = [250, 220, 90];
+        assert_eq!(solid_eye_frames(&mut out, &orig, 16, yellow), 1);
+        let px = |x: usize, y: usize| out.bgra[(y * 40 + x) * 4..(y * 40 + x) * 4 + 4].to_vec();
+        // Flat yellow over the pupil and the highlight alike, alpha kept.
+        for (x, y) in [(10, 8), (12, 7), (30, 8), (32, 7), (8, 9)] {
+            assert_eq!(px(x, y), vec![90, 220, 250, 200], "({x}, {y})");
+        }
+        // Between the eyes and in the shut frame: untouched.
+        assert_eq!(px(20, 8), vec![5, 5, 5, 200]);
+        assert!((16..32).all(|y| (0..40).all(|x| px(x, y) == vec![5, 5, 5, 200])));
     }
 
     #[test]

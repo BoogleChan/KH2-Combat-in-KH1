@@ -240,9 +240,9 @@ takes Anti-Sora's colour from the same spot of the same triangle.
   mouth frame at (56, 240) (found at run time by matching each sheet's first frame against
   Sora's face: mean difference about 6 of 255). Anti-Sora has neither, so every frame of both
   sheets becomes the new face's own pixels there.
-- The yellow eyes (`ANTI_EYES`, on): Anti-Sora's textures have none, so Sora's irises and whites
-  (as found on his own `-1c0` and on each of his `-2c0` frames, so they still blink) glow yellow
-  on top.
+- The yellow eyes (`ANTI_EYES`, on): Anti-Sora's textures have none, so solid yellow blobs are
+  drawn where Sora's eyes are (on his own `-1c0` and on each of his `-2c0` frames, so they still
+  blink); see "Anti's eyes" below.
 
 In the mod (`tint.rs`): at start, on its background thread, after Sora's own textures are read,
 `bake_anti` reads both models and Anti-Sora's seven textures from the packages (one key table,
@@ -290,10 +290,48 @@ by that name. The records are filled per draw into `0x142432270` (by slot), but 
 array is stable.
 
 The eyes on `-1c0` were located by plotting mesh 0's vertices by bone (as for the sleeves). Both
-eyes are on the head bone (150) at u 0.01..0.30 × v 0.115..0.195. The glowing yellow eyes
-(`ANTI_EYES`, on): the irises (hue 220° ± 40°, any brightness, so the pupil too) and the whites in
-that region and on every `-2c0` frame become yellow (hue 52°, brightness 0.8..1), on Anti-Sora's
-textures and on the fallback alike.
+eyes are on the head bone (150) at u 0.01..0.30 × v 0.115..0.195 (`texmap::SORA_FACE_EYES`).
+
+### Anti's eyes: solid yellow blobs
+
+The user: "the anti sora model has these yellow blob eyes ... i need the eyes to be solid yellow,
+and have it be the same yellow as in anti-sora's model". (Before this, s290 tinted Sora's own eye
+drawing yellow, so his pupils, highlights and outlines still showed.)
+
+Where Anti-Sora's yellow comes from, as far as his file shows (`xa_pp_3020.mdls` and its HD
+assets, read from an OpenKH extraction of the user's install, outside the repo):
+
+- Not his model: its `MOBJ` section is byte for byte Sora's (`xa_ex_0010.mdls`) up to `0x66380`;
+  only the PS2 textures after that differ. No extra mesh: his remastered `-c0.cvbl` has the same 9
+  meshes (all textured `-1c0..-1c6`), and every vertex's two spare words are `1.0, 0` as in
+  Sora's, so no vertex colour.
+- Not his textures: his seven PS2 textures (128², 8-bit, CLUTs after them) are all greys (no
+  colour above 34 of 255), as are the seven HD ones.
+- His file's other sections: 1 is his effects (7 of them, count at `+0xC`, 32-byte entries from
+  `+0x10`; HD textures `-887c0` .. `-b97a0` are theirs), 4 a `CLS` block, 5 his battle script
+  (`pp_3020.bd`), 6 a sound bank. The only yellow anywhere is in effect 2 (an untextured effect
+  of thin crossed quads and squares, ~100 units across): words `R G B A` in the PS2 0..128 scale
+  of `(128, 128, 64, 4..32)` (that is 255, 255, 128 at low alpha) beside a `0x00430042` word.
+  Its shape reads as a glint, and nothing ties it to his head or eyes; the format isn't decoded.
+
+So the colour is taken from the user's reference picture of Anti-Sora instead: the brightest
+texels at the centre of each eye average (253, 230, 95) (left eye 254, 230, 93; right 253, 231,
+97), `texmap::ANTI_EYE_RGB`. If KH1's own eye glow is ever found in his data, change it there.
+
+How they are drawn (`texmap::solid_eyes`, `solid_eye_frames`): each half of the eye area (one
+eye; a 320×128 frame of `-2c0`, or `SORA_FACE_EYES` on `-1c0`) takes the texels of Sora's eyeball
+(iris: hue 220° ± 40°, saturation over 0.25, any brightness, so the pupil too; white: saturation
+under 0.25, brightness over 0.55), fits an ellipse to their spread (weighted centre and second
+moments; a filled ellipse has variance a²/4 along each axis), enlarges it by 1.12 and fills it with
+the one flat colour, opaque (alpha kept; a one-texel edge blended). It is clipped to that eye's
+half. Nothing of Sora's eye drawing is kept: the Anti-Sora face under it is his dark skin (from
+`texmap::transfer`), and on the fallback Sora's darkened face. An eye with fewer than 12 texels of
+eyeball is shut and gets no blob, so the blink frames stay shut: of the 22 frames, 9, 12, 19 and
+21 are shut, 8 (the lids nearly closed) shows a thin slit, the rest full blobs. Done on Anti-Sora's
+textures (`bake_anti`) and on the `Op::Shadow` fallback alike.
+
+`anti_textures` (the example) now writes the frames with the eyes and `anti-1c0-eyes` (the face
+with them).
 
 Not checked in game: that the patch records' `+0x18` is set for Sora on PC and that the names
 match. `form tint (Anti): …mdls2c0.dds ready` in the log confirms both. Also not checked in game:

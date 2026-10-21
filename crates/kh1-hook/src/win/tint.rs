@@ -24,7 +24,7 @@
 //! (`xa_pp_3020.mdls`, read from the user's install at start) carried onto Sora's remastered UV
 //! layout by the surface (`kh1_data::texmap`: the two meshes share their geometry), the shorts'
 //! pockets (`-1c2`) and the face's animated eye and mouth frames (`-2c0`, `-2c1`, pasted onto the
-//! face each frame) included, the eyes glowing yellow (Anti-Sora's face has none). If that can't
+//! face each frame) included, with solid yellow eyes (Anti-Sora's face has none). If that can't
 //! be made, every texture of Sora's darkened instead (`Op::Shadow`: near-black with a faint
 //! blue-violet sheen, its shading kept), and the log says why.
 
@@ -106,14 +106,21 @@ const SHADOW_HUE: f32 = 260.0;
 const SHADOW_SAT: f32 = 0.5;
 const SHADOW_LO: f32 = 0.03;
 const SHADOW_HI: f32 = 0.13;
-/// Glowing yellow eyes for Anti: the irises and whites of `-1c0`'s eyes (`EYES`) and of every
-/// `-2c0` frame glow yellow (as they blink). Anti-Sora's own textures have no eyes (his face is
-/// blank, `docs/kh1-tint.md`), so they are added on his textures too.
+/// Anti's eyes: solid yellow blobs (the user: "i need the eyes to be solid yellow, and have it be
+/// the same yellow as in anti-sora's model"), one flat colour (`texmap::ANTI_EYE_RGB`) filling an
+/// ellipse fitted to Sora's eyeball, on `-1c0`'s eyes and on every `-2c0` frame (a shut frame
+/// stays shut, so they still blink). Anti-Sora's own textures have no eyes (his face is blank,
+/// `docs/kh1-tint.md`), so they are added on his textures and on the fallback alike.
 const ANTI_EYES: bool = true;
-const GLOW_HUE: f32 = 52.0;
-/// The eyes on `-1c0` (both, with the lids; all on the head bone, found by plotting mesh 0).
-const EYES: [f32; 4] = [0.01, 0.115, 0.30, 0.195];
-const WHOLE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+/// Where an `Op::Shadow` puts Anti's solid eyes.
+#[derive(Clone, Copy)]
+enum Eyes {
+    /// The face's eyes, in this region (u0, v0, u1, v1 fractions; `texmap::SORA_FACE_EYES`).
+    Face([f32; 4]),
+    /// Every frame (`FRAME_H` rows) of the eye frame sheet (`-2c0`).
+    Frames,
+}
 
 /// Regions of `-1c1` (u0, v0, u1, v1; texture fractions), found by plotting the remastered mesh
 /// 1's vertices by bone on the texture (`docs/kh1-tint.md`): the jacket's sleeves (the cream
@@ -146,8 +153,8 @@ enum Op {
     /// (white with its shading kept, or black); within `rect` if given.
     Grey { from: f32, width: f32, min_v: f32, lo: f32, hi: f32, rect: Option<[f32; 4]> },
     /// Every texel given hue `to` at saturation `sat`, brightness `lo + (hi - lo) × v` (Shadow
-    /// Sora's black); within `eyes` if given, the eyes' irises and whites glowing yellow instead.
-    Shadow { to: f32, sat: f32, lo: f32, hi: f32, eyes: Option<[f32; 4]> },
+    /// Sora's black); then, if `eyes` is given, Anti's solid yellow eyes there.
+    Shadow { to: f32, sat: f32, lo: f32, hi: f32, eyes: Option<Eyes> },
 }
 
 /// What each look does to each texture (`TEXTURES` order); none: that one isn't swapped.
@@ -190,8 +197,8 @@ fn ops(look: Look, k: usize) -> Vec<Op> {
         // Sora's blue eyes onto the black face).
         (Look::Anti, _) => {
             let eyes = match TEXTURES[k].1 {
-                "-1c0" => Some(EYES),
-                "-2c0" => Some(WHOLE),
+                "-1c0" => Some(Eyes::Face(kh1_data::texmap::SORA_FACE_EYES)),
+                "-2c0" => Some(Eyes::Frames),
                 _ => None,
             };
             vec![Op::Shadow { to: SHADOW_HUE, sat: SHADOW_SAT, lo: SHADOW_LO, hi: SHADOW_HI, eyes: eyes.filter(|_| ANTI_EYES) }]
@@ -276,6 +283,11 @@ fn apply(p: &mut Pixels, op: Op) -> usize {
     let [u0, v0, u1, v1] = rect.unwrap_or([0.0, 0.0, 1.0, 1.0]);
     let (x0, x1) = ((u0 * w as f32) as usize, ((u1 * w as f32).ceil() as usize).min(w));
     let (y0, y1) = ((v0 * h as f32) as usize, ((v1 * h as f32).ceil() as usize).min(h));
+    // Sora's own eye drawing, for where Anti's solid eyes go.
+    let eyes_from = match op {
+        Op::Shadow { eyes: Some(e), .. } => Some((e, p.clone())),
+        _ => None,
+    };
     let mut changed = 0;
     for y in y0..y1 {
         for x in x0..x1 {
@@ -303,17 +315,7 @@ fn apply(p: &mut Pixels, op: Op) -> usize {
                     // (A little darker: the cream is near white, and a pale tint read as washed out.)
                     (k, rgb(to, sat, v * 0.85))
                 }
-                Op::Shadow { to, sat, lo, hi, eyes } => {
-                    let dark = rgb(to, sat, lo + (hi - lo) * v);
-                    let (u, t) = ((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32);
-                    let e = match eyes {
-                        Some([u0, v0, u1, v1]) if u >= u0 && u < u1 && t >= v0 && t < v1 => eye(hue, s, v),
-                        _ => 0.0,
-                    };
-                    let glow = glow(v);
-                    let mix = |a: f32, z: f32| a * (1.0 - e) + z * e;
-                    (1.0, (mix(dark.0, glow.0), mix(dark.1, glow.1), mix(dark.2, glow.2)))
-                }
+                Op::Shadow { to, sat, lo, hi, .. } => (1.0, rgb(to, sat, lo + (hi - lo) * v)),
             };
             if k <= 0.0 {
                 continue;
@@ -325,51 +327,24 @@ fn apply(p: &mut Pixels, op: Op) -> usize {
             px[2] = mix(r, nr);
         }
     }
+    if let Some((eyes, orig)) = eyes_from {
+        solid_eyes(p, &orig, eyes);
+    }
     changed
 }
 
-/// How much a texel of Sora's eyes is the iris (blue, any brightness: the pupil too) or the
-/// white, 0..1.
-fn eye(hue: f32, s: f32, v: f32) -> f32 {
-    let dh = (hue - 220.0).rem_euclid(360.0);
-    let iris = ((40.0 - dh.min(360.0 - dh)) / 10.0).clamp(0.0, 1.0) * ((s - 0.25) / 0.1).clamp(0.0, 1.0);
-    let white = ((0.25 - s) / 0.1).clamp(0.0, 1.0) * ((v - 0.55) / 0.1).clamp(0.0, 1.0);
-    iris.max(white)
-}
-
-/// The eyes' yellow glow for an eye texel of brightness `v`.
-fn glow(v: f32) -> (f32, f32, f32) {
-    rgb(GLOW_HUE, 0.85, 0.8 + 0.2 * v)
-}
-
-/// Where Sora's eyes are in `orig` (within `rect`), `p` (the same size) glows yellow. Returns how
-/// many texels changed.
-fn glow_eyes(p: &mut Pixels, orig: &Pixels, rect: [f32; 4]) -> usize {
-    if (p.w, p.h) != (orig.w, orig.h) {
-        return 0;
-    }
-    let (w, h) = (p.w as usize, p.h as usize);
-    let [u0, v0, u1, v1] = rect;
-    let (x0, x1) = ((u0 * w as f32) as usize, ((u1 * w as f32).ceil() as usize).min(w));
-    let (y0, y1) = ((v0 * h as f32) as usize, ((v1 * h as f32).ceil() as usize).min(h));
-    let mut changed = 0;
-    for y in y0..y1 {
-        for x in x0..x1 {
-            let i = (y * w + x) * 4;
-            let o = &orig.bgra[i..i + 4];
-            let (hue, s, v) = hsv(o[2] as f32 / 255.0, o[1] as f32 / 255.0, o[0] as f32 / 255.0);
-            let e = eye(hue, s, v);
-            if e <= 0.0 {
-                continue;
-            }
-            changed += 1;
-            let g = glow(v);
-            let px = &mut p.bgra[i..i + 4];
-            let mix = |a: u8, z: f32| ((a as f32 / 255.0 * (1.0 - e) + z * e) * 255.0 + 0.5).clamp(0.0, 255.0) as u8;
-            (px[0], px[1], px[2]) = (mix(px[0], g.2), mix(px[1], g.1), mix(px[2], g.0));
+/// Anti's solid yellow eyes on `p` where Sora's are in `orig` (the same size; `ANTI_EYES`).
+/// Returns how many eyes (on the face) or open frames (on the sheet) got them.
+fn solid_eyes(p: &mut Pixels, orig: &Pixels, eyes: Eyes) -> usize {
+    use kh1_data::texmap;
+    match eyes {
+        Eyes::Face([u0, v0, u1, v1]) => {
+            let (w, h) = (orig.w as f32, orig.h as f32);
+            let area = [(u0 * w) as u32, (v0 * h) as u32, ((u1 - u0) * w).ceil() as u32, ((v1 - v0) * h).ceil() as u32];
+            texmap::solid_eyes(p, orig, area, texmap::ANTI_EYE_RGB)
         }
+        Eyes::Frames => texmap::solid_eye_frames(p, orig, FRAME_H, texmap::ANTI_EYE_RGB),
     }
-    changed
 }
 
 /// Anti-Sora's textures carried onto Sora's (`kh1_data::texmap`; `docs/kh1-tint.md`): Sora's
@@ -421,17 +396,20 @@ fn bake_anti(files: &kh1_data::Files) -> Result<Baked, String> {
         match texmap::find_frame(&face_orig, &sheet, FRAME_H) {
             Some((x, y, d)) if d <= FRAME_MATCH => {
                 let mut img = texmap::frames_from(&face_new, x, y, &sheet, FRAME_H);
-                let glowing = if ANTI_EYES && *asset == "-2c0" { glow_eyes(&mut img, &sheet, WHOLE) } else { 0 };
-                log(&format!("form tint (Anti): {asset} frames made from the face at ({x}, {y}) (difference {d:.1}), {glowing} texels glowing"));
+                let open = if ANTI_EYES && *asset == "-2c0" { solid_eyes(&mut img, &sheet, Eyes::Frames) } else { 0 };
+                log(&format!(
+                    "form tint (Anti): {asset} frames made from the face at ({x}, {y}) (difference {d:.1}), solid eyes on {open} of {} frames",
+                    sheet.h / FRAME_H
+                ));
                 out[k] = Some(Arc::new(img));
             }
             found => log(&format!("form tint (Anti): {asset}'s first frame not found on the face ({found:?})")),
         }
     }
-    // The face's own eyes glow too (after the frames, which take the face without them).
+    // The face's own eyes too (after the frames, which take the face without them).
     if let (true, Some(f)) = (ANTI_EYES, face) {
         if let (Some(mut img), Some(face_orig)) = (out[f].take(), orig(f)) {
-            glow_eyes(Arc::make_mut(&mut img), &face_orig, EYES);
+            solid_eyes(Arc::make_mut(&mut img), &face_orig, Eyes::Face(texmap::SORA_FACE_EYES));
             out[f] = Some(img);
         }
     }

@@ -3409,3 +3409,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - The user: "KH1 limits that are equipped shouldn't even prompt in any drive form": KH1's
   Triangle-box offer of its limits (the call at the end of its menu fill) is skipped in every form;
   the s278 refusal stays.
+
+### 2026-10-20: Stage 292 (Anti Form's eyes: solid yellow blobs)
+- The user (with a picture of KH1's Anti-Sora): "i need the eyes to be solid yellow, and have it
+  be the same yellow as in anti-sora's model". Anti-Sora's model and textures hold no yellow (his
+  effect data's one yellow couldn't be tied to his eyes), so the colour is the picture's eye
+  centres, RGB (253, 230, 95) (`texmap::ANTI_EYE_RGB`). Each eye: an ellipse fitted to Sora's
+  eyeball, 1.12x, one flat opaque yellow, on the face and all 22 eye frames (shut frames stay
+  shut). `texmap::solid_eyes`, `tint::Eyes`; also on the `Op::Shadow` fallback.

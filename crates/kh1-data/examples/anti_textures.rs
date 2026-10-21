@@ -94,9 +94,22 @@ fn main() {
         let found = texmap::find_frame(&orig, &s, 128);
         println!("{sheet}: first frame at {found:?}");
         if let Some((x, y, _)) = found {
-            save(&format!("anti{sheet}"), &texmap::frames_from(&dark, x, y, &s, 128));
+            let mut img = texmap::frames_from(&dark, x, y, &s, 128);
+            if sheet == "-2c0" {
+                let open = texmap::solid_eye_frames(&mut img, &s, 128, texmap::ANTI_EYE_RGB);
+                println!("{sheet}: solid eyes on {open} of {} frames (the rest shut)", s.h / 128);
+            }
+            save(&format!("anti{sheet}"), &img);
         }
     }
+    // The face with Anti Form's solid eyes, as the mod makes it (`tint::bake_anti`).
+    let mut eyes = dark.clone();
+    let [u0, v0, u1, v1] = texmap::SORA_FACE_EYES;
+    let (w, h) = (eyes.w as f32, eyes.h as f32);
+    let area = [(u0 * w) as u32, (v0 * h) as u32, ((u1 - u0) * w).ceil() as u32, ((v1 - v0) * h).ceil() as u32];
+    let n = texmap::solid_eyes(&mut eyes, &orig, area, texmap::ANTI_EYE_RGB);
+    println!("-1c0: {n} solid eyes in {area:?}");
+    save("anti-1c0-eyes", &eyes);
 }
 
 /// How many of Sora's triangles have a twin (the same three corners) in Anti-Sora's mesh, and
