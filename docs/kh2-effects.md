@@ -83,7 +83,7 @@ Flags (checked where noted):
 | 0x0200 | End when the owner is gone. |
 | 0x0800 | Effect alpha follows the weapon's visibility (weapon anchors). |
 | 0x10000 | Two-point element (bones at 0x40/0x42). |
-| 0x20000 | Variant of the two-point mode. |
+| 0x20000 | **Camera space** (checked, `0x1402c4240`): see below. Not a two-point mode. |
 
 **Effect transform (checked, `0x1402c3e70`).** With a bone matrix `B` (world) and the element's
 local matrix `L = T(translation) · R(rotation) · S(1)`, the effect root position is the
@@ -97,6 +97,19 @@ once when they start.
 the effect alpha multiplier goes from its current value to 0 linearly over `fadeout` game
 frames (`0x1402bdb40`), and the effect is destroyed when it reaches 0. Without either flag the
 effect plays to its own end.
+
+**Camera-space elements (flag 0x20000, checked).** At start the flag sets bit 1 of the
+element's state word (`0x1402c5fd0`). Every frame the per-frame update (`0x1402c4d90`) then
+calls `0x1402c4240` **in place of** the bone binding (whatever flags 0x01/0x02/0x04 say): it
+takes the current camera's view matrix (the camera record's matrix at +8, built by
+`0x14019bfc0`), inverts it (`0x14013ce60`, a rigid inverse) to get the camera's frame `C`, and
+sets the effect root from `C · T(translation) · R(rotation)` exactly as the bone path does from
+`B · L` (position = its translation, rotation = its Euler angles); scale = the element scale
+(flag 0x100 not read). The bone field is not used. So the element sits at a fixed place in
+view space (x right, y down, z forward) and turns with the camera: a screen-locked overlay
+drawn with ordinary 3D programs. The only one in Sora's packages is Limit Form's element 58
+(§12.4). `kh2-fx`: `Effects::start`/`tick` place such elements with `camera_transform` from
+the camera given by `Effects::set_camera` (or the last frame built), every tick.
 
 ## 3. DPX
 
@@ -551,6 +564,7 @@ instance loop (§5.6) does to them. **Checked.**
 |---|---|---|---|
 | 210 | pppMoveLoop | `0x1404c1f00`, `0x1404c1ff0`, `0x1404c2010` | While fast-forwarding after a loop (`0x142b0ee24` set) the velocity takes its keys but the value is not advanced. Construct and reset clear only the velocity (`w1`). |
 | 211 | pppAngMoveLoop | `0x1404c2030`, `0x1404c20b0`, `0x1404c20d0` | Same for integer angles. |
+| 212 | pppSclMoveLoop | `0x1404c20f0`, `0x1404c21e0`, `0x1404c2200` | The same code as MoveLoop (Limit Form's element 36). |
 | 213 | pppPointLoop | `0x1404c2390`, `0x1404c2460`, `0x1404c2490` | On its first run (a key handle at `w0 + 12` still 0) the value is cleared and the current key remembered at `w0 + 12`. Key ticks add as Point does. Reset **subtracts** the remembered key; the replay from frame 0 adds it back, so the value runs on across loops instead of restarting. |
 | 214 | pppAngleLoop | `0x1404c2590`, `0x1404c26c0`, `0x1404c26f0` | As PointLoop with integer angles; after a key each angle above 0x10000 is brought down by whole turns (`while a > 0x10000: a −= 0x10000`). |
 | 215 | pppScaleLoop | `0x1404c27d0`, `0x1404c28a0`, `0x1404c28d0` | As PointLoop. |
@@ -567,6 +581,7 @@ mode. Calc, not on a computed frame: on instance frame 0 the factors are drawn a
 | Type | Name | Calc | Factor(s) at `w0` | Added to target `i` |
 |---|---|---|---|---|
 | 63 | pppRandFV | `0x1404c4000` | one: `2u` (mode 0) or `u + u` | `range_i · r − range_i` |
+| 65 | pppRandDownFV | `0x1404c4230` | one: `−u` (mode 0) or `(−u − u) / 2` | `range_i · r` (0..−range; Limit Form's elements 37, 39) |
 | 75 | pppSRandFV | `0x1404c4d60` (factor `0x1404c4e80`) | three, one per axis, as RandFV | `range_i · r_i − range_i` |
 | 76 | pppSRandUpFV | `0x1404c4ed0` (factor `0x1404c4fd0`) | three: `u` (mode 0) or `(u + u) / 2` | `range_i · r_i` (0..range) |
 
@@ -576,6 +591,12 @@ in 0..range.
 ### 7.8 More matrices
 
 All calc-pass programs. **Checked** unless marked.
+
+- **89 pppMatrixYZX** (`0x1404c60f0`, rotation `0x1404e1aa0`; Limit Form's element 20) and
+  **234 pppMatrixLoopZXY** (`0x1404c67f0`; element 32). MatrixXYZ (§7.3) with the rotation
+  applied Y, then Z, then X (column form `Rx·Rz·Ry`); LoopZXY is MatrixZXY's code (as
+  MatrixLoop is MatrixXYZ's). Before `kh2-fx` ran them, those instances kept an unbuilt `M`:
+  element 32 drew a long stray streak and element 20's swirling ribbon trails did not show.
 
 - **96 pppRyjMatrixNoRot** (`0x1404c6ad0`; Fire 3, Reflect, Sora's element 42). `M` = the
   camera view's inverse (`0x14047a6d0`: rotation transposed, translation inverted), rows scaled
@@ -987,6 +1008,39 @@ trigger 12) over these swings: KH2 draws its weapon trail on both floating blade
   elements' own sizes) while KH1's Sora is drawn at 0.89 of KH2's; KH1's own Keyblade trail
   (`swing_fx`) stands in for KH2's weapon trail on both blades.
 
+### 12.4 Limit Form's package (`P_EX100_KH1F.a.us`)
+
+55 elements, 19 textures (package 20 in the mod). Frame trigger 1 elements of its motions
+(from `P_EX100_KH1F.mset`): the ground combo's fourth hit (154) 38 (frame 28), 39 (36); the
+**ground finisher (155)** 50 (0), 55 (2), 47..49 and 51..54 (4), 57 (20), 56 and 58 (26);
+the air finisher (183) 44 (14), 45 (58); 40 on motion 211, 26..28 on 212, 29..31 on 213, 41
+on 221, 42 on 231, 33 on 234, 43 on 241, 21 on 247, 22 on 248, 0 on 40. The others (20, 23..25,
+32, 34..37, 46) are not on a motion trigger (scripts).
+
+The finisher, as `kh2-fx` plays it: 47..54 small glints on the body bones; 55 a flash on the
+Keyblade tip; 57 (0x4000, scale 0.85) a faceted dome of light (DrawMatrixWood models, roughly
+700 units across at its widest, measured by eye offline) with orbs and rings (MegaBirth); 56 a flare on the tip; and
+**58, the camera-space element** (§2): bone 0, flags 0x20001, at `(0, 11, 209)` in view space,
+scale 0.48. Its emitters draw models through DrawMatrix (DrawMdl3 for 36 ticks, DrawMdlTs3 for
+19) and a MegaBirth of sparkles for 45 ticks: rendered offline, a pink vignette over the edges
+of the screen, clear in the middle, with sparkles, fading out over about 1.2 s.
+
+**The bug it caused (s287).** Before flag 0x20000 was read, element 58 was placed on Sora's
+bone 0 like any element: the vignette model hung in the world 209 units in front of Sora, a
+large flat magenta quad seen edge-on or slanted as the camera moved, for a second after the
+finisher's bloom.
+
+**Not drawn yet** (the programs are skipped; the rest of each element plays, and the hook
+logs the skipped programs once per element, `KH2 effect: form package 20 element N skips`):
+
+- 55 (finisher, on the tip) and 36: the lightning family (pppKeTh, KeThTp, KeThSft,
+  KeThRes16/32, KeDrct, MatrixLoc, KeBornRnd3): the bolts along the blade are missing.
+- 38 (fourth hit): RyjDrawMatrixWorldFront and the lens-flare programs (KeLnsLp, KeLnsLpSft,
+  KeLnsClm): that emitter's model and the lens-flare chain are missing.
+
+Whether these draw nothing rather than garbage was checked offline: their draw programs need
+an instance spawned or a matrix built by the skipped programs, so they emit no triangles.
+
 ## 13. Function index
 
 | Address | What |
@@ -1025,7 +1079,9 @@ trigger 12) over these swings: KH2 draws its weapon trail on both floating blade
 | 0x1404D04A0, 0x1404D08E0, 0x1404D0830, 0x1404D08A0 | KeShpTail3X calc, draw, construct, reset (§7.5). |
 | 0x1404CEF40, 0x1404CF150, 0x1404CF120 | KeShpTail2X calc, draw, construct. |
 | 0x1404C1F00.. 0x1404C28D0 | MoveLoop, AngMoveLoop, PointLoop, AngleLoop, ScaleLoop (§7.6). |
-| 0x1404C4000, 0x1404C4D60, 0x1404C4ED0 | RandFV, SRandFV, SRandUpFV (§7.7). |
+| 0x1404C4000, 0x1404C4D60, 0x1404C4ED0, 0x1404C4230 | RandFV, SRandFV, SRandUpFV, RandDownFV (§7.7). |
+| 0x1402C4240, 0x14019C4F0, 0x14013CE60 | Camera-space element placement (flag 0x20000, §2); the current camera record; rigid inverse. |
+| 0x1404C60F0, 0x1404C67F0, 0x1404E1AA0, 0x1404C20F0 | MatrixYZX, MatrixLoopZXY, the YZX rotation, SclMoveLoop (§7.6, §7.8). |
 | 0x1404C6AD0, 0x1404C7AE0, 0x1404C5D70, 0x1404C80E0, 0x1404C8150 | RyjMatrixNoRot, KeParMatR, KeMatSN, KeDMat, KeDMatFr (§7.8). |
 | 0x1404CA2B0, 0x1404CA8F0, 0x1404CAAE0 | DrawMdlSemi3; DrawMdlLoop calc, draw (§7.9). |
 | 0x1404D6B90, 0x1404E3170, 0x1404D6C70 | KeBornRnd6: countdown, vertex picker, child set-up (§7.10). |
@@ -1052,7 +1108,9 @@ trigger 12) over these swings: KH2 draws its weapon trail on both floating blade
 | KeShpDtt, SnoMdlDttNorm (§7.10) | State **checked**; the drawing (a frame-buffer distortion) only skimmed, and not drawn by `kh2-fx`. |
 | EiDrawShipoly (ribbon) | Recording, spline, width, strip, UV and alpha mapping traced (§15). Not traced: the scroll-draw variant (key @8 ≠ 0), mode ≥ 2's exact smoothing, space modes 2/3, the reset hook. None are used by Explosion or Magnet. |
 | Model OMD flag bit 2, draw flags 0x400/0x800, model flags 0x100/0x200/0x2000 (lighting, env), sorted-model path details | Not traced. |
-| Two-point elements (flag 0x10000), sound ids above 999000 | Not traced (not needed for these effects). |
+| Two-point elements (flag 0x10000), sound ids above 999000 | Not traced (not needed for these effects). Flag 0x20000 is not two-point: it is camera space (§2), checked. |
+| Camera-space elements in the mod | Placed from KH1's view matrix (the one the effects are drawn with). How deep KH1's near plane is and its field of view against KH2's (Limit's element 58 sits 209 units in front of the camera) were not checked. |
+| Limit Form's lightning (KeTh family) and lens-flare programs (§12.4) | Not traced; skipped. |
 | Element flags 0x20 on motion change | The owner keeps a list; the code that ends them on motion change was not followed, but it goes through the same end path. |
 | `pax.rs` emitter view | Its `Emitter::start == None` means "child emitter", not "starts at loop end"; the effect length is the particle data's end frame (`dpd::ParticleData::end`), and looping is its flag bit. |
 

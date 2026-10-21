@@ -3380,3 +3380,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   (`Character::square_swing`, set for Anti in `form::arrive`). Still no guard in Anti (s283).
 - Known: Anti's attack groups 1 / 4 / 5 / 7 have no shape as we read its collision (Side Spin's
   first and last hits, several combo hits); being looked into.
+
+### 2026-10-20: Stage 289 (Limit Form's finisher effect)
+- The user (video): "at the end of limit form's base combo, the vfx are a bit glitched". The
+  finisher (motion 155) starts element 58, flag 0x20000: camera space (the game, `0x1402c4240`,
+  puts it 209 in front of the camera each frame), which we hung on Sora's bone 0 as a flat pink
+  plane. kh2-fx places 0x20000 elements from the camera (`camera_transform`). Also four effect
+  programs added (MatrixYZX 89, MatrixLoopZXY 234, SclMoveLoop 212, RandDownFV 65); the
+  lightning (elements 55, 36) and lens flare (38) still skipped, logged once. `docs/kh2-effects.md`.

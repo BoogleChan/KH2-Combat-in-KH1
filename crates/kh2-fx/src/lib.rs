@@ -63,6 +63,9 @@
 //! RyjMatrixNoRot, KeParMatR, KeMatSN, KeDMat, KeDMatFr, DrawMdlSemi3,
 //! DrawMdlLoop and KeBornRnd6. The two frame-buffer distortions, KeShpDtt
 //! and SnoMdlDttNorm, run but draw nothing ([`draws_nothing`]).
+//! From Limit Form's package: MatrixYZX, MatrixLoopZXY, SclMoveLoop and
+//! RandDownFV; its camera-space element (flag 0x20000) is placed in front
+//! of the camera ([`camera_transform`]).
 //! Other types are skipped and counted ([`Effects::skipped_programs`],
 //! [`Library::unsupported_programs`]).
 //!
@@ -99,7 +102,7 @@ mod shipoly;
 mod tail;
 
 pub use camera::Camera;
-pub use effects::{element_transform, EffectHandle, Effects};
+pub use effects::{camera_transform, element_transform, EffectHandle, Effects};
 pub use library::{Library, LoadError, Texture, TextureId, TextureSource};
 pub use output::{Batch, Blend, BlendMode, D3dFactor, D3dOp, Frame, Vertex};
 pub use player::{draws_nothing, supported};

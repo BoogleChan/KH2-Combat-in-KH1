@@ -61,6 +61,11 @@ pub fn euler_xyz_i(a: [i32; 3]) -> Mat3 {
     rot_z_i(a[2]) * rot_y_i(a[1]) * rot_x_i(a[0])
 }
 
+/// Y, then Z, then X (pppMatrixYZX).
+pub fn euler_yzx_i(a: [i32; 3]) -> Mat3 {
+    rot_x_i(a[0]) * rot_z_i(a[2]) * rot_y_i(a[1])
+}
+
 /// Y, then X, then Z (pppMatrixYXZ).
 pub fn euler_yxz_i(a: [i32; 3]) -> Mat3 {
     rot_z_i(a[2]) * rot_x_i(a[0]) * rot_y_i(a[1])
@@ -131,6 +136,11 @@ mod tests {
         assert!(close(m * Vec3::Y, Vec3::Z));
         assert!(close(m * Vec3::X, Vec3::Y));
         assert!(close(euler_xyz(Vec3::new(std::f32::consts::FRAC_PI_2, 0.0, 0.0)) * Vec3::Y, Vec3::Z));
+        // YZX: Y first, then Z, then X. A quarter turn about y takes z to x, about z x to y,
+        // about x y to z.
+        let m = euler_yzx_i([0x4000, 0x4000, 0x4000]);
+        assert!(close(m * Vec3::Z, Vec3::Z));
+        assert!(close(euler_yzx_i([0, 0x4000, 0x4000]) * Vec3::Z, Vec3::Y));
     }
 
     #[test]

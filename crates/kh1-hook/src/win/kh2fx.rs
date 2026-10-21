@@ -320,6 +320,11 @@ pub fn form_event(motion: u16, el: i16) {
                         e.bone, e.flags, e.translation, e.rotation
                     ));
                 }
+                // (Programs kh2-fx doesn't run draw nothing; said once per element.)
+                let skipped = sp.fx.library().unsupported_programs(el as u16);
+                if !skipped.is_empty() {
+                    log(&format!("KH2 effect: form package {pkg} element {el} skips {skipped:?}"));
+                }
             }
         }
     }

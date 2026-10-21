@@ -38,6 +38,8 @@ pub(crate) mod k {
     pub const RAND_FLOAT: u32 = 51;
     /// RandFloat for three floats with one factor.
     pub const RAND_FV: u32 = 63;
+    /// RandFV with the factor in -1..0: each float moves by 0..-range.
+    pub const RAND_DOWN_FV: u32 = 65;
     pub const RAND_IV: u32 = 66;
     /// Three floats, a factor each, uniform in ±range.
     pub const S_RAND_FV: u32 = 75;
@@ -46,6 +48,7 @@ pub(crate) mod k {
     /// A rotation by the change of an angle, kept for the S-matrix pointer.
     pub const KE_MAT_SN: u32 = 85;
     pub const MATRIX_XYZ: u32 = 87;
+    pub const MATRIX_YZX: u32 = 89;
     pub const MATRIX_YXZ: u32 = 90;
     pub const MATRIX_ZXY: u32 = 91;
     pub const MATRIX_SCL: u32 = 94;
@@ -86,6 +89,8 @@ pub(crate) mod k {
     /// The Loop integrators keep their values over an instance loop.
     pub const MOVE_LOOP: u32 = 210;
     pub const ANG_MOVE_LOOP: u32 = 211;
+    /// Same routine as MoveLoop (three floats).
+    pub const SCL_MOVE_LOOP: u32 = 212;
     pub const POINT_LOOP: u32 = 213;
     pub const ANGLE_LOOP: u32 = 214;
     pub const SCALE_LOOP: u32 = 215;
@@ -95,6 +100,8 @@ pub(crate) mod k {
     /// DrawMdlLoopZ without the Z matrix.
     pub const DRAW_MDL_LOOP: u32 = 218;
     pub const DRAW_MDL_LOOP_Z: u32 = 219;
+    /// Same routine as MatrixZXY.
+    pub const MATRIX_LOOP_ZXY: u32 = 234;
     /// Same routine as VertexApLc.
     pub const VERTEX_AP_LC_LOOP: u32 = 236;
     /// Model distortion by its normals (reads the frame buffer; not drawn).
@@ -117,12 +124,14 @@ pub fn supported(kind: u32) -> bool {
             | 49
             | 51
             | 63
+            | 65
             | 66
             | 75
             | 76
             | 84
             | 85
             | 87
+            | 89
             | 90
             | 91
             | 94
@@ -145,9 +154,8 @@ pub fn supported(kind: u32) -> bool {
             | 177
             | 184
             | 201
-            | 210
-            | 211
-            | 213..=219
+            | 210..=219
+            | 234
             | 236
             | 238
             | 241
@@ -752,7 +760,7 @@ fn reset(inst: &mut Instance, def: &EmitterDef) {
             // velocity restarts; Point, Angle and Scale take back the key
             // they started from, which the replay from frame 0 adds again,
             // so the value runs on across the loop.
-            k::MOVE_LOOP | k::ANG_MOVE_LOOP => inst.work.zero(w(prog, 1), 12),
+            k::MOVE_LOOP | k::SCL_MOVE_LOOP | k::ANG_MOVE_LOOP => inst.work.zero(w(prog, 1), 12),
             k::POINT_LOOP | k::SCALE_LOOP | k::ANGLE_LOOP => {
                 let first = inst.work.i32(w0 + 12);
                 if let Some(key) = first.checked_sub(1).and_then(|i| prog.keys.get(i as usize)) {
@@ -859,7 +867,8 @@ fn calc(cx: &CalcCtx, rng: &mut Rng, inst: &mut Instance, (_e, pi): (usize, usiz
         }
         // MoveLoop: Move whose value stands still while the instance is
         // fast-forwarded after a loop (the velocity still takes its keys).
-        k::MOVE_LOOP => {
+        // SclMoveLoop is the same routine.
+        k::MOVE_LOOP | k::SCL_MOVE_LOOP => {
             if inst.computed {
                 return;
             }
@@ -995,7 +1004,9 @@ fn calc(cx: &CalcCtx, rng: &mut Rng, inst: &mut Instance, (_e, pi): (usize, usiz
         // factors are drawn on frame 0 and stored at w0 (one for RandFV,
         // one per axis for the S forms); frame 0 and every later key tick
         // add `range·r − range` (`range·r` for SRandUpFV) to the target.
-        k::RAND_FV | k::S_RAND_FV | k::S_RAND_UP_FV => {
+        // RandDownFV: one factor `−u` (mode 0) or `(−u − u)/2`, and adds
+        // `range·r`: each float moves by 0..−range.
+        k::RAND_FV | k::RAND_DOWN_FV | k::S_RAND_FV | k::S_RAND_UP_FV => {
             if inst.computed {
                 return;
             }
@@ -1004,6 +1015,11 @@ fn calc(cx: &CalcCtx, rng: &mut Rng, inst: &mut Instance, (_e, pi): (usize, usiz
                 match prog.kind {
                     k::RAND_FV => {
                         let r = if mode == 0 { rng.rand01() * 2.0 } else { rng.rand01() + rng.rand01() };
+                        inst.work.set_f32(w0, r);
+                    }
+                    k::RAND_DOWN_FV => {
+                        let u = -rng.rand01();
+                        let r = if mode == 0 { u } else { (u - rng.rand01()) * 0.5 };
                         inst.work.set_f32(w0, r);
                     }
                     kind => {
@@ -1021,18 +1037,20 @@ fn calc(cx: &CalcCtx, rng: &mut Rng, inst: &mut Instance, (_e, pi): (usize, usiz
                 return;
             }
             for c in 0..3 {
-                let r = inst.work.f32(if prog.kind == k::RAND_FV { w0 } else { w0 + c * 4 });
+                let one = matches!(prog.kind, k::RAND_FV | k::RAND_DOWN_FV);
+                let r = inst.work.f32(if one { w0 } else { w0 + c * 4 });
                 let range = key.f32(8 + c as usize * 4);
-                let add = if prog.kind == k::S_RAND_UP_FV { range * r } else { range * r - range };
+                let add = if matches!(prog.kind, k::S_RAND_UP_FV | k::RAND_DOWN_FV) { range * r } else { range * r - range };
                 let o = target + c * 4;
                 inst.work.set_f32(o, add + inst.work.f32(o));
             }
         }
-        k::MATRIX_XYZ | k::MATRIX_LOOP | k::MATRIX_YXZ | k::MATRIX_ZXY => {
+        k::MATRIX_XYZ | k::MATRIX_LOOP | k::MATRIX_YZX | k::MATRIX_YXZ | k::MATRIX_ZXY | k::MATRIX_LOOP_ZXY => {
             let a = [inst.work.i32(w1), inst.work.i32(w1 + 4), inst.work.i32(w1 + 8)];
             let r = match prog.kind {
+                k::MATRIX_YZX => math::euler_yzx_i(a),
                 k::MATRIX_YXZ => math::euler_yxz_i(a),
-                k::MATRIX_ZXY => math::euler_zxy_i(a),
+                k::MATRIX_ZXY | k::MATRIX_LOOP_ZXY => math::euler_zxy_i(a),
                 _ => math::euler_xyz_i(a),
             };
             inst.m = math::trs(inst.work.vec3(w0), r, inst.work.vec3(w2));
@@ -1498,8 +1516,12 @@ mod tests {
             assert!(!has_draw(kind), "{kind}");
         }
         assert!(draws_nothing(160) && draws_nothing(238) && !draws_nothing(157));
-        // Neighbours that no spell uses stay unsupported.
-        assert!(!supported(212) && !supported(156) && !supported(64));
+        // Limit Form's package.
+        for kind in [65, 89, 212, 234] {
+            assert!(supported(kind) && !has_draw(kind), "{kind}");
+        }
+        // Neighbours that no package uses stay unsupported.
+        assert!(!supported(88) && !supported(156) && !supported(64));
     }
 
     /// A key: frame (ticks), then bytes placed at their offsets.
@@ -1657,6 +1679,16 @@ mod tests {
             step(&lib, &fx, &mut rng, &mut i, &p, 0, false);
             let v = i.work.vec3(64);
             assert!((0.0..=10.0).contains(&v.x) && (0.0..=20.0).contains(&v.y) && (0.0..=40.0).contains(&v.z), "{v}");
+        }
+        // RandDownFV: one factor in -1..0, each component 0..-range.
+        let p = prog(k::RAND_DOWN_FV, keys(0), vec![0]);
+        for seed in 0..50 {
+            let mut rng = Rng::new(seed);
+            let mut i = inst(1);
+            step(&lib, &fx, &mut rng, &mut i, &p, 0, false);
+            let (v, r) = (i.work.vec3(64), i.work.f32(0));
+            assert!((-1.0..=0.0).contains(&r));
+            assert!((v - Vec3::new(10.0, 20.0, 40.0) * r).length() < 1e-4, "{v}");
         }
         // Target -1 writes nowhere.
         let p = prog(k::S_RAND_FV, vec![kb(0, 24, &[(4, &(-1i32).to_le_bytes()), (8, &ranges)])], vec![0]);

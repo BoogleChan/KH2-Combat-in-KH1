@@ -344,6 +344,8 @@ fn run(lib: &Arc<Library>, sora: Option<&Sora>, scene: &Scene, out: &Path, frame
     for f in 0..frames {
         let anchors = Anchors { pose: sora.and_then(|s| s.pose(scene.motion, f as f32)), tip_local: sora.map(|s| s.tip_local).unwrap_or(Vec3::ZERO), t: f as f32, map };
         let mut bones = |c: u16| anchors.bone(c);
+        // (This frame's camera before starting and ticking: camera-space elements, flag 0x20000.)
+        fx.set_camera(&view.cam);
         for &(at, id) in scene.triggers {
             if at == f && fx.start(id, &mut bones).is_none() {
                 eprintln!("element {id} not found");

@@ -32,6 +32,9 @@ pub mod flags {
     pub const BONE_SCALE: u32 = 0x100;
     pub const END_WITH_OWNER: u32 = 0x200;
     pub const WEAPON_VISIBILITY: u32 = 0x800;
+    /// Placed in **camera space** every frame: the element's translation and rotation are
+    /// taken relative to the camera, not to its bone (a screen-locked flash or tint).
+    pub const CAMERA: u32 = 0x20000;
 }
 
 /// Game frames (60 Hz) per effect tick.
@@ -84,13 +87,38 @@ pub fn element_transform(el: &PaxElement, bone: Mat4) -> (Vec3, Mat3, Vec3) {
     if el.flags & flags::BIND_POSITION_ONLY != 0 {
         return (bone.transform_point3(t), r, scale);
     }
-    let bl = bone * Mat4::from_translation(t) * Mat4::from_mat3(r);
-    // Orthonormalise (the game re-derives Euler angles from B·L).
-    let x = bl.x_axis.truncate().normalize_or_zero();
-    let y = (bl.y_axis.truncate() - x * x.dot(bl.y_axis.truncate())).normalize_or_zero();
+    let (pos, rot) = rigid(bone * Mat4::from_translation(t) * Mat4::from_mat3(r));
+    (pos, rot, scale)
+}
+
+/// Translation and orthonormal rotation of `m` (the game re-derives Euler angles from it).
+fn rigid(m: Mat4) -> (Vec3, Mat3) {
+    let x = m.x_axis.truncate().normalize_or_zero();
+    let y = (m.y_axis.truncate() - x * x.dot(m.y_axis.truncate())).normalize_or_zero();
     let z = x.cross(y);
-    let z = if z.dot(bl.z_axis.truncate()) < 0.0 { -z } else { z };
-    (bl.w_axis.truncate(), Mat3::from_cols(x, y, z), scale)
+    let z = if z.dot(m.z_axis.truncate()) < 0.0 { -z } else { z };
+    (m.w_axis.truncate(), Mat3::from_cols(x, y, z))
+}
+
+/// The effect root of a camera-space element (flag 0x20000, `docs/kh2-effects.md` §2): the
+/// camera's frame (the inverse of `view`, made rigid) times the element's own
+/// `T(translation) · R(rotation)`; scale is the element scale. The bone and the other
+/// placement flags are not read. The game does this every frame (`0x1402c4240`).
+pub fn camera_transform(el: &PaxElement, view: Mat4) -> (Vec3, Mat3, Vec3) {
+    let (eye, cam) = rigid(view.inverse());
+    let mut frame = Mat4::from_mat3(cam);
+    frame.w_axis = eye.extend(1.0);
+    let (pos, rot) = rigid(frame * Mat4::from_translation(Vec3::from(el.translation)) * Mat4::from_mat3(math::euler_xyz(Vec3::from(el.rotation))));
+    (pos, rot, Vec3::from(el.scale))
+}
+
+/// Where an element's effect goes this frame, from its bone (or the camera, flag 0x20000).
+fn place(el: &PaxElement, bone: Mat4, view: Mat4) -> (Vec3, Mat3, Vec3) {
+    if el.flags & flags::CAMERA != 0 {
+        camera_transform(el, view)
+    } else {
+        element_transform(el, bone)
+    }
 }
 
 impl Effects {
@@ -123,8 +151,8 @@ impl Effects {
                 }
             }
         }
-        let bone = bones(el.bone).unwrap_or(Mat4::IDENTITY);
-        let (pos, rot, scale) = element_transform(&el, bone);
+        let bone = if el.flags & flags::CAMERA != 0 { Mat4::IDENTITY } else { bones(el.bone).unwrap_or(Mat4::IDENTITY) };
+        let (pos, rot, scale) = place(&el, bone, self.view.get());
         player.set_root(&self.lib, pos, rot, scale);
         let handle = self.next;
         self.next = self.next.wrapping_add(1).max(1);
@@ -216,7 +244,7 @@ impl Effects {
     pub fn set_anchor(&mut self, h: EffectHandle, bone: Mat4) {
         if let Some(r) = self.running.iter_mut().find(|r| r.handle == h.0) {
             r.anchor = Some(bone);
-            (r.pos, r.rot, r.scale) = element_transform(&r.element, bone);
+            (r.pos, r.rot, r.scale) = place(&r.element, bone, self.view.get());
         }
     }
 
@@ -266,7 +294,10 @@ impl Effects {
             }
             let f = r.element.flags;
             let follow = f & flags::BIND != 0 && (f & flags::BIND_UNTIL_START == 0 || !r.started);
-            if let Some(a) = r.anchor {
+            if f & flags::CAMERA != 0 {
+                // In place of any binding: re-placed in front of the camera every frame.
+                (r.pos, r.rot, r.scale) = camera_transform(&r.element, view);
+            } else if let Some(a) = r.anchor {
                 (r.pos, r.rot, r.scale) = element_transform(&r.element, a);
             } else if follow {
                 if let Some(b) = bones(r.element.bone) {
@@ -358,5 +389,26 @@ mod tests {
         let (p, r, _) = element_transform(&element(flags::BIND_POSITION_ONLY), bone);
         assert!((p - Vec3::new(35.0, 0.0, 0.0)).length() < 1e-3);
         assert_eq!(r, Mat3::IDENTITY);
+    }
+
+    #[test]
+    fn camera_element_sits_in_view_space() {
+        // Limit Form's element 58: bone 0, flags 0x20001, 209 in front of the camera.
+        let mut el = element(flags::CAMERA | flags::BIND);
+        el.bone = 0;
+        el.translation = [0.0, 11.0, 209.0];
+        el.scale = [0.5; 3];
+        let cam = Camera::look_at(Vec3::new(300.0, -200.0, 400.0), Vec3::new(0.0, -95.0, 0.0), Vec3::NEG_Y);
+        // The bone is not read: whatever it is, the root is at (0, 11, 209) in view space,
+        // turned with the camera.
+        let bone = Mat4::from_translation(Vec3::new(5.0, 0.0, 0.0));
+        let (p, r, s) = place(&el, bone, cam.view());
+        assert!((cam.view().transform_point3(p) - Vec3::new(0.0, 11.0, 209.0)).length() < 1e-3, "{p}");
+        let vr = Mat3::from_mat4(cam.view()) * r;
+        assert!((vr * Vec3::Z - Vec3::Z).length() < 1e-5 && (vr * Vec3::Y - Vec3::Y).length() < 1e-5);
+        assert_eq!(s, Vec3::splat(0.5));
+        // An ordinary element on the same bone stays with the bone.
+        let (p, _, _) = place(&element(flags::BIND), bone, cam.view());
+        assert!((p - Vec3::new(5.0, -10.0, 0.0)).length() < 1e-3);
     }
 }
