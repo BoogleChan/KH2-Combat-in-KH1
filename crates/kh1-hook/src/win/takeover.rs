@@ -25,7 +25,7 @@
 
 use super::addr::Rva;
 use super::{combat, hook, log, menu, pose};
-use character_core::{Button, Character, Env, EventKind, Input, Output, StateName, TargetInfo};
+use character_core::{Button, Character, Env, Input, Output, StateName, TargetInfo};
 use glam::Mat4;
 use kh2_rig::RigAnim;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, AtomicUsize, Ordering};
@@ -2724,7 +2724,7 @@ unsafe fn takeover(actor: usize) -> bool {
     };
     KH1_AIR_SLOT.store(air_slot, Ordering::Relaxed);
     if !misc_kh1 {
-        kh2_footsteps(actor, &out, &d.anim);
+        walk_steps(actor, &out, &d.anim, d.grounded && !d.character.airborne());
     }
     keyblade(base, actor, d.anim.weapons_out(), &mut d.logged);
     GRIP.store(d.anim.weapons_out(), Ordering::Relaxed);
@@ -2845,9 +2845,9 @@ unsafe fn takeover(actor: usize) -> bool {
             log(&format!("attacking (motion {}, frame {}): {}", out.motion, out.clip_frame, pose::weapon_report()));
         }
     }
-    // KH1's footsteps only once KH2 has been walking or running a moment, in its own walk / run
-    // motion (the user: steps heard walking forward mid-combo; between two swings KH2 can be in
-    // its run for a few frames, still showing the swing, and KH1's run cycle stepped then).
+    // KH1's contact sounds (`footstep`) only once KH2 has been walking or running a moment, in
+    // its own walk / run motion (the user: steps heard walking forward mid-combo; between two
+    // swings KH2 can be in its run for a few frames, still showing the swing).
     static STEPPING: AtomicU32 = AtomicU32::new(0);
     let walking = matches!(out.state, StateName::Walk | StateName::Run) && matches!(out.motion, character_core::motion::WALK | character_core::motion::RUN);
     let n = if walking { STEPPING.load(Ordering::Relaxed).saturating_add(1) } else { 0 };
@@ -2870,11 +2870,12 @@ unsafe fn takeover(actor: usize) -> bool {
     true
 }
 
-/// KH1's footstep sound (`0x140293C70 (actor, kind)`: the floor's sound from `footstep.bin`
-/// by world and material), played from his motion's frames. Under KH2, KH1 keeps him in its
-/// walk / run slots whenever the stick is held, so its steps sounded during KH2's attacks and
-/// rolls (the user: footsteps mid-animation): Sora's are KH1's only while KH2 walks or runs
-/// him (or KH1 has him).
+/// KH1's contact sound (`0x140293C70 (actor, kind)`: a sound from the same floor table as the
+/// steps, by world and material, or kind 4 by the touched object's), held back while KH2 has Sora
+/// and isn't walking or running him (Stage 155, which took it for the footsteps: the user,
+/// footsteps mid-animation). Its callers are KH1's touch / push routines (`0x1402C0D30`,
+/// `0x1402C0ED0`, whose push is `gates`' crate push, and two contact callbacks), not the motions:
+/// the walk / run steps are `0x1402939B0`'s (`STEP_SOUND_RVA`, `walk_steps`).
 const FOOTSTEP_RVA: Rva = Rva(0x293C70);
 const FOOTSTEP_PROLOGUE: [u8; 10] = [0x48, 0x89, 0x5C, 0x24, 0x10, 0x56, 0x48, 0x83, 0xEC, 0x20];
 static ORIG_FOOTSTEP: AtomicUsize = AtomicUsize::new(0);
@@ -2896,19 +2897,22 @@ unsafe extern "system" fn footstep(actor: usize, kind: i32) -> usize {
     f(actor, kind)
 }
 
-/// KH1's footstep / material sound from a motion's sound event (`0x1402939B0 (actor, kind)`:
-/// kinds 0..7 the feet (0 run, 4 walk; it alternates the foot itself), 10 a landing, others
-/// walls and objects), reached from KH1's motion events (`0x140293290`, from `0x14029DA4E`).
-/// KH1 keeps Sora in its own walk / run cycle under KH2 whenever the stick is held, so its steps
-/// sounded whatever KH2 played (the user: "footsteps currently follow whatever the kh1
-/// animations are doing ... we need footstep sfxs to follow what kh2 animations are doing").
-/// While KH2 has Sora, KH1's are dropped, and KH2's own footstep triggers (frame trigger 2, the
-/// same kinds) play KH1's floor sound through it instead (`kh2_footsteps`).
+/// KH1's footstep / material sound (`0x1402939B0 (actor, kind)`: kinds 0..7 the feet, 0..3 run
+/// and 4..7 walk, the foot alternating by `actor+0x39C`; 8 the stop from a run (`0x1402A7693`,
+/// `0x1402CA135`), 10 the landing (`0x1402BF26E`, KH1's touchdown `0x1402BF100`), others walls
+/// and objects; the sound is the floor table's for the world and `actor+0x39E`, the material
+/// under him). Vanilla's steps come from KH1's walk / run motions: their sound events
+/// (`0x14029DA4E` → `0x140293290`, event id → kind by `0x140529788`: 1 / 2 walk 4 / 5, 3 / 4 run
+/// 0 / 1, 6 landing 10). KH1 keeps Sora in its own walk / run cycle under KH2 whenever the stick
+/// is held, so its steps sounded whatever KH2 played (the user: "footsteps currently follow
+/// whatever the kh1 animations are doing ... we need footstep sfxs to follow what kh2 animations
+/// are doing"), and KH1's stop and landing ones under KH2's moves. While KH2 has Sora, KH1's are
+/// dropped, and `walk_steps` plays the same sound at the feet of the walk / run KH2 draws.
 const STEP_SOUND_RVA: Rva = Rva(0x2939B0);
 /// `mov [rsp+0x20], rsi; push rdi; sub rsp, 0x20`.
 const STEP_SOUND_PROLOGUE: [u8; 10] = [0x48, 0x89, 0x74, 0x24, 0x20, 0x57, 0x48, 0x83, 0xEC, 0x20];
 static ORIG_STEP_SOUND: AtomicUsize = AtomicUsize::new(0);
-/// Set while we call it ourselves (a KH2 footstep).
+/// Set while we call it ourselves (`walk_steps`).
 static OUR_STEP: AtomicBool = AtomicBool::new(false);
 
 unsafe extern "system" fn step_sound(actor: usize, kind: i32) {
@@ -2916,7 +2920,7 @@ unsafe extern "system" fn step_sound(actor: usize, kind: i32) {
     if !OUR_STEP.load(Ordering::Relaxed) && actor > 0x10000 && actor == rd::<u64>(base + PARTY_RVA) as usize && FRAME_KIND.load(Ordering::Relaxed) == 1 && !MISC_KH1.load(Ordering::Relaxed) {
         static N: AtomicU32 = AtomicU32::new(0);
         if N.fetch_add(1, Ordering::Relaxed) < 10 {
-            log(&format!("KH1's step sound (kind {kind}) dropped: KH2 has Sora, KH2's own steps sound"));
+            log(&format!("KH1's step sound (kind {kind}) dropped: KH2 has Sora, its walk / run steps sound instead"));
         }
         return;
     }
@@ -2935,29 +2939,45 @@ unsafe fn play_step(actor: usize, kind: i16) {
     OUR_STEP.store(false, Ordering::Relaxed);
     static N: AtomicU32 = AtomicU32::new(0);
     if N.fetch_add(1, Ordering::Relaxed) < 12 {
-        log(&format!("KH2 footstep (kind {kind})"));
+        log(&format!("walk step (kind {kind}, KH1's floor sound)"));
     }
 }
 
-/// KH2's footsteps this frame: its walk / run loops' footstep triggers as the rig's track
-/// passes them (the controller plays those loops without frames of its own), and the footstep
-/// events of its actions (the landing's). In Wisdom Form only the landing's (the user: "we
-/// generally want footsteps disabled for sora in this form (with the exception of landing) as
-/// he is gliding across the ground"; the form's own walk and run have none anyway).
-unsafe fn kh2_footsteps(actor: usize, out: &Output, anim: &RigAnim) {
+/// Sora's footsteps while KH2 has him: KH1's own step sound (`0x1402939B0`, kinds 0..3 run and
+/// 4..7 walk: the floor's sound for the world and the material under him, `actor+0x39E`, the
+/// foot alternating), only while he walks or runs on the ground, at the foot contacts of the
+/// walk / run KH2 draws (its loops' frame trigger 2, as the rig's track passes them; the
+/// controller plays those loops without frames of its own).
+///
+/// Nothing else steps (after s312, the user: "sora plays his KH2 walk sounds during any forward
+/// movement at all, including dodge rolling, quick stepping, aerial dodging, gliding, and many
+/// other moments when it shouldnt be playing. just keep KH1 walk steps in"). Until then every
+/// frame trigger 2 of KH2's actions played too, through the same KH1 sound: the dodge roll's
+/// (motion 209, kind 10 at frame 26), the landing's that ends a Quick Run, an Aerial Dodge or a
+/// glide (motion 5, kind 10 at frame 2), the jump's (3: 9), the High Jump's (201: 11), and the
+/// combo's, the ability moves', the guard's, the hit reactions' and the forms' moves' (Anti's
+/// most of all), kinds 0 / 4 / 9 / 10 on KH2's frames. The loop's own steps also sounded on any
+/// motion the rig held in a free state (a dodge roll's tail: "Run (motion 209)").
+///
+/// Forms: their own walk / run's contacts. Valor's, Final's, Limit's and Anti's have them;
+/// Wisdom's and Master's have none (they skate; the user had Wisdom's off, "he is gliding across
+/// the ground"), so they step nowhere.
+unsafe fn walk_steps(actor: usize, out: &Output, anim: &RigAnim, grounded: bool) {
+    use character_core::motion::{RUN, WALK};
     static PREV: Mutex<Option<(u16, bool, f32)>> = Mutex::new(None);
-    let in_form = super::form::in_wisdom();
-    let looping = matches!(out.state, StateName::Walk | StateName::Run | StateName::Idle);
-    let now = anim.playing();
+    let gait = |m: u16| m == WALK || m == RUN;
+    let walking = grounded && matches!(out.state, StateName::Walk | StateName::Run) && gait(out.motion) && !super::form::in_wisdom();
+    let now = anim.playing().filter(|p| walking && gait(p.0));
     let mut steps: Vec<i16> = Vec::new();
     if let Ok(mut prev) = PREV.lock() {
-        if let (true, Some((m, field, f, len)), Some((pm, pfield, pf))) = (looping, now, *prev) {
-            if m == pm && field == pfield && len > 0.0 && !in_form {
+        if let (Some((m, field, f, len)), Some((pm, pfield, pf))) = (now, *prev) {
+            if m == pm && field == pfield && len > 0.0 {
                 if let Some(list) = anim.rig.footsteps.get(&(m, field)) {
                     let (a, b) = (pf.rem_euclid(len), f.rem_euclid(len));
                     for &(at, kind) in list {
                         let crossed = if b >= a { at > a && at <= b } else { at > a || at <= b };
-                        if crossed && (f - pf).abs() < len {
+                        // (Feet only: KH1's 0..7.)
+                        if crossed && (f - pf).abs() < len && (0..8).contains(&kind) {
                             steps.push(kind);
                         }
                     }
@@ -2965,15 +2985,6 @@ unsafe fn kh2_footsteps(actor: usize, out: &Output, anim: &RigAnim) {
             }
         }
         *prev = now.map(|(m, field, f, _)| (m, field, f));
-    }
-    if !looping {
-        for e in &out.events {
-            if let EventKind::Footstep(kind) = e {
-                if !in_form || out.motion == character_core::motion::LAND {
-                    steps.push(*kind);
-                }
-            }
-        }
     }
     for k in steps {
         play_step(actor, k);
@@ -3536,9 +3547,9 @@ pub unsafe fn install() {
     sparkle_stub(base);
     hook::install(base + PHYS_RVA, &PHYS_PROLOGUE, physics as *const () as usize, &ORIG_PHYS, "actor physics step");
     let _ = hook::install(base + FOOTSTEP_RVA, &FOOTSTEP_PROLOGUE, footstep as *const () as usize, &ORIG_FOOTSTEP, "footstep sound");
-    // (KH2's footsteps, KH1's dropped while KH2 has him: s229 had them off, the user then:
-    // "revert the changes on footsteps".)
-    let _ = hook::install(base + STEP_SOUND_RVA, &STEP_SOUND_PROLOGUE, step_sound as *const () as usize, &ORIG_STEP_SOUND, "step sound (KH2's footsteps)");
+    // (KH1's steps at KH2's walk / run feet, KH1's own dropped while KH2 has him: s229 had them
+    // off, the user then: "revert the changes on footsteps". `walk_steps`.)
+    let _ = hook::install(base + STEP_SOUND_RVA, &STEP_SOUND_PROLOGUE, step_sound as *const () as usize, &ORIG_STEP_SOUND, "step sound (walk / run steps)");
     // (Off, s241: the air spell's landing is KH1's again, see `takeover`'s hand-off.)
     // let _ = hook::install(base + PLAYER_STEP_RVA, &PLAYER_STEP_PROLOGUE, player_step as *const () as usize, &ORIG_PLAYER_STEP, "player step (an air spell's landing: KH2's)");
     if hook::install(base + CONTROL_RVA, &CONTROL_PROLOGUE, control as *const () as usize, &ORIG_CONTROL, "player control step").is_some() {

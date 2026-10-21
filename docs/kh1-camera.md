@@ -485,6 +485,70 @@ before it decides whose camera runs:
 Cutscenes keep KH1's camera: they run in mode 0 or with the camera off, where neither mode
 function is called. Only their end (the hand-back) is a reset.
 
+### 9.3 Room exits and door pushes [high for the code paths, med for which exit does what]
+
+The user: "several rooms in the game have this camera glitch with the KH2 style camera
+enabled". Their video (Olympus Coliseum, Gates to Lobby): as Sora reaches the big door the
+view snaps in to a close, lower view behind him (the HUD goes at the same frame), then
+cross-fades to a low side view of him pushing the door, then fades to black. The Lobby fades in
+with KH2's camera behind him.
+
+How KH1 plays an exit:
+
+- Sora's move touches a collision face with an event number (`docs/kh1-exits-push.md`). Room
+  exits are the second area script's entries (event 100 and up; the logs: 101..103 in Olympus
+  Coliseum, 106..114 and 161 / 162 in another world). The exit's script starts that frame.
+- The script takes Sora (a scene: `takeover::kh1_scene`) and, for a door, holds the camera
+  (op 394, `0x1401E2C80`: mode 0 with blend 0; the task then writes nothing and the view stays
+  as it was) while Sora walks to the door, then places its door camera (ops 36 and 35 set the
+  event camera's two points at `0x1423D5820` / `0x1423D5830`, 35 through an actor's frame
+  [med on which is the eye]; both then call `0x1401BD8C0`, which writes the view's pair and
+  sets the field of view from the event's own value
+  `0x1423D5874` through `0x14028A960`) with KH1's screen cross-fade, plays the push
+  (motion slot 193), and fades out. Traverse Town's district doors log the same ops and motion
+  (ops 35, 36, 394; slot 193). Other exits walk Sora out (`actions [2]` in the log) with the
+  follow camera still on him until the fade.
+- The next room's load (`0x1401E2F00`) and the script's op 395 at the end of the entry walk are
+  two camera resets (9.1): KH2's camera starts behind Sora at each.
+
+The glitch: at the scene's first frame, before the hold, `ours()` handed the follow camera to
+KH1's own mode 1 (KH1's camera for scenes). For the frame or two until op 394 froze it, KH1's
+camera ran from KH2's view: the field of view went from KH2's 76.1 straight to KH1's 53 (the
+picture 1.57 times bigger) and KH1's look point (100 above the feet, 50% of the gap a frame)
+pulled the view down. The hold then kept that snapped view until the door camera. In KH1
+alone the follow camera simply freezes where it was.
+
+What the mod does now (`camera.rs`):
+
+- **Exit transition** (`exit_owns`): a scene that begins within 0.5 s of Sora touching an
+  exit's face event (100 and up, recorded by `gates::exit_touched` from the mover's queue call;
+  not the ones an attack's lunge had dropped), with KH2's camera running a moment before, keeps
+  KH2's camera on the follow camera, as KH1's own follow camera stays on in KH1. KH1's hold then
+  freezes KH2's view with KH2's field of view, and KH1's door camera cuts in from it exactly as
+  in KH1 (its own position, field of view and cross-fade). It ends when KH1's follow mode stops
+  running for 150 ms (the hold, the door camera, the fade), at the next room's reset, when the
+  scene ends, or after 4 s (a blocked exit or a scene: KH1's own camera then, blended as below).
+  Logged: "KH2 camera: exit transition (map face event N ...)" at the start, and "the exit
+  transition handed over: KH1 took its camera N ms into it" when KH1's camera had it.
+- **Hand-over in a scene** (`begin_handover`): when KH1's own follow or lock-on camera takes
+  the view from KH2's mid-scene (no mode switch that frame, KH2's camera ran a moment before,
+  no blend of KH1's own running), KH1 blends from the view on screen into its own with its own
+  mode-switch blend (blend-from `0x142538AD0` / `0x142538AE0` = the view's pair `0x14299C4E0`
+  / `0x14299C4F0`, duration `0x142538A1C` = time left `0x142538A20` = 30 frames; the camera
+  task eases the view by `1 - sin(left / duration · π/2)`), and the field of view eases from
+  KH2's to KH1's default `0x1403EAC84` along the same weight. Before, both snapped. KH1's own
+  mode entries (a reset, area cameras) and its own blends are untouched; KH2's camera coming
+  back during the blend cancels it. Logged: "KH2 camera: handed to KH1's ... camera mid-scene".
+- **The next room**: unchanged, the resets of 9.2 start KH2's camera behind Sora (yaw = his
+  facing + π, the way he walked in) at KH2's default distance; nothing is carried over from
+  the last room (a new camera, KH2's field of view each frame).
+
+Other field of view setters, for reference: mode 1's entry, first person, the area cameras
+(`0x1401E381E`), a special-scene task (`0x1402CBBEB`), the snapshot restore, and the event
+camera's push / pop pair `0x14028A900` / `0x14028A8B0` (`0x140287B2A`, `0x140286EEB`,
+`0x140287605`). So KH1's door and event cameras set their own while they run: the field of
+view KH2's camera leaves on a held view is not what they show.
+
 ---
 
 ## 10. Open questions / runtime checks

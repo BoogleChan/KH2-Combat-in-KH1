@@ -56,3 +56,44 @@ entries 180..187, Fire 114..119 → 91..98, Blizzard → 2..8, Cure → 35..37) 
 unplayable (empty entries 195..213: Thunder's 126..128 among them). In se999 and se500 the two
 are equal, so the sounds already checked there are unchanged. Magnet Burst's 169 now plays
 entry 156 (2.7 s), not 125.
+
+## Footsteps: KH1's, at KH2's walk and run feet only (after s312)
+
+The user: "sora plays his KH2 walk sounds during any forward movement at all, including dodge
+rolling, quick stepping, aerial dodging, gliding, and many other moments when it shouldnt be
+playing. just keep KH1 walk steps in".
+
+- **KH1's steps (exe).** `0x1402939B0 (actor, kind)` (Steam `0x295B40`) plays the floor's sound for
+  the world and the material under the actor (`actor+0x39E`). Kinds 0..3 run, 4..7 walk (it
+  alternates the foot itself, `actor+0x39C`); 8 the stop from a run (`0x1402A7693`,
+  `0x1402CA135`); 10 the landing (`0x1402BF26E`, in KH1's touchdown `0x1402BF100`). Vanilla's
+  walk and run steps are sound events of KH1's walk / run motions: `0x14029DA4E` →
+  `0x140293290`, event id → kind by the table at `0x140529788` (1 / 2 → 4 / 5, 3 / 4 → 0 / 1,
+  6 → 10).
+- `0x140293C70` (Steam `0x295E00`), hooked since Stage 155 as "the footstep", is not the walk
+  steps: its callers are KH1's touch / push routines (`0x1402C0D30`, `0x1402C0ED0`, the crate
+  push among them). Left as it was.
+- **Under KH2.** KH1's own are dropped while KH2 has Sora (KH1 keeps cycling its walk / run
+  whenever the stick is held, whatever KH2 plays). We call `0x1402939B0` ourselves.
+- **The bug.** Every KH2 frame trigger 2 played a step, not only the walk / run loops'. KH2's
+  motions carry many (`P_EX100.mset`, frame: kind):
+  - the dodge roll (209): 26: 10;
+  - the landing (5): 2: 10, after every Quick Run, Aerial Dodge or glide that comes down;
+  - the jump (3): 2: 9, and the High Jump (201): 1: 11;
+  - the combo (151..155), the ability moves (161..173), the hit reactions (11..19) and the
+    repels (41, 42): kinds 0 / 4 / 9 / 10;
+  - the forms' moves: Valor's and Limit's combos, Anti's above all (its combo, its Anti Glide).
+  The run loop's steps also sounded on any motion the rig held in a free state (a dodge roll's
+  tail is "Run (motion 209)").
+- **Now** (`takeover::walk_steps`): steps only while he is on the ground, in the walk or run state,
+  with KH2's walk (1) or run (2) the motion and the rig's track. They sound at that motion's
+  own foot contacts (its trigger 2 frames: walk 26 / 62 battle, 16 / 48 field; run 8 / 24
+  battle, 12 / 32 field), feet kinds only. No step in any action: dodge roll, Quick Run, Aerial
+  Dodge, glide, jumps and landings, attacks, guard, reactions, magic.
+- **Forms** follow their own walk / run's contacts. Valor's (B001 / B002), Final's (D001 /
+  D002), Limit's (Sora's) and Anti's (F001 / F002) have them. Wisdom's (C001 / C002) and
+  Master's (E001 / E002) have none (they skate), so they step nowhere.
+- **Not footsteps, unchanged:** KH2's movement sounds of frame trigger 8 (bank 0: the walk's 300,
+  the run's 301 / 302, the jump's 303, the dodge roll's 299; Anti's run 503032). The walk and run
+  loops never send them (the controller plays loops without frames of its own); the actions'
+  play only where `kh2_sounds` or a form allows.

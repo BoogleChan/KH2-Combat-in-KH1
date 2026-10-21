@@ -133,6 +133,14 @@ mouse itself. KH1's side is in `docs/kh1-camera.md` (5.1, 5.3, 5.4).
   when a lock-on target is overhead. The log notes when the limit starts holding the view, and
   what zoomed the camera all the way in (the stick or the mouse, with the raw stick bytes).
 
+- **Scenes and room exits (Ours, `docs/kh1-camera.md` 9.3).** When KH1's own camera takes
+  the view from KH2's in a scene, KH1 blends from KH2's view over 30 frames with its own
+  mode-switch blend, and the field of view eases from KH2's 69.9° vertical to KH1's 48° with
+  it (both used to snap). Through a room exit's scene (Sora walked into an exit's trigger),
+  KH2's camera stays on the follow camera until KH1 holds its camera for the door camera or
+  the room changes, as KH1's follow camera does in KH1. The next room starts KH2's camera
+  behind Sora, the way he walked in.
+
 ## Not modelled
 
 - The first-person look, cutscene camera modes and per-room overrides.

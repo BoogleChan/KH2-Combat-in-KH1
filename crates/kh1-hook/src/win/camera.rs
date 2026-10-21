@@ -10,6 +10,10 @@
 //! the KH1 camera chosen, ours hands each frame to KH1's original, which carries on from where
 //! KH2's camera was (no jump: its state was kept coherent).
 //!
+//! Scenes: KH1's own camera, taken over with KH1's blend from KH2's view (`begin_handover`);
+//! a room exit's scene keeps KH2's until KH1 holds the camera for its door camera or the room
+//! changes (`exit_owns`; `docs/kh1-camera.md` 9.3).
+//!
 //! World: KH1's is y-down; `kh2_camera` is y-up, and here also divided by `camera_scale` (KH2's
 //! distances suit a slightly bigger Sora).
 
@@ -73,6 +77,21 @@ const LOCK_POINT_RVA: Rva = Rva(0x2AE330);
 /// change it).
 const SET_FOV_RVA: Rva = Rva(0x28A960);
 const DEFAULT_FOV_RVA: Rva = Rva(0x3EAC84);
+/// KH1's mode-switch blend, run by its camera task after the mode's update: the view eases
+/// from the blend-from eye / target to the internal pair over the duration (in 60 Hz frames).
+const BLEND_FROM_EYE_RVA: Rva = Rva(0x2538AD0);
+const BLEND_FROM_TARGET_RVA: Rva = Rva(0x2538AE0);
+const BLEND_TIME_RVA: Rva = Rva(0x2538A1C);
+const BLEND_LEFT_RVA: Rva = Rva(0x2538A20);
+/// The view's own eye / target and field of view (what the frame is drawn from).
+const VIEW_EYE_RVA: Rva = Rva(0x299C4E0);
+const VIEW_TARGET_RVA: Rva = Rva(0x299C4F0);
+const VIEW_FOV_RVA: Rva = Rva(0x299C500);
+/// KH2's camera handing the follow camera to KH1's own mid-scene: KH1's blend this long (as its
+/// own switches back to the follow camera, 30).
+const HANDOVER_FRAMES: f32 = 30.0;
+/// A room exit's scene keeps KH2's camera at most this long before handing it to KH1's.
+const EXIT_MAX_MS: u64 = 4000;
 
 /// KH2's camera is on (the ini's `camera`, the Config menu's row).
 pub static KH2: AtomicBool = AtomicBool::new(true);
@@ -150,8 +169,25 @@ unsafe fn note_entry(lock: bool) {
     let now = now_ms();
     // KH1 had its camera elsewhere in between (an event camera, an area camera, a menu):
     // whatever owned the follow camera since the last reset is over.
-    if now.saturating_sub(LAST_CALL_MS.swap(now, Ordering::Relaxed)) > 150 {
+    let away = now.saturating_sub(LAST_CALL_MS.swap(now, Ordering::Relaxed));
+    if away > 150 {
         RESET_OWNS.store(false, Ordering::Relaxed);
+        // A room exit's scene too: KH1 held or released its camera (a door's camera, the fade
+        // to the next room), the view KH2's camera left on screen until then.
+        let since = EXIT_SINCE.swap(0, Ordering::Relaxed);
+        if since != 0 && since != EXIT_OVER {
+            static N: AtomicU32 = AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 40 {
+                log(&format!(
+                    "KH2 camera: the exit transition handed over: KH1 took its camera {} ms into it (its hold / door camera / the next room), for {away} ms; KH2's last view and field of view were on screen until then",
+                    (now - away).saturating_sub(since)
+                ));
+            }
+        }
+    }
+    // Any of KH1's mode entries ends a hand-over's blend: it is KH1's own from here.
+    if rd::<u32>(BASE.load(Ordering::Relaxed) + ENTRY_FLAGS_RVA) & 2 != 0 {
+        HANDOVER.store(false, Ordering::Relaxed);
     }
     // Sora walked by KH1 in a scene (an event moving him): KH1's camera again.
     let sora = rd::<u64>(base + SORA_RVA) as usize;
@@ -181,6 +217,7 @@ unsafe fn note_entry(lock: bool) {
         return;
     }
     RESET_PENDING.store(true, Ordering::Relaxed);
+    EXIT_SINCE.store(0, Ordering::Relaxed);
     let scene = super::takeover::kh1_scene();
     let owns = scene && !super::takeover::kh1_moves_sora();
     RESET_OWNS.store(owns, Ordering::Relaxed);
@@ -204,28 +241,154 @@ unsafe fn note_entry(lock: bool) {
 
 /// KH2's camera this frame: chosen, and no cutscene (the user: KH1's camera for cutscenes and
 /// scenes with text, so the camera doesn't end up inside things), except after KH1 has given
-/// its camera back to Sora with a reset (`RESET_OWNS`).
+/// its camera back to Sora with a reset (`RESET_OWNS`) and through a room exit's scene
+/// (`exit_owns`).
 fn ours() -> bool {
     let kh2 = KH2.load(Ordering::Relaxed);
     let scene = kh2 && super::takeover::kh1_scene();
     if !scene || super::takeover::kh1_moves_sora() {
         RESET_OWNS.store(false, Ordering::Relaxed);
     }
-    let on = kh2 && (!scene || RESET_OWNS.load(Ordering::Relaxed));
+    if !scene {
+        EXIT_SINCE.store(0, Ordering::Relaxed);
+    }
+    let mut on = kh2 && (!scene || RESET_OWNS.load(Ordering::Relaxed));
+    if kh2 && scene && !on {
+        on = exit_owns();
+    }
     static WAS: AtomicBool = AtomicBool::new(true);
     static N: AtomicU32 = AtomicU32::new(0);
     if WAS.swap(on, Ordering::Relaxed) != on && KH2.load(Ordering::Relaxed) && N.fetch_add(1, Ordering::Relaxed) < 60 {
         log(if on { "KH2 camera: back from KH1's" } else { "KH2 camera: KH1's for a scene" });
     }
-    if !on && FOV_SET.swap(false, Ordering::Relaxed) {
-        // KH1's own field of view back for KH1's camera.
-        unsafe { set_fov(rd::<f32>(BASE.load(Ordering::Relaxed) + DEFAULT_FOV_RVA)) };
-    }
     on
+}
+
+/// When a room exit's scene began with KH2's camera up (`now_ms`, 0: none, `EXIT_OVER`: this
+/// scene's exit window ran out).
+static EXIT_SINCE: AtomicU64 = AtomicU64::new(0);
+const EXIT_OVER: u64 = u64::MAX;
+
+/// A room exit (the user: "several rooms in the game have this camera glitch"): Sora walks into
+/// an exit's trigger (a map face event of KH1's second area script, 100 and up:
+/// `docs/kh1-exits-push.md`), and the exit's script takes him (a scene: KH1 holds or walks
+/// him). In KH1 the follow camera stays on him until the script holds the camera (op 394) and
+/// its door camera cuts in (ops 36 / 35, with their own field of view), or the room fades out
+/// and changes. That follow camera is KH2's here, so KH2's keeps it through the exit: KH1's
+/// hold then freezes KH2's view as it was, and KH1's door camera cuts from it. (Handing over to
+/// KH1's own follow camera as the scene began snapped the view in for the frame or two before
+/// the hold: KH1's narrower field of view, its lower look point.) Over at once when KH1 has its
+/// camera elsewhere (`note_entry`), the room changes (a reset), the scene ends, or after
+/// `EXIT_MAX_MS` (KH1's own then, blended in).
+fn exit_owns() -> bool {
+    let now = now_ms();
+    let since = EXIT_SINCE.load(Ordering::Relaxed);
+    if since == EXIT_OVER {
+        return false;
+    }
+    if since != 0 {
+        if now.saturating_sub(since) < EXIT_MAX_MS {
+            return true;
+        }
+        // (Not again for this scene.)
+        EXIT_SINCE.store(EXIT_OVER, Ordering::Relaxed);
+        log("KH2 camera: the exit's scene still runs the follow camera after 4 s (a scene, not a room change): KH1's camera");
+        return false;
+    }
+    // Starting: KH2's camera ran a moment ago and Sora just touched an exit.
+    let Some((event, ago)) = super::gates::exit_touched() else { return false };
+    if ago > 500 || now.saturating_sub(LAST_MS.load(Ordering::Relaxed)) > 300 {
+        return false;
+    }
+    EXIT_SINCE.store(now, Ordering::Relaxed);
+    static N: AtomicU32 = AtomicU32::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) < 40 {
+        let base = BASE.load(Ordering::Relaxed);
+        let sora = unsafe { rd::<u64>(base + SORA_RVA) } as usize;
+        let state = if sora > 0x10000 { unsafe { rd::<i32>(sora + 0x70) } } else { -1 };
+        log(&format!(
+            "KH2 camera: exit transition (map face event {event}, {ago} ms ago; event {}, KH1 walks Sora {}, Sora state {state}): KH2's camera keeps the follow camera until KH1 takes its own (its door camera) or the room changes",
+            unsafe { rd::<u32>(base + EVENT_RVA) } != 0,
+            super::takeover::kh1_moves_sora()
+        ));
+    }
+    true
 }
 
 /// KH2's field of view is ours (KH1's own goes back when KH1's camera runs).
 static FOV_SET: AtomicBool = AtomicBool::new(false);
+/// KH2's camera handed the follow (or lock-on) camera to KH1's own mid-scene, KH1's blend from
+/// KH2's view running; the field of view eases back with it from `FOV_FROM`.
+static HANDOVER: AtomicBool = AtomicBool::new(false);
+static FOV_FROM: AtomicU32 = AtomicU32::new(0);
+
+/// KH1's own follow / lock-on camera runs this frame (`on`: KH2's would have, but couldn't).
+unsafe fn kh1_frame(lock: bool, on: bool) {
+    let base = BASE.load(Ordering::Relaxed);
+    if !on {
+        begin_handover(base, lock);
+    }
+    let f: unsafe extern "system" fn() = std::mem::transmute(if lock { ORIG_LOCK.load(Ordering::Acquire) } else { ORIG_FOLLOW.load(Ordering::Acquire) });
+    f();
+    if !on {
+        ease_fov(base);
+    }
+}
+
+/// KH1's camera takes the view from KH2's mid-scene (the scene began while KH1's follow or
+/// lock-on mode runs, no mode switch): as KH1 does from its other cameras, a blend from the view
+/// on screen (KH2's) into its own, and KH2's field of view eased back to KH1's with it. Before,
+/// the view snapped: KH1's field of view at once (KH2's 76.1 to KH1's 53, the picture 1.57
+/// times bigger) and its lower look point. Not when KH1 enters the mode this frame (its entry
+/// places the camera and sets its field of view) or a blend of its own already runs.
+unsafe fn begin_handover(base: usize, lock: bool) {
+    if !FOV_SET.swap(false, Ordering::Relaxed) {
+        return;
+    }
+    let kh1_fov = rd::<f32>(base + DEFAULT_FOV_RVA);
+    let recent = now_ms().saturating_sub(LAST_MS.load(Ordering::Relaxed)) < 300;
+    let entry = rd::<u32>(base + ENTRY_FLAGS_RVA) & 2 != 0;
+    let blending = rd::<f32>(base + BLEND_LEFT_RVA) > 0.0;
+    let (eye, at) = (rd::<[f32; 4]>(base + VIEW_EYE_RVA), rd::<[f32; 4]>(base + VIEW_TARGET_RVA));
+    let fov = rd::<f32>(base + VIEW_FOV_RVA);
+    if !recent || entry || blending || !eye.iter().chain(at.iter()).all(|v| v.is_finite()) || !(20.0..120.0).contains(&fov) {
+        set_fov(kh1_fov);
+        return;
+    }
+    wr(base + BLEND_FROM_EYE_RVA, [eye[0], eye[1], eye[2], 1.0f32]);
+    wr(base + BLEND_FROM_TARGET_RVA, [at[0], at[1], at[2], 1.0f32]);
+    wr(base + BLEND_TIME_RVA, HANDOVER_FRAMES);
+    wr(base + BLEND_LEFT_RVA, HANDOVER_FRAMES);
+    FOV_FROM.store(fov.to_bits(), Ordering::Relaxed);
+    HANDOVER.store(true, Ordering::Relaxed);
+    static N: AtomicU32 = AtomicU32::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) < 40 {
+        log(&format!(
+            "KH2 camera: handed to KH1's {} camera mid-scene: KH1 blends from KH2's view over {HANDOVER_FRAMES} frames, field of view {fov:.1} -> {kh1_fov:.1} with it",
+            if lock { "lock-on" } else { "follow" }
+        ));
+    }
+}
+
+/// While KH1's blend from KH2's view runs: the field of view along KH1's eased weight
+/// (`1 - sin(left / time · π/2)`, as its camera task eases the view), KH1's own at the end.
+unsafe fn ease_fov(base: usize) {
+    if !HANDOVER.load(Ordering::Relaxed) {
+        return;
+    }
+    let kh1_fov = rd::<f32>(base + DEFAULT_FOV_RVA);
+    let step = rd::<f32>(base + STEP_RVA);
+    let step = if step.is_finite() { step.clamp(0.0, 4.0) } else { 1.0 };
+    let (time, left) = (rd::<f32>(base + BLEND_TIME_RVA), rd::<f32>(base + BLEND_LEFT_RVA) - step);
+    if !(time > 0.0) || !(left > 0.0) {
+        HANDOVER.store(false, Ordering::Relaxed);
+        set_fov(kh1_fov);
+        return;
+    }
+    let w = (1.0 - ((left / time).min(1.0) * std::f32::consts::FRAC_PI_2).sin()).clamp(0.0, 1.0);
+    let from = f32::from_bits(FOV_FROM.load(Ordering::Relaxed));
+    set_fov(from + (kh1_fov - from) * w);
+}
 
 unsafe fn set_fov(deg: f32) {
     if (20.0..120.0).contains(&deg) {
@@ -246,17 +409,17 @@ fn kh2_fov() -> f32 {
 
 unsafe extern "system" fn follow_mode() {
     note_entry(false);
-    if !ours() || run(false).is_none() {
-        let f: unsafe extern "system" fn() = std::mem::transmute(ORIG_FOLLOW.load(Ordering::Acquire));
-        f();
+    let on = ours();
+    if !on || run(false).is_none() {
+        kh1_frame(false, on);
     }
 }
 
 unsafe extern "system" fn lock_mode() {
     note_entry(true);
-    if !ours() || run(true).is_none() {
-        let f: unsafe extern "system" fn() = std::mem::transmute(ORIG_LOCK.load(Ordering::Acquire));
-        f();
+    let on = ours();
+    if !on || run(true).is_none() {
+        kh1_frame(true, on);
     }
 }
 
@@ -403,6 +566,11 @@ unsafe fn run(lock: bool) -> Option<()> {
     };
     let flags = rd::<u32>(base + ENTRY_FLAGS_RVA);
     wr(base + ENTRY_FLAGS_RVA, flags & !7);
+    // Back before a hand-over's blend into KH1's camera ended: ours at once (KH1's own blends,
+    // from its other cameras, are left to run).
+    if HANDOVER.swap(false, Ordering::Relaxed) {
+        wr(base + BLEND_LEFT_RVA, 0.0f32);
+    }
     let fresh_mode = flags & 2 != 0;
     // KH2's field of view, every frame (KH1's area cameras and mode entries set their own).
     let _ = fresh_mode;

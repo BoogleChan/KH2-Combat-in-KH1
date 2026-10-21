@@ -3584,6 +3584,16 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   bounce, the swing goes on. Ini `walls = kh1 | clink | pass` (default kh1; `wall_clink` no longer
   read). Enemies' guards clink as before. `docs/kh1-clash.md`.
 
+### 2026-10-21: Stage 313 (KH2 camera through door exits; footsteps on walk and run only)
+- The user (video, Coliseum Gates -> Lobby): "several rooms in the game have this camera glitch with the
+  KH2 style camera enabled". The scene start handed the follow camera to KH1 with FOV 76.1 -> 53 for a
+  frame before op 394 froze it. `camera::exit_owns` keeps the KH2 view through an exit trigger
+  (gates' face event >= 100) until KH1's door camera; other mid-scene hand-overs use KH1's 30-frame
+  blend (`begin_handover`). docs/kh1-camera.md 9.3.
+- The user: "sora plays his KH2 walk sounds during any forward movement at all ... just keep KH1 walk
+  steps in". `takeover::walk_steps` plays KH1's surface step (0x1402939B0) only grounded, in walk/run,
+  at the drawn walk/run motion's foot frames; action and landing markers dropped. docs/kh2-sound.md.
+
 ### 2026-10-21: Stage 312 (Page Down hides the HUD; partners leave for their form)
 - The user: "can you also make it so that pg dn hides the hud?" New `win/hud.rs` and `keys.rs`: the 16
   HUD tasks from 0x140264C50 run behind stubs whose draws get 0 vertices while hidden (ini

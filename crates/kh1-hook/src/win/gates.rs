@@ -96,6 +96,10 @@ unsafe extern "system" fn queue(kind: i32, actor: usize, event: usize) {
         DROPPED.store((event as u32 & 0xFFFF).max(1), Ordering::Relaxed);
         return;
     }
+    if kind == -2 && event as u32 & 0xFFFF >= 100 && actor == super::takeover::sora_actor() {
+        EXIT_EVENT.store(event as u32 & 0xFFFF, Ordering::Relaxed);
+        EXIT_MS.store(clock_ms(), Ordering::Relaxed);
+    }
     let f: unsafe extern "system" fn(i32, usize, usize) = std::mem::transmute(BASE.load(Ordering::Relaxed) + QUEUE_RVA);
     f(kind, actor, event)
 }
@@ -103,12 +107,27 @@ unsafe extern "system" fn queue(kind: i32, actor: usize, event: usize) {
 /// The last face event logged and when (`note_event`).
 static NOTED: AtomicU32 = AtomicU32::new(0);
 static NOTED_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// The last face event of KH1's second area script (100 and up: room exits) queued for Sora,
+/// KH2's or KH1's move, and when (`clock_ms`, 0 never).
+static EXIT_EVENT: AtomicU32 = AtomicU32::new(0);
+static EXIT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn clock_ms() -> u64 {
+    static CLOCK: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    CLOCK.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64 + 1
+}
+
+/// The room exit Sora last walked into (its face event, how many ms ago): the exit's script
+/// starts from it (`camera::exit_owns`).
+pub fn exit_touched() -> Option<(u32, u64)> {
+    let at = EXIT_MS.load(Ordering::Relaxed);
+    (at != 0).then(|| (EXIT_EVENT.load(Ordering::Relaxed), clock_ms().saturating_sub(at)))
+}
 
 /// A map face event Sora touched while KH2 has him (room exits, pits' triggers, scene walls): in
 /// the log on a new event or every 2 s of the same, 200 at most (`docs/kh1-water-pits.md`).
 unsafe fn note_event(actor: usize, event: u32, dropped: bool) {
-    static CLOCK: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    let now = CLOCK.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64 + 1;
+    let now = clock_ms();
     let same = NOTED.swap(event, Ordering::Relaxed) == event;
     if same && now.saturating_sub(NOTED_MS.load(Ordering::Relaxed)) < 2000 {
         return;
