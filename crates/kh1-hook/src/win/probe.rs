@@ -57,6 +57,11 @@ unsafe extern "system" fn event_op(ctx: usize, op: i32, c: usize, d: usize) -> u
     if (0..EVENT_OPS as i32).contains(&op) {
         EVENT_COUNTS[op as usize].fetch_add(1, Ordering::Relaxed);
     }
+    // Opcode 103 (`0x1401A7430`) waits for the script actor's motion to end: a partner a Drive
+    // Form took would never end it (`vanish::script_waits_on` brings him back).
+    if op == 103 && ctx > 0x10000 {
+        super::vanish::script_waits_on(rd::<u64>(ctx + 8) as usize);
+    }
     // Opcode 322 (`0x1401AB6E0`) pushes the script actor's motion request (`+0x164`): note
     // each new value (a tutorial waits on it).
     if op == 322 && ctx > 0x10000 {

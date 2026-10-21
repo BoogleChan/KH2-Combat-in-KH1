@@ -20,17 +20,26 @@
 //!
 //! Each of Sora's frames checks it (`takeover`'s physics step), and the form's end at once
 //! (`form::revert`). A partner KH1 has put back itself (a new room, its game over's revive) is
-//! taken again if the form is still on; during an event they are back (a cutscene has them).
+//! taken again if the form is still on.
+//!
+//! Whenever KH1's script has Sora (`takeover::script_has_sora`: an event, its script's actions
+//! for him, its hold bit, or its hold `+0x444`) they are back at once: its script may command
+//! them, and an actor without `0x8000` never steps, so a wait on him never ends (the user, s314:
+//! the Pegasus Cup's round in Valor Form froze on its victory scene, event op 103 waiting for
+//! Goofy's pose).
+//! If the form outlasts the scene they go again once KH1 has let go of Sora for `QUIET_FRAMES`.
 
 use super::addr::Rva;
 use super::{log, pose};
 use crate::partners::Partner;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 /// KH1's field party (Sora, then the two others).
 const PARTY_RVA: Rva = Rva(0x2D37C80);
-/// Non-zero while an event runs (`takeover`).
-const EVENT_RVA: Rva = Rva(0x298D3A0);
+/// Frames with no scene of KH1's (`takeover::script_has_sora`) before a form takes them again
+/// (0.5 s: a scene's own short gaps don't flicker them).
+const QUIET_FRAMES: u64 = 30;
 /// KH1's HUD gauge slots: a u32 "bound" flag per slot at the start, and slot n's record at
 /// `+ n * 0xDF0` (its actor `+0x28`, its alpha `+0xABC`, its fade speed `+0xAC0`).
 const HUD_RVA: Rva = Rva(0x28123E0);
@@ -55,6 +64,31 @@ struct Away {
     was: u32,
     /// The flag stack's depth when he went.
     depth: u32,
+    /// Where he was when he went (back for a scene: left where KH1's script put him, if it did).
+    at: [f32; 3],
+}
+
+/// The last game frame (`takeover::GAME_FRAME`) KH1's script had Sora, or waited on a partner
+/// away (`script_waits_on`).
+static SCENE_FRAME: AtomicU64 = AtomicU64::new(u64::MAX);
+/// A KH1 script waited on a partner away (`script_waits_on`), for the log.
+static WAITED: AtomicBool = AtomicBool::new(false);
+
+/// KH1's event script waits for `actor`'s motion to end (event op 103, `0x1401A7430`: its script
+/// actor `context + 8`, `0x14029CE30` the motion's end; the op yields until then). A partner away
+/// never steps, so that wait would never end: all of them back now, as for a scene (a backstop to
+/// `takeover::script_has_sora`, for a script that commands them without holding Sora).
+/// They come back there and then (not on Sora's next frame: his step may not run in a scene).
+pub fn script_waits_on(actor: usize) {
+    {
+        let Ok(st) = STATE.try_lock() else { return };
+        if !st.iter().any(|(a, _)| a.as_ref().is_some_and(|a| a.actor == actor)) {
+            return;
+        }
+    }
+    SCENE_FRAME.store(super::takeover::GAME_FRAME.load(Ordering::Relaxed), Ordering::Relaxed);
+    WAITED.store(true, Ordering::Relaxed);
+    frame();
 }
 
 /// Per partner (Donald, Goofy): hidden now, and whether he is away for the form (the log).
@@ -122,7 +156,14 @@ pub fn frame() {
     if want.is_none() && st.iter().all(|(a, g)| a.is_none() && !g) {
         return;
     }
-    let event = unsafe { rd::<u32>(base + EVENT_RVA) } != 0;
+    // KH1's script has Sora now or had him a moment ago: no one away (`QUIET_FRAMES`).
+    let frame = super::takeover::GAME_FRAME.load(Ordering::Relaxed);
+    if super::takeover::script_has_sora() {
+        SCENE_FRAME.store(frame, Ordering::Relaxed);
+    }
+    let last = SCENE_FRAME.load(Ordering::Relaxed);
+    let scene = last != u64::MAX && frame.saturating_sub(last) < QUIET_FRAMES;
+    let why = if WAITED.swap(false, Ordering::Relaxed) { "a KH1 script waits on him" } else { "KH1's script takes Sora" };
     for (i, &p) in BOTH.iter().enumerate() {
         let (away, gone) = &mut st[i];
         let takes = want.is_some_and(|(w, _)| w.contains(&p));
@@ -136,7 +177,7 @@ pub fn frame() {
                     *away = None;
                 }
             }
-            match (takes && !event, actor, away.is_some()) {
+            match (takes && !scene, actor, away.is_some()) {
                 // (Not while KH1 holds him frozen itself, its game over: his flags then aren't his.)
                 (true, Some(actor), false) if rd::<u32>(actor) & 0x8000 != 0 => {
                     *away = Some(hide(base, actor));
@@ -162,7 +203,12 @@ pub fn frame() {
                 }
                 (false, _, true) => {
                     if let Some(a) = away.take() {
-                        back(base, &a);
+                        // (Back for KH1's script, the form still on: where its script put him.)
+                        back(base, &a, takes);
+                        if takes && *gone {
+                            *gone = false;
+                            log(&format!("Drive: {} is back ({why})", p.name()));
+                        }
                     }
                 }
                 _ => {}
@@ -177,7 +223,7 @@ pub fn frame() {
 
 unsafe fn hide(base: usize, actor: usize) -> Away {
     let flags = rd::<u32>(actor);
-    let a = Away { actor, was: flags & MASK, depth: rd::<u32>(actor + DEPTH).min(STACK_MAX) };
+    let a = Away { actor, was: flags & MASK, depth: rd::<u32>(actor + DEPTH).min(STACK_MAX), at: rd::<[f32; 3]>(actor + 0x10) };
     wr(actor, (flags & !HERE_BITS) | AWAY_BITS);
     if let Some(s) = hud_slot(base, actor) {
         hud_mode(base, s, 3);
@@ -185,8 +231,10 @@ unsafe fn hide(base: usize, actor: usize) -> Away {
     a
 }
 
-/// His flags as they were, beside Sora, his HUD entry as Sora's is.
-unsafe fn back(base: usize, a: &Away) {
+/// His flags as they were, beside Sora, his HUD entry as Sora's is. `scene`: back for KH1's
+/// script with the form still on: beside Sora only if nothing moved him while away (a script that
+/// placed him for its scene keeps him there).
+unsafe fn back(base: usize, a: &Away, scene: bool) {
     let actor = a.actor;
     let restore = |f: u32| (f & !MASK) | a.was;
     let depth = rd::<u32>(actor + DEPTH).min(STACK_MAX);
@@ -204,7 +252,8 @@ unsafe fn back(base: usize, a: &Away) {
     }
     // Beside Sora, on the side he was on (KH2: they reappear by him).
     let sora = rd::<u64>(base + PARTY_RVA) as usize;
-    if sora > 0x10000 && super::crash::readable(sora + 0x20) {
+    let placed = scene && rd::<[f32; 3]>(actor + 0x10) != a.at;
+    if !placed && sora > 0x10000 && super::crash::readable(sora + 0x20) {
         let s = rd::<[f32; 3]>(sora + 0x10);
         let mut at = rd::<[f32; 3]>(actor + 0x10);
         let (dx, dz) = (at[0] - s[0], at[2] - s[2]);

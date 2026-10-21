@@ -1228,7 +1228,8 @@ in the save's party list, `0x140282EC0`). KH1 sets all three at once at times (`
   state wait on his actor (no regen, no item use, no spells: his step doesn't run).
 - Each of Sora's frames (`takeover`'s physics step) and at once on the form's end
   (`form::revert`, the change's end too) the state is checked:
-  - the form (or the change) takes him and no event runs: he is taken if he isn't yet; while
+  - the form (or the change) takes him and KH1's script doesn't have Sora (below): he is taken
+    if he isn't yet; while
     away his model, shadow and HUD entry are kept hidden if KH1 turns them back on (it shows the
     whole HUD after an event or its game over);
   - else he is back: his bits as they were, placed 60 units beside Sora (on the side he was on,
@@ -1240,9 +1241,53 @@ in the save's party list, `0x140282EC0`). KH1 sets all three at once at times (`
     holding him frozen (no `0x8000`, its game over) is waited out.
   - KH1's game over pushed his flags while he was away: on his return the pushed copies get his
     bits back too, and `0x8000` stays as KH1 holds it, so its Continue pops him back whole.
-- In an event they are back (a cutscene has them), and taken again if the form outlasts it (a
-  long one ends the form, `scene_revert`). A room change in the form: the new room's actors come
-  in whole and are taken on Sora's next frame.
+- Whenever KH1's script has Sora they are back at once, and taken again if the form outlasts
+  the scene (a long one ends the form, `scene_revert`) once KH1 has let go of him for 0.5 s
+  (s314, below). A room change in the form: the new room's actors come in whole; they are taken
+  once the walk-in (the script hold bit) is over.
+
+**KH1's scripts command the party (s314; Checked: exe + Log).** The user: "weird bug in the
+Pegasus cup, i beat a round and its frozen on donald doing his victory pose". The round was
+fought in Valor Form with Goofy away.
+- The log: at the round's end KH1 holds Sora (`+0x444` 1), its script has one action for him
+  (31) for about a second, then only holds him (its control step skipped, no event, no script
+  actions: `event 0x0, script 0x0`). Event op 103 then runs every frame for good.
+- Event op 103 (`0x1401A7430`, the event op table at `0x1404FB550`) waits for its script actor's
+  motion to end (`context + 8`, `0x14029CE30`: not looping, speed 0, at its last frame); it yields
+  until then. The victory scene waits on each member's pose. Goofy, without `0x8000`, never
+  stepped, so his motion never ended and the scene never did. Donald's pose played on.
+- The partners came back only for an event (KH1's event flag), and this scene isn't one.
+- `+0x444` bit 1 is set and cleared only by KH1's actor script commands (`0x14028C800`,
+  `0x14028C7F4`) and zeroed by its resets: it is a script's hold, never set by KH1's own moves.
+  In the logs it is on only at scene holds (fights' ends, story moments, talks); the plain "KH1
+  holds Sora still" (its control step skipped) is on at many other moments (menus, its own moves)
+  and isn't used.
+
+**What the port does (Ours).**
+- **The partners (`takeover::script_has_sora`, `vanish`).** KH1's script has Sora on a frame
+  when an event runs, its script has actions for him (`+0x440`), its hold bit holds him
+  (`0x1000000`, not left over: `stale_hold`), or it holds him (`+0x444` bit 1); not during one of
+  KH1's limits in Limit Form (its limit module sets the hold bit; Limit takes no one anyway).
+  Then the partners a form took are back on that very frame, their actors stepping before the
+  script waits on them. They are left where they are if a script moved them while they were
+  away (it placed them for its scene), else placed beside Sora as on a form's end. The log:
+  "Drive: Goofy is back (KH1's script takes Sora)". If the form outlasts the scene they are taken
+  again once KH1's script has let go of Sora for 30 frames (its own short gaps don't flicker
+  them), with "Drive: Goofy leaves for Valor Form" again. Door walks and room entries in a form
+  now show them for the walk, then they go.
+- **A backstop (`vanish::script_waits_on`).** Event op 103 on a partner who is away (a script
+  waiting on him without holding Sora) brings them back there and then: "Drive: Goofy is back
+  (a KH1 script waits on him)".
+- **The form at a cup round's end (`takeover::scene_frame`).** A frame on which KH1 only holds Sora
+  still for its script (`+0x444`, no actions) now carries the scene's run on. Before, the run
+  ended with the script's actions about 1 s in, so the 2.5 s rule for a scene that began in
+  battle never came, and Valor stayed on through the victory scene. Such held frames end a form
+  only in a scene that began in battle (2.5 s, as a boss's end), not by the 20 s rule (a long
+  talk or a held menu keeps the form). A limit under way in Limit Form still puts the revert off
+  (`form::limit_under_way`: its branch comes before the held one).
+- Covered the same way: every cup's rounds (the same victory scene), Hercules' and Cerberus'
+  scenes, Deep Jungle's (Tarzan, a guest, never vanishes; Donald or Goofy beside him do), and any
+  scene that commands Donald or Goofy while it holds Sora.
 - Trinity Limit and the other party checks see them as gone (KH1's own tests: no `0x8000`, `0x200`
   set); only Limit Form uses KH1's limits, and it takes no one.
 - HUD hiding (`hud.rs`, Page Down) empties the HUD's draws: a slot hidden here stays hidden under
@@ -1257,4 +1302,6 @@ lines); Anti with one partner knocked out or away; Wisdom in Deep Jungle with Ta
 (game over and Continue), a room change and a world change in the form, a cutscene in the form,
 a save point (talking to it) in the form, then saving and loading; enemies ignoring where the
 partner stood; Limit Form's Trinity Limit as before (Limit takes no one); Page Down's HUD hiding
-in and out of a form.
+in and out of a form; a cup round won in Valor, Wisdom and Master (the victory scene plays, the
+partners are back at its start, the form reverts 2.5 s in); a door and a room entry in a form
+(the partners show for the walk, then go).

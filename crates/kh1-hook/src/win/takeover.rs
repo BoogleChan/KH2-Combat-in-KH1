@@ -311,6 +311,22 @@ pub const CROSS: u16 = 0x4000;
 pub static ON: AtomicBool = AtomicBool::new(true);
 /// KH1's area script is moving Sora (`pose` shows KH1's own animation then).
 pub static SCRIPTED: AtomicBool = AtomicBool::new(false);
+/// KH1's script has Sora on his last frame (`script_has_sora`).
+static KH1_SCENE: AtomicBool = AtomicBool::new(false);
+/// KH1 held Sora still this frame for its script (`+0x444` bit 1), with the Driver taken:
+/// `physics` counts the frame for `scene_frame` once it is free.
+static SCENE_HELD: AtomicBool = AtomicBool::new(false);
+
+/// KH1's script has Sora (on his last frame): an event runs, its script has actions for him
+/// (`+0x440`), its hold bit holds him (`0x1000000`, not left over: `stale_hold`), or it holds him
+/// (`+0x444` bit 1, set and cleared only by its actor script commands, `0x14028C800` /
+/// `0x14028C7F4`; what its event waits and its camera read as "can't act"). Not one of KH1's
+/// limits in Limit Form (its limit module sets the hold bit). A script then may command the party
+/// (`vanish`: the partners a form took are back at once; the cup rounds' victory scene waits for
+/// each one's pose, event op 103).
+pub fn script_has_sora() -> bool {
+    KH1_SCENE.load(Ordering::Relaxed)
+}
 /// KH2 has the Keyblade out (the thumbs grip) / Sora is on the ground (the feet meet the floor).
 pub static GRIP: AtomicBool = AtomicBool::new(false);
 pub static GROUNDED: AtomicBool = AtomicBool::new(false);
@@ -422,6 +438,11 @@ unsafe extern "system" fn physics(actor: usize) {
     }
     let t0 = Instant::now();
     let took = ON.load(Ordering::Relaxed) && actor > 0x10000 && takeover(actor);
+    // (KH1's script held him still with the Driver taken: the frame counts for a scene now, on
+    // this frame's number.)
+    if sora && SCENE_HELD.swap(false, Ordering::Relaxed) {
+        scene_frame(actor, false, true);
+    }
     if sora {
         super::prof::add(super::prof::FRAME, t0);
         note_slow(t0, || format!("Sora's frame of ours (KH2 has him: {took}, KH2 motion {})", KH2_MOTION.load(Ordering::Relaxed)));
@@ -1329,7 +1350,10 @@ const SCENE_ANY_FRAMES: u32 = 1200;
 /// moves, a ride or another body). In a Drive Form, a scene long enough ends the form there and
 /// then (`form::scene_revert`, as a new world does): KH2 reverts a form when a battle ends in a
 /// scene, and a form is never left on under KH1's own animations for long.
-unsafe fn scene_frame(actor: usize, event: bool) {
+/// `held`: KH1 only holds him still for its script (`+0x444`, no actions for him): such frames
+/// carry a run on, and end the form only in a scene that began in battle (a cup round's victory),
+/// not by the 20 s rule (a talk or a menu held open).
+unsafe fn scene_frame(actor: usize, event: bool, held: bool) {
     let frame = GAME_FRAME.load(Ordering::Relaxed);
     let (n, battle) = {
         let Ok(mut s) = SCENE.lock() else { return };
@@ -1348,7 +1372,7 @@ unsafe fn scene_frame(actor: usize, event: bool) {
     } else if battle {
         n >= SCENE_BATTLE_FRAMES
     } else {
-        n >= SCENE_ANY_FRAMES
+        !held && n >= SCENE_ANY_FRAMES
     };
     if !long || !(super::form::in_form() || super::form::busy()) {
         return;
@@ -1379,6 +1403,13 @@ unsafe fn takeover(actor: usize) -> bool {
     }
     let frozen = !CONTROLLED.swap(false, Ordering::Relaxed) && CONTROL_HOOKED.load(Ordering::Relaxed);
     FROZEN_NOW.store(frozen, Ordering::Relaxed);
+    // (KH1's script has him: `script_has_sora`; its hold bit is added below, once known not left
+    // over.)
+    let limit = super::limits::kh1_limit_holds();
+    KH1_SCENE.store(
+        !limit && (rd::<u32>(base + EVENT_RVA) != 0 || pose::ptr(rd::<u32>(actor + 0x440)) != 0 || rd::<u32>(actor + 0x444) & 1 != 0),
+        Ordering::Relaxed,
+    );
     // KH1's control of him coming and going every few frames while KH2 has him is one of its
     // rides (the user: the magic carpet out of the Cave of Wonders didn't move while KH2 had him
     // between): KH1 has him for 5 s (counted only while KH2 has him: KH1's own frames flicker
@@ -1394,7 +1425,7 @@ unsafe fn takeover(actor: usize) -> bool {
     if rd::<u32>(base + EVENT_RVA) != 0 {
         SCRIPTED.store(false, Ordering::Relaxed);
         release("an event runs");
-        scene_frame(actor, true);
+        scene_frame(actor, true, false);
         return false;
     }
     // Not in his own body (the Heartless form): KH1 has him, its own moves and animations
@@ -1414,6 +1445,9 @@ unsafe fn takeover(actor: usize) -> bool {
     let (stale, what) = if rd::<u32>(actor) & 0x0100_0000 != 0 { stale_hold(base, actor, script, frozen) } else { (false, "") };
     let held_by_script = rd::<u32>(actor) & 0x0100_0000 != 0 && !stale;
     SCRIPTED.store(script != 0 || held_by_script, Ordering::Relaxed);
+    if held_by_script && !limit {
+        KH1_SCENE.store(true, Ordering::Relaxed);
+    }
     // (Not while one of KH1's limits runs in Limit Form: its limit module sets the hold bit for
     // the whole limit (the user's log, s313: Strike Raid, flags 0130c087 / 01308087, no script
     // actions), and taken as a script here it was a scene: `scene_frame` counted it and reverted
@@ -1428,7 +1462,7 @@ unsafe fn takeover(actor: usize) -> bool {
             a = rd::<u64>(a + 0x58) as usize;
         }
         release(&format!("KH1's script moves him, actions {kinds:?}, flags {:08x}{what}", rd::<u32>(actor)));
-        scene_frame(actor, false);
+        scene_frame(actor, false, false);
         return false;
     }
     // KH1 jumped him on its own while KH2 had him (the user: holding jump and pressing L1; the
@@ -2196,6 +2230,20 @@ unsafe fn takeover(actor: usize) -> bool {
         }
         d.last_state = None;
         d.held = (true, true);
+        // KH1's script holding him (`+0x444` bit 1: a scene, e.g. a cup round's victory, held
+        // here after its actions for him ended): a scene's frame for a form (`scene_frame`, the
+        // run carried on from its script's frames; counted in `physics`, the Driver taken here).
+        // (The user, s314: the run ended with the script's actions 1 s in, and Valor Form never
+        // reverted in the Pegasus Cup's victory scene.)
+        if rd::<u32>(actor + 0x444) & 1 != 0 {
+            SCENE_HELD.store(true, Ordering::Relaxed);
+            if let Ok(mut w) = LAST_WHY.try_lock() {
+                if !w.starts_with("KH1's script holds him still") {
+                    w.clear();
+                    w.push_str("KH1's script holds him still (+0x444)");
+                }
+            }
+        }
         // (A carried Attack waits these frames too, `CARRY_MAX` at most.)
         if FLY_PRESS_GROUND.load(Ordering::Relaxed) && CARRY_FRAMES.fetch_sub(1, Ordering::Relaxed) <= 1 {
             FLY_PRESS_GROUND.store(false, Ordering::Relaxed);

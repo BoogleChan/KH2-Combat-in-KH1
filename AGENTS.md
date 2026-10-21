@@ -3584,6 +3584,14 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   bounce, the swing goes on. Ini `walls = kh1 | clink | pass` (default kh1; `wall_clink` no longer
   read). Enemies' guards clink as before. `docs/kh1-clash.md`.
 
+### 2026-10-21: Stage 315 (cup victory no longer hangs on a vanished partner)
+- The user: "weird bug in the Pegasus cup, i beat a round and its frozen on donald doing his victory
+  pose". Op 103 (0x1401A7430) waits for each actor's motion to end; Goofy, hidden for Valor (0x8000
+  off), never steps. `takeover::script_has_sora()` (event, script actions, live hold bit, +0x444 bit 1)
+  brings hidden partners back at once (`vanish.rs`), op 103 on a hidden partner does too
+  (`vanish::script_waits_on`), and held frames now count toward the battle-scene revert (a cup round's
+  end reverts at 2.5 s). docs/drive-model.md.
+
 ### 2026-10-21: Stage 314 (Limit Form no longer reverts mid-limit)
 - The user: "Limit from has a bug where sora will be reverted to base sora in the middle of a KH1 Limit".
   KH1's limit sets the script-hold bit 0x01000000; takeover's script check ran before
