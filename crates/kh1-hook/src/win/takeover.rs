@@ -514,6 +514,7 @@ unsafe fn trace_frame(actor: usize, start: [f32; 4]) {
         buttons: RAW_BUTTONS.load(Ordering::Relaxed) as u16,
         kh1_buttons: rd::<u32>(base + BUTTONS_RVA + 4),
         sticks,
+        draw: Default::default(),
         events: String::new(),
     });
 }
@@ -1653,6 +1654,9 @@ unsafe fn shared_give_back(base: usize, actor: usize, d: &mut Driver, back: supe
         if matches!(back, super::shared::Back::Air) && rd::<u32>(actor + 0x164) == 0x07 {
             let setm: unsafe extern "system" fn(usize, u32, f32) -> usize = std::mem::transmute(base + SET_MOTION_RVA);
             setm(actor, 0x06, 0.0);
+            // (The request raises KH1's "action running" bit, which would lock him out of acting
+            // for the whole fall and landing, t315: off, as for the idle request elsewhere.)
+            wr(actor, rd::<u32>(actor) & !4);
         }
     }
     d.last_state = None;

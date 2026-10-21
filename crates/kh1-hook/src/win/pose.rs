@@ -880,8 +880,69 @@ unsafe fn keyblade_teeth_up(pose: &mut [Mat4], parents: &[i16]) {
     }
 }
 
-/// The model-space pose to draw for the current mode, if any.
+/// What was drawn on Sora the last time (the trace's `draw_*` columns): which route chose the pose,
+/// and for KH2's clips which one, how far into it, and the blend into it.
+#[derive(Clone, Default)]
+pub struct Drawn {
+    /// "kh1_own" (KH1's animation, nothing of ours), "kh2_controller" (KH2's controller's pose) or
+    /// "follow" (a KH2 clip drawn for KH1's slot, `follow_play`).
+    pub route: &'static str,
+    /// The KH1 motion slot of that draw.
+    pub slot: Option<usize>,
+    /// `Play` (Motion / Swing / Slot) with its numbers, "follow" only.
+    pub play: String,
+    /// The KH2 motion id drawn, "follow" only.
+    pub motion: u16,
+    /// Frames into that clip.
+    pub frames: f32,
+    /// The blend into it from the last pose (0..1), -1 none.
+    pub blend: f32,
+    /// The clip was (re)started this draw.
+    pub restart: bool,
+    pub at: Option<Instant>,
+}
+
+/// 0: KH1's own, 1: KH2's controller's pose, 2: a KH2 clip for KH1's slot (set by `wanted`'s routes).
+static DRAW_ROUTE: AtomicU32 = AtomicU32::new(0);
+static DRAW_DETAIL: Mutex<Option<Drawn>> = Mutex::new(None);
+static DRAW_LAST: Mutex<Option<Drawn>> = Mutex::new(None);
+
+/// What was drawn last (for the trace); `at` is when.
+pub fn drawn() -> Drawn {
+    DRAW_LAST.try_lock().ok().and_then(|d| d.clone()).unwrap_or_default()
+}
+
+/// The model-space pose to draw for the current mode, if any, and a note of what was chosen.
 fn wanted(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4>> {
+    DRAW_ROUTE.store(0, Ordering::Relaxed);
+    if let Ok(mut d) = DRAW_DETAIL.try_lock() {
+        *d = None;
+    }
+    let pose = wanted_inner(s, slot, to_world);
+    let mut d = match (pose.is_some(), DRAW_ROUTE.load(Ordering::Relaxed)) {
+        (true, 1) => Drawn { route: "kh2_controller", ..Default::default() },
+        (true, 2) => DRAW_DETAIL.try_lock().ok().and_then(|d| d.clone()).map(|d| Drawn { route: "follow", ..d }).unwrap_or(Drawn { route: "follow", ..Default::default() }),
+        _ => Drawn { route: "kh1_own", ..Default::default() },
+    };
+    d.slot = slot;
+    d.at = Some(Instant::now());
+    if let Ok(mut last) = DRAW_LAST.try_lock() {
+        static N: AtomicU32 = AtomicU32::new(0);
+        let changed = last.as_ref().map_or(true, |l| l.route != d.route || l.slot != d.slot || l.motion != d.motion || l.restart != d.restart && d.restart);
+        if changed && N.fetch_add(1, Ordering::Relaxed) < 1500 {
+            log(&format!(
+                "draw: {} (KH1 slot {}){}",
+                d.route,
+                slot.map_or("-".into(), |n| n.to_string()),
+                if d.route == "follow" { format!(": KH2 motion {} {}, {:.0} frames in, blend {:.2}{}", d.motion, d.play, d.frames, d.blend, if d.restart { ", restarted" } else { "" }) } else { String::new() }
+            ));
+        }
+        *last = Some(d);
+    }
+    pose
+}
+
+fn wanted_inner(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4>> {
     let mode = MODE.load(Ordering::Relaxed);
     s.kh2_now = None;
     match mode {
@@ -902,6 +963,7 @@ fn wanted(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
             match (fresh, s.retarget.as_ref()) {
                 (Some((b, w)), Some(r)) => {
                     s.follow.slot = slot;
+                    DRAW_ROUTE.store(1, Ordering::Relaxed);
                     note_kh2(&b, to_world);
                     let pose = r.pose_grip(&b, super::takeover::GRIP.load(Ordering::Relaxed));
                     s.kh2_now = Some((b, w));
@@ -1178,6 +1240,7 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
             None => f.from.clear(),
         }
     }
+    let blend_now = f.blend_start.map_or(-1.0, |b| (now.duration_since(b).as_secs_f32() / f.blend_secs.max(1e-3)).min(1.0));
     if let Some(b) = f.blend_start {
         let w = now.duration_since(b).as_secs_f32() / f.blend_secs.max(1e-3);
         if w >= 1.0 || f.from.len() != pose.len() {
@@ -1195,6 +1258,10 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
     note_kh2(&pose, to_world);
     let kh1 = r.pose(&pose);
     s.kh2_now = Some((pose, weapon));
+    DRAW_ROUTE.store(2, Ordering::Relaxed);
+    if let Ok(mut d) = DRAW_DETAIL.try_lock() {
+        *d = Some(Drawn { route: "follow", slot, play: format!("{play:?}"), motion, frames, blend: blend_now, restart, at: None });
+    }
     Some(kh1)
 }
 

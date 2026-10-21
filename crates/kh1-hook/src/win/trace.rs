@@ -138,6 +138,8 @@ pub struct Row {
     pub kh1_buttons: u32,
     /// Right x, right y, left x, left y (0x80 centred).
     pub sticks: [u8; 4],
+    /// What `pose` drew this frame (`pose::drawn`), filled by `frame`.
+    pub draw: super::pose::Drawn,
     pub events: String,
 }
 
@@ -149,7 +151,8 @@ above_floor,floor_up,collision,stand_on,platform,yaw,\
 kh1_state,kh1_motion,actor_flags,combo_window,\
 kh1_vel_x,kh1_vel_y,kh1_vel_z,kh1_vel_w,kh1_arc_0,kh1_arc_1,kh1_arc_2,kh1_arc_3,push_x,push_y,push_z,\
 kh2_state,kh2_motion,kh2_frame,kh2_air,kh2_grounded,kh2_on_top,kh2_facing,kh2_combo,kh2_lock,kh2_invulnerable,kh2_guarding,form,\
-buttons,kh1_buttons,stick_rx,stick_ry,stick_lx,stick_ly,events";
+buttons,kh1_buttons,stick_rx,stick_ry,stick_lx,stick_ly,\
+draw_route,draw_slot,draw_play,draw_kh2_motion,draw_clip_frame,draw_blend,draw_restart,draw_age_ms,events";
 
 /// Columns in `Row::config` (as in `HEADER`): Camera Style, Physics, the physics in use now, then
 /// the move styles in `styles::Kind::EVERY`'s order.
@@ -234,6 +237,7 @@ pub fn frame(mut row: Row) {
     }
     ENABLED.store(true, Ordering::Relaxed);
     row.config = config_now();
+    row.draw = super::pose::drawn();
     if let Ok(mut e) = EVENTS.lock() {
         row.events = std::mem::take(&mut *e);
     }
@@ -407,6 +411,16 @@ fn line(t: &mut String, r: &Row) {
     }
     let _ = write!(t, "{},", r.form.as_deref().unwrap_or(""));
     let _ = write!(t, "{:#06x},{:#010x},{},{},{},{},", r.buttons, r.kh1_buttons, r.sticks[0], r.sticks[1], r.sticks[2], r.sticks[3]);
+    {
+        let d = &r.draw;
+        let age = d.at.map_or(String::new(), |a| a.elapsed().as_millis().to_string());
+        let slot = d.slot.map_or(String::new(), |n| n.to_string());
+        if d.route == "follow" {
+            let _ = write!(t, "{},{},\"{}\",{},{:.1},{:.2},{},{},", d.route, slot, d.play, d.motion, d.frames, d.blend, b(d.restart), age);
+        } else {
+            let _ = write!(t, "{},{},,,,,,{},", d.route, slot, age);
+        }
+    }
     if !r.events.is_empty() {
         t.push('"');
         t.push_str(&r.events.replace('"', "\"\"").replace(['\r', '\n'], " "));

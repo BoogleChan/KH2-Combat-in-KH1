@@ -1,3 +1,21 @@
+### 2026-10-21: Stage 317 (testing branch: the trace records what is drawn on Sora)
+- The user: asked for more in the trace to see Sora's model problems (the one-frame jump / glide
+  pose at the start of an Aerial Dodge). `pose::wanted` now notes what it chose (`pose::drawn`):
+  the new trace columns `draw_route` (kh1_own: KH1's animation, nothing of ours; kh2_controller:
+  KH2's controller's pose; follow: a KH2 clip drawn for KH1's slot), `draw_slot` (the KH1 slot
+  of that draw), `draw_play` (Motion / Swing / Slot, follow only), `draw_kh2_motion` (the KH2
+  motion drawn), `draw_clip_frame` (frames into it), `draw_blend` (the blend into it, -1 none),
+  `draw_restart` (the clip started this draw) and `draw_age_ms` (how long ago it was drawn: a
+  large age means the row's draw is stale). The log also gets a "draw: ..." line whenever the
+  route, slot or motion changes (up to 1500).
+- Nothing about how he looks changes.
+
+### 2026-10-21: Stage 316 (testing branch: Sora can act after an Aerial Dodge again)
+- The user: "sora now gets locked out of moving after aerial dodge" (traces t315). Stage 315's
+  fall request at the hand-back (`shared_give_back`) raised KH1's "action running" bit (bit 4 of
+  the actor flags): `0x28007` for the whole fall and landing, where it was `0x28003` before.
+  The bit is cleared right after the request, as the code does elsewhere for KH1's idle request.
+
 ### 2026-10-21: Stage 315 (testing branch: KH1's fall pose at the end of KH2's move in the air)
 - The user: after an Aerial Dodge "sora's feet seem to glitch out before snapping to his falling
   pose". The traces (t314, Aerial Dodge out of KH1's and KH2's High Jump): KH1's motion request is
