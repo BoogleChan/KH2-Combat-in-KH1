@@ -368,6 +368,12 @@ pub fn clip_from_anb(motion: u16, player: &Anb, weapons: &[Option<&Anb>], combat
                 42 => WindowKind::KeepMomentum,
                 range_id::ALLOW_RC => WindowKind::AllowReactionCommand,
                 range_id::WEAPON_TRAIL => WindowKind::WeaponTrail,
+                // The ranges an object's script asks about (`trap_obj_motion_check_range (obj, n)`
+                // reads range 15 + n: Limit Form's follow-up windows, 16 and 17 in Sonic Rave's
+                // and Strike Raid's motions), and a command offered on Triangle while the range is
+                // open (range 20: command, 0; Last Arcanum's Bash, Infinity's Shoot).
+                16..=18 => WindowKind::ScriptRange(r.id - 15),
+                20 => WindowKind::OfferCommand(p(0) as u16),
                 _ => continue,
             };
             let end = if r.end < 0 { None } else { Some(r.end as u32) };
@@ -396,7 +402,9 @@ pub fn clip_from_anb(motion: u16, player: &Anb, weapons: &[Option<&Anb>], combat
 /// documented fallback order) and the matching weapon slots.
 fn moves(player: &Mset, weapons: &[Mset], combat: &CombatData) -> HashMap<u16, Clip> {
     let mut clips = HashMap::new();
-    for m in 0..=230u16 {
+    // (To 255, as posing reads: Limit Form's Strike Raid and Infinity are 231..248, `P_EX100_KH1F`'s
+    // K42x / K43x; no other moveset has motions past 230.)
+    for m in 0..=255u16 {
         let Some(ps) = player.slot_for(m as usize, true, true) else { continue };
         let Some(pa) = &ps.anb else { continue };
         let wa: Vec<Option<&Anb>> = weapons.iter().map(|w| w.slot_for(m as usize, true, true).and_then(|s| s.anb.as_ref())).collect();

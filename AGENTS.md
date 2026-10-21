@@ -3399,3 +3399,13 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   sheets are blanked and yellow eyes kept (Anti-Sora has none). Falls back to `Op::Shadow` per
   texture if anything fails. `kh2_formats::egs` skips `kh1_fifth.hed`'s one bad entry.
 - Each form's attack groups are checked at load (`pose::log_shape_groups`): all have shapes.
+
+### 2026-10-20: Stage 291 (Limit Form's Limit menu: Sonic Rave, Last Arcanum; no KH1 limits in forms)
+- The user chose "KH2's own limits". In Limit Form Magic reads "Limit" (Sonic Rave, Last
+  Arcanum, Strike Raid, Infinity): the form's `limi` script drives Sora through its motions, with
+  the Triangle follow-ups (Rave / Finish, Bash / The End) in KH1's Triangle box (`limits.rs`,
+  `kh2-magic`'s limit functions). One KH1 bar each (the KH2-spell rule); greyed in the air, short
+  of MP, or not built yet (Strike Raid, Infinity). Motions to 248 load.
+- The user: "KH1 limits that are equipped shouldn't even prompt in any drive form": KH1's
+  Triangle-box offer of its limits (the call at the end of its menu fill) is skipped in every form;
+  the s278 refusal stays.

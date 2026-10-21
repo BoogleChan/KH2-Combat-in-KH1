@@ -55,6 +55,21 @@ fn drive_forms_load() {
         assert_eq!(rig.weapons.len(), hands, "{}", spec.model);
         assert!(!d.character.moveset.combo_rows.is_empty(), "{}: combo rows", spec.model);
         assert!(d.character.moveset.clips.contains_key(&53), "{}: arrival motion", spec.model);
+        // Limit Form: its limits' motions past 230 (Strike Raid's, Infinity's), the follow-up
+        // windows its script reads (Sonic Rave's K401: script ranges 1 and 2) and the commands
+        // its motions offer (Last Arcanum's K410: Bash).
+        if spec.form == 3 {
+            let clips = &d.character.moveset.clips;
+            for m in [231u16, 232, 233, 234, 241, 242, 243, 244, 245, 246, 247, 248] {
+                assert!(clips.contains_key(&m), "Limit Form motion {m}");
+            }
+            let rave = &clips[&212];
+            for n in [1, 2] {
+                assert!(rave.windows.iter().any(|w| w.kind == WindowKind::ScriptRange(n) && w.start == 16 && w.end == Some(46)), "K401 range {n}");
+            }
+            assert!(clips[&221].windows.iter().any(|w| w.kind == WindowKind::OfferCommand(702)));
+            assert!(rave.windows.iter().any(|w| matches!(w.kind, WindowKind::Hitbox { attack: 1878, weapon: 1, .. })), "Rave's Keyblade hit");
+        }
         eprintln!("{}: {} clips, {} combo rows, run {}", spec.model, d.motions.len(), d.character.moveset.combo_rows.len(), d.character.params.run_speed);
     }
 }

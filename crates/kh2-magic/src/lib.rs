@@ -69,6 +69,40 @@ pub trait World {
     fn hitback(&mut self, o: ObjId, dir: Vec3, dist: f32);
     /// Uniform in [0, 1).
     fn random(&mut self) -> f32;
+
+    // An object's own script driving it (KH2's Limit Form, its model's `limi`). A host without
+    // such objects keeps these defaults: nothing is driven.
+
+    /// Starts motion `m` on `o` now (`trap_sysobj_motion_start`; `blend` frames of blending).
+    /// From here on `motion` should report `m` (the script reads it back at once).
+    fn motion_start(&mut self, _o: ObjId, _m: u16, _blend: f32) {}
+    /// Queues `m` to play when the motion now playing ends (`trap_sysobj_motion_push`; 0 is
+    /// idle, the end of a chain).
+    fn motion_push(&mut self, _o: ObjId, _m: u16, _blend: f32) {}
+    /// The motion playing has played to its end (with nothing queued after it).
+    fn motion_ended(&self, _o: ObjId) -> bool {
+        true
+    }
+    /// Script range `n` (1..3) of the motion playing is open on this frame
+    /// (`trap_obj_motion_check_range`).
+    fn motion_range(&self, _o: ObjId, _n: u8) -> bool {
+        false
+    }
+    /// The motion's script frame trigger `n` came on this frame (`trap_obj_motion_check_trigger`).
+    fn motion_trigger(&self, _o: ObjId, _n: u8) -> bool {
+        false
+    }
+    /// Turns `o` to face `dir` (`trap_obj_wish_dir`).
+    fn face(&mut self, _o: ObjId, _dir: Vec3) {}
+    /// The object's `00objentry` id (`trap_obj_get_entry_id`).
+    fn entry_id(&self, _o: ObjId) -> u32 {
+        0
+    }
+    /// Offers `command` on `o`'s reaction button for this frame (`trap_command_override`); a
+    /// script offers it again each frame it should stay.
+    fn offer_command(&mut self, _o: ObjId, _command: u16) {}
+    /// `o` plays its moveset's combo row `row` (`trap_obj_party_attack`).
+    fn party_attack(&mut self, _o: ObjId, _row: u16) {}
 }
 
 /// One loaded spell file.
@@ -84,6 +118,11 @@ impl SpellFile {
     /// (Wisdom Form's `wisd`) and the PAX of its effect archive.
     pub fn from_parts(name: &str, script: &[u8], pax: &[u8]) -> Result<SpellFile, String> {
         Ok(SpellFile { name: name.to_string(), program: Program::parse(script).map_err(|e| e.to_string())?, pax: Pax::parse(pax).map_err(|e| e.to_string())? })
+    }
+
+    /// An object's own script with no effects of its own to start (its archive not read).
+    pub fn script_only(name: &str, script: &[u8]) -> Result<SpellFile, String> {
+        Ok(SpellFile { name: name.to_string(), program: Program::parse(script).map_err(|e| e.to_string())?, pax: Pax { elements: Vec::new(), effects: Vec::new() } })
     }
 
     /// The first BAR entry of `kind` (3 script, 18 PAX) in a file.
@@ -200,6 +239,32 @@ pub(crate) struct Tables {
     pub threads: Vec<CtxId>,
     /// The caster's battle target, picked when the cast starts.
     pub target: Option<ObjId>,
+    /// A limit's command (`Magic::limit`: what `trap_limit_start_command` answers).
+    pub limit_command: u16,
+    /// Each object's hook thread (`trap_obj_hook`: a new one replaces the old).
+    pub hooks: HashMap<ObjId, CtxId>,
+}
+
+impl Tables {
+    fn new(vm: &mut Vm, caster: ObjId, spell: usize, target: Option<ObjId>) -> Tables {
+        let statics = host::Statics::new(vm);
+        Tables {
+            caster,
+            spell,
+            objs: HashMap::new(),
+            obj_rec: HashMap::new(),
+            pax_rec: 0,
+            attacks: HashMap::new(),
+            effects: HashMap::new(),
+            targets: HashMap::new(),
+            teamwork: HashMap::new(),
+            statics,
+            threads: Vec::new(),
+            target,
+            limit_command: 0,
+            hooks: HashMap::new(),
+        }
+    }
 }
 
 pub struct Cast {
@@ -214,6 +279,8 @@ pub struct Cast {
     pub object: bool,
     /// Held by the host (`Magic::hold`): its script doesn't run and its effects don't age.
     pub held: bool,
+    /// An object's limit run (`Magic::limit`; also an `object` run).
+    pub limit: bool,
 }
 
 impl Cast {
@@ -277,28 +344,15 @@ impl Magic {
         let file = self.spells.get(spell).ok_or_else(|| BdxError::Trap("no such spell".into()))?;
         let mut vm = Vm::new(file.program.clone());
         vm.frametime = self.frametime;
-        let statics = host::Statics::new(&mut vm);
-        let mut t = Tables {
-            caster,
-            spell,
-            objs: HashMap::new(),
-            obj_rec: HashMap::new(),
-            pax_rec: 0,
-            attacks: HashMap::new(),
-            effects: HashMap::new(),
-            targets: HashMap::new(),
-            teamwork: HashMap::new(),
-            statics,
-            threads: Vec::new(),
-            target: if matches!(element, 0 | 1 | 2 | 4) { world.target_of(caster) } else { None },
-        };
+        let target = if matches!(element, 0 | 1 | 2 | 4) { world.target_of(caster) } else { None };
+        let mut t = Tables::new(&mut vm, caster, spell, target);
         let player = host::obj_record(&mut vm, &mut t, caster);
         t.pax_rec = vm.mem.alloc(16);
         let magi_at = vm.mem.alloc(magi.len() as u32);
         vm.mem.write(magi_at, magi)?;
         let main = vm.spawn(None);
         vm.trigger(main, 20, &[Cell::addr(player), Cell::addr(t.pax_rec), Cell::int(sub), Cell::addr(magi_at)])?;
-        self.casts.push(Cast { vm, t, main, released: false, finished: false, fresh: true, object: false, held: false });
+        self.casts.push(Cast { vm, t, main, released: false, finished: false, fresh: true, object: false, held: false, limit: false });
         // It first runs with the next `update` (the game's magic manager
         // runs every script once per frame, after the player).
         Ok(self.casts.len() - 1)
@@ -312,31 +366,86 @@ impl Magic {
         let f = self.spells.get(file).ok_or_else(|| BdxError::Trap("no such object script".into()))?;
         let mut vm = Vm::new(f.program.clone());
         vm.frametime = self.frametime;
-        let statics = host::Statics::new(&mut vm);
-        let mut t = Tables {
-            caster: owner,
-            spell: file,
-            objs: HashMap::new(),
-            obj_rec: HashMap::new(),
-            pax_rec: 0,
-            attacks: HashMap::new(),
-            effects: HashMap::new(),
-            targets: HashMap::new(),
-            teamwork: HashMap::new(),
-            statics,
-            threads: Vec::new(),
-            target: world.target_of(owner),
-        };
+        let mut t = Tables::new(&mut vm, owner, file, world.target_of(owner));
         let obj = host::obj_record(&mut vm, &mut t, owner);
         t.pax_rec = vm.mem.alloc(16);
         let effect = host::start_object_effect(self, &mut vm, &mut t, n as u16, owner, world);
         let main = vm.spawn(None);
         vm.trigger(main, 0x10, &[Cell::addr(obj), Cell::int(n as i32), Cell::addr(effect)])?;
-        self.casts.push(Cast { vm, t, main, released: true, finished: false, fresh: false, object: true, held: false });
+        self.casts.push(Cast { vm, t, main, released: true, finished: false, fresh: false, object: true, held: false, limit: false });
         // The trigger runs at once (same frame), like the game's call.
         let i = self.casts.len() - 1;
         self.run_cast(i, world);
         Ok(i)
+    }
+
+    /// Starts a limit command on `owner` from its object script (`file`: KH2's Limit Form,
+    /// its model's `limi`): trigger 22 with a limit record, the script asking
+    /// `trap_limit_start_command` for `command` (03system `cmd`: 698 Sonic Rave, ...). It
+    /// first runs with the next `update`. The follow-ups go to the same run (`limit_command`).
+    pub fn limit(&mut self, file: usize, owner: ObjId, command: u16, world: &mut dyn World) -> Result<usize, BdxError> {
+        let f = self.spells.get(file).ok_or_else(|| BdxError::Trap("no such object script".into()))?;
+        let mut vm = Vm::new(f.program.clone());
+        vm.frametime = self.frametime;
+        let mut t = Tables::new(&mut vm, owner, file, world.target_of(owner));
+        t.limit_command = command;
+        host::obj_record(&mut vm, &mut t, owner);
+        t.pax_rec = vm.mem.alloc(16);
+        // The limit's record: the script hands it back to the limit traps only.
+        let rec = vm.mem.alloc(16);
+        let main = vm.spawn(None);
+        if !vm.trigger(main, 22, &[Cell::addr(rec)])? {
+            return Err(BdxError::Trap("the script has no limit trigger (22)".into()));
+        }
+        self.casts.push(Cast { vm, t, main, released: true, finished: false, fresh: true, object: true, held: false, limit: true });
+        Ok(self.casts.len() - 1)
+    }
+
+    /// A follow-up command chosen during `owner`'s limit (Rave, Finish, ...): the script's
+    /// trigger 23 with it, a thread of the limit's run sharing its work memory. It runs with the
+    /// next `update`, after the run's main thread (running it here would step that one twice in
+    /// a frame). Returns false when no limit of `owner`'s runs or its script has no trigger 23.
+    pub fn limit_command(&mut self, owner: ObjId, command: u16) -> bool {
+        let Some(i) = self.casts.iter().rposition(|c| c.limit && c.t.caster == owner && !c.finished) else { return false };
+        let c = &mut self.casts[i];
+        let wp = c.vm.ctxs[c.main].wp;
+        let ctx = c.vm.spawn(Some(wp));
+        match c.vm.trigger(ctx, 23, &[Cell::int(command as i32)]) {
+            Ok(true) => {}
+            Ok(false) => return false,
+            Err(e) => {
+                self.events.push(Event::Error(e.to_string()));
+                return false;
+            }
+        }
+        c.t.threads.push(ctx);
+        true
+    }
+
+    /// Whether `owner` has a limit running.
+    pub fn limit_running(&self, owner: ObjId) -> bool {
+        self.casts.iter().any(|c| c.limit && c.t.caster == owner && !c.finished)
+    }
+
+    /// Ends `owner`'s object runs at once (its limit, its shots): scripts stopped, effects
+    /// killed, attacks freed. Returns how many there were.
+    pub fn end_objects(&mut self, owner: ObjId) -> usize {
+        let mut n = 0;
+        let mut effects = Vec::new();
+        let mut attacks = Vec::new();
+        for c in self.casts.iter_mut().filter(|c| c.t.caster == owner && c.object && !c.finished) {
+            c.finished = true;
+            effects.extend(c.t.effects.values().copied());
+            attacks.extend(c.t.attacks.values().copied());
+            n += 1;
+        }
+        for e in self.effects.iter_mut().filter(|e| effects.contains(&e.id)) {
+            e.killed = true;
+        }
+        for a in self.attacks.iter_mut().filter(|a| attacks.contains(&a.key)) {
+            a.freed = true;
+        }
+        n
     }
 
     /// The cast motion reached its magic-cast event: trigger 21 on the
@@ -487,6 +596,8 @@ fn placeholder() -> Cast {
             statics: host::Statics::default(),
             threads: Vec::new(),
             target: None,
+            limit_command: 0,
+            hooks: HashMap::new(),
         },
         main: 0,
         released: true,
@@ -494,5 +605,6 @@ fn placeholder() -> Cast {
         fresh: false,
         object: false,
         held: false,
+        limit: false,
     }
 }

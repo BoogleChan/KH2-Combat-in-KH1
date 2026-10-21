@@ -57,8 +57,8 @@
 //! Keyblade (Sora's own, as in base form). Its growth ability is Dodge Roll, one level above
 //! Sora's (as the others'). It keeps KH1 Sora's own look (no tint: the model drawn is KH1's
 //! already). No magic: KH2's Limit Form has its Limit commands in place of Magic (Sonic Rave, Last
-//! Arcanum, Strike Raid, Infinity), run by its model's own script (`limi`). Those are not in yet,
-//! so Magic is greyed as in Valor. It costs `LIMIT_COST_MP` and opens at level `LIMIT_LEVEL` (the
+//! Arcanum, Strike Raid, Infinity), run by its model's own script (`limi`): `limits`, the Limit
+//! menu in Magic's place (Sonic Rave and Last Arcanum so far). It costs `LIMIT_COST_MP` and opens at level `LIMIT_LEVEL` (the
 //! user).
 
 use super::{log, pose};
@@ -168,7 +168,7 @@ impl Kind {
     /// KH2's magic sub offset in the form (`docs/drive-model.md`: + 10 in Wisdom, + 30 in Final;
     /// 03system `magi` and the spells' ATKP rows have subs 30..35 for Final), for a form that casts
     /// as Wisdom does (`formmagic`); `None` for one that can't cast (Valor, Limit, Anti: the
-    /// command's form mask; Limit has its Limit commands instead, not in yet).
+    /// command's form mask; Limit has its Limit commands instead, `limits`).
     /// (Final: the user, "lets try to incorporate our rules, logic, and process from wisdom forms'
     /// magic, and bring it to final form, with final form's animations". KH2 has no spell files
     /// of Final's own: MAGC's rows are the same as Sora's, and the form's moveset gives the
@@ -712,6 +712,7 @@ unsafe fn revert(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     }
     swap(ch, anim, &kh2.character, &kh2.rig, f.sora);
     super::formmagic::end_all();
+    super::limits::end_all();
     super::kh2fx::owner_gone();
     for el in REVERT_ELEMENTS {
         super::kh2fx::event(REVERT_FX, EventKind::Effect(el));

@@ -347,6 +347,11 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
         cmd_log(format!("command {kind:#x} ({full:08x}) waits: KH1's jump or glide has him, KH2 takes him for it"));
         return;
     }
+    // Limit Form's limits and their Triangle follow-ups (`limits`: KH2's, its Limit menu).
+    if actor == sora && kind == 2 && super::limits::ours(arg) {
+        super::limits::command(actor, arg);
+        return;
+    }
     if actor == sora && kind == 2 && super::drive::on() && (super::drive::FORM_ARG..super::drive::FORM_ARG + super::drive::FORMS.len() as u8).contains(&arg) {
         super::drive::chosen(actor, (arg - super::drive::FORM_ARG) as usize);
         return;
@@ -2317,7 +2322,7 @@ unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
             cmd_log("Attack in KH1's move's cut window: KH2 takes him for the combo".to_string());
             return true;
         }
-        if kind == 2 && arg >= super::drive::FORM_ARG && super::drive::on() && super::form::accept_now() {
+        if kind == 2 && arg >= super::drive::FORM_ARG && !super::limits::ours(arg) && super::drive::on() && super::form::accept_now() {
             let sora = rd::<u64>(base + PARTY_RVA) as usize;
             super::drive::chosen(sora, (arg - super::drive::FORM_ARG) as usize);
             // The menu back to its top, as KH1 leaves it after a command.
@@ -2330,8 +2335,14 @@ unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
     if disabled {
         return false;
     }
+    // Limit Form's limits: taken once KH2's move takes a command (the list stays open till then);
+    // the Triangle follow-up only on a fresh press while it is offered (`limits`).
+    if kind == 2 && super::limits::ours(arg) {
+        return super::limits::not_yet(arg);
+    }
     // No magic in Valor Form (KH2's Valor can't cast): the "can't" sound, the menu stays.
-    // (Nor in Limit Form: KH2's has its Limit commands there instead, not in yet.)
+    // (Nor in Limit Form: KH2's has its Limit commands there instead, `limits`; a KH1 spell from
+    // a shortcut is refused here.)
     if kind == 2 && arg < super::drive::FORM_ARG && (super::form::in_valor() || super::form::in_limit()) {
         let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
         sound(4);
@@ -2340,7 +2351,7 @@ unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
     }
     // A form from the Drive list: only on a frame Sora can change (`form::accept_now`: KH2's,
     // or a KH1 move's cut frame reached), the same as a spell (the user: no queue).
-    if kind == 2 && arg >= super::drive::FORM_ARG && super::drive::on() {
+    if kind == 2 && arg >= super::drive::FORM_ARG && !super::limits::ours(arg) && super::drive::on() {
         if super::form::accept_now() {
             return false;
         }

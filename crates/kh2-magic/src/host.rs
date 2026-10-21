@@ -74,6 +74,16 @@ pub(crate) fn run(magic: &mut Magic, cast: &mut Cast, world: &mut dyn World) -> 
     let main = cast.main;
     let vm = &mut cast.vm;
     let mut b = Bridge { magic, t: &mut cast.t, world };
+    // Objects' hooks first (`trap_obj_hook`): they run in the object's own update, before the
+    // scripts that run after it (ours, from Limit Form's script: its main loop ends the limit on
+    // a motion its hook hasn't taken over yet, so the hook must have run first).
+    let hooks: Vec<CtxId> = b.t.hooks.values().copied().collect();
+    for c in hooks {
+        vm.owner = None;
+        if vm.run_tree(c, &mut b)? {
+            b.t.hooks.retain(|_, x| *x != c);
+        }
+    }
     vm.owner = None;
     let main_done = vm.run_tree(main, &mut b)?;
     let mut i = 0;
@@ -86,7 +96,7 @@ pub(crate) fn run(magic: &mut Magic, cast: &mut Cast, world: &mut dyn World) -> 
             i += 1;
         }
     }
-    cast.finished = main_done && cast.t.threads.is_empty();
+    cast.finished = main_done && cast.t.threads.is_empty() && cast.t.hooks.is_empty();
     Ok(())
 }
 
@@ -208,6 +218,16 @@ impl Bridge<'_> {
         vm.mem.set_u32(rec + 8, 0)?;
         vm.mem.set_u32(rec + 12, 2)?;
         Ok(rec)
+    }
+
+    /// A thread at code `pc` with `arg`, sharing the work memory of the tree running now.
+    fn thread(&mut self, vm: &mut Vm, ctx: CtxId, pc: u32, arg: Cell) -> Result<CtxId, BdxError> {
+        let owner = vm.owner.unwrap_or(ctx);
+        let wp = vm.ctxs[owner].wp;
+        let c = vm.spawn(Some(wp));
+        vm.start_at(c, pc, &[arg])?;
+        self.t.threads.push(c);
+        Ok(c)
     }
 
     fn missing(&mut self, table: u8, index: u16) {
@@ -492,15 +512,119 @@ impl Host for Bridge<'_> {
                 None
             }
             (2, 20) => {
-                let owner = vm.owner.unwrap_or(ctx);
-                let wp = vm.ctxs[owner].wp;
-                let c = vm.spawn(Some(wp));
-                vm.start_at(c, a(0).v, &[a(1)])?;
-                self.t.threads.push(c);
+                let c = self.thread(vm, ctx, a(0).v, a(1))?;
                 let rec = vm.mem.alloc(16);
                 vm.mem.set_u32(rec, c as u32)?;
                 Some(Cell::addr(rec))
             }
+            // trap_limit_start_thread(code, arg): as a magic thread (no handle back).
+            (2, 54) => {
+                self.thread(vm, ctx, a(0).v, a(1))?;
+                None
+            }
+
+            // --- a limit (KH2's Limit Form `limi`, `Magic::limit`) ---
+            // trap_limit_start_command: the limit chosen.
+            (7, 27) => Some(Cell::int(self.t.limit_command as i32)),
+            // trap_limit_player(limit): its user's object; trap_limit_friend(limit, n): none
+            // (Limit Form's limits are Sora's alone).
+            (2, 48) => Some(Cell::addr(obj_record(vm, self.t, self.t.caster))),
+            (2, 49) => Some(Cell::int(0)),
+            // trap_limit_time(limit): the team limits' time; trap_limit_reference(limit): what
+            // still holds the limit. Neither applies to a solo limit (ours: 0, so the script's
+            // waits on them end at once).
+            (2, 60) => Some(Cell::float(0.0)),
+            (2, 63) => Some(Cell::int(0)),
+            // trap_limit_light / trap_light_set_color: the scene's light during a limit, and
+            // trap_area_world (the script picks other colours in world 13): not modelled.
+            (2, 55) => Some(Cell::int(0)),
+            (1, 183) => None,
+            (1, 23) => Some(Cell::int(0)),
+            // trap_obj_stop_end_all(kind): not modelled.
+            (6, 47) => None,
+            // trap_obj_hook(obj, code, _): the object's hook, a thread with the object as its
+            // argument; a new one replaces the object's last.
+            (1, 112) => {
+                if let Some(o) = self.obj_of_ref(vm, a(0).v) {
+                    if let Some(old) = self.t.hooks.remove(&o) {
+                        vm.ctxs[old].done = true;
+                        vm.ctxs[old].children.clear();
+                    }
+                    // (Run before the others each frame, `run`: not in the thread list.)
+                    let c = self.thread(vm, ctx, a(1).v, a(0))?;
+                    self.t.threads.retain(|x| *x != c);
+                    self.t.hooks.insert(o, c);
+                }
+                None
+            }
+            // trap_sysobj_motion_start / _push (handle, motion, blend), trap_sysobj_motion_is_end.
+            (1, 11) | (1, 13) => {
+                if let Some(o) = self.obj_of_handle(a(0).v) {
+                    if index == 11 {
+                        self.world.motion_start(o, a(1).v as u16, a(2).f());
+                    } else {
+                        self.world.motion_push(o, a(1).v as u16, a(2).f());
+                    }
+                }
+                None
+            }
+            (1, 14) => Some(b(self.obj_of_handle(a(0).v).map_or(true, |o| self.world.motion_ended(o)))),
+            // trap_obj_motion_check_range / _check_trigger (obj, n).
+            (1, 150) => Some(b(self.obj_of_ref(vm, a(0).v).is_some_and(|o| self.world.motion_range(o, a(1).v as u8)))),
+            (1, 151) => Some(b(self.obj_of_ref(vm, a(0).v).is_some_and(|o| self.world.motion_trigger(o, a(1).v as u8)))),
+            // trap_command_override(slot, command, obj, on): the command on the reaction button.
+            (1, 165) => {
+                if a(3).v != 0 {
+                    if let Some(o) = self.obj_of_ref(vm, a(2).v) {
+                        self.world.offer_command(o, a(1).v as u16);
+                    }
+                }
+                None
+            }
+            // trap_obj_can_decide_command(obj, command, _): ours, yes (the friend's offers).
+            (1, 221) => Some(b(true)),
+            (1, 222) => Some(Cell::int(self.obj_of_ref(vm, a(0).v).map_or(0, |o| self.world.entry_id(o)) as i32)),
+            // trap_obj_wish_dir(obj, dir).
+            (1, 4) => {
+                let d = host(vec_in(vm, a(1).v)?);
+                if let Some(o) = self.obj_of_ref(vm, a(0).v) {
+                    self.world.face(o, d);
+                }
+                None
+            }
+            // trap_obj_set_movement(obj, dir, speed): ours, nothing (the motions' root motion
+            // moves him; the scripts set speed 0 before a motion of their own).
+            (1, 111) => None,
+            (1, 272) => Some(b(self.obj_of_ref(vm, a(0).v).map_or(true, |o| !self.world.exists(o)))),
+            // trap_obj_party_attack(obj, row).
+            (6, 67) => {
+                if let Some(o) = self.obj_of_ref(vm, a(0).v) {
+                    self.world.party_attack(o, a(1).v as u16);
+                }
+                None
+            }
+            // trap_obj_effect_start_bind(obj, element, _, _): as `trap_obj_effect_start`.
+            (1, 87) => {
+                let owner = self.obj_of_ref(vm, a(0).v);
+                let pax = self.t.pax_rec;
+                Some(Cell::addr(self.start_effect(vm, pax, a(1).v as u16, owner)))
+            }
+            // trap_obj_effect_unbind(obj, effect): it stays where it is.
+            (1, 169) => {
+                if let Some(e) = self.effect(a(1).v) {
+                    e.placed = Some(e.pos);
+                }
+                None
+            }
+            // trap_effect_loop_end_kill(effect).
+            (0, 85) => {
+                if let Some(e) = self.effect(a(0).v) {
+                    e.loop_end();
+                }
+                None
+            }
+            // trap_puts: the script's own log lines.
+            (0, 2) => None,
             (2, 21) => {
                 let key = (a(0).v, a(1).v);
                 let r = match self.t.teamwork.get(&key) {

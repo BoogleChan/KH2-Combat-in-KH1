@@ -363,9 +363,10 @@ lists (`.hed` names). Nothing of it is in the repository.
   (K303 = 154, K304 = 155, K322 = 173, K332 = 183, K400.. = 211.., K410.. = 221.., K420.. =
   231.., K430.. = 241..). There is no motion 52 (the Drive change is Sora's), but there is 53
   (its arrival: elements 1..12 and 100..102 from its archive). Motion 42 (the guard's repel, a
-  guard window, ATKP 162) and 209 (Dodge Roll) are there. `kh2_data`'s moveset reads motions up
-  to 230 only, so 231 and up (Strike Raid's and Infinity's) have no controller clips yet. The rig
-  has them (posing reads to 255).
+  guard window, ATKP 162) and 209 (Dodge Roll) are there. `kh2_data`'s moveset now reads motions
+  up to 255, as posing does (it stopped at 230, so Strike Raid's and Infinity's had no clips); no
+  other moveset has motions past 230, so the others are unchanged. The Keyblade's motion 235 (no
+  body motion) is the thrown Keyblade's own, which its script starts on the weapon.
 - **Combo rows (PTYA set 0x42, 21 rows).** No row needs an ability.
 
   | Row | Kind | Flags | Motion | ATKP (power) | What it is |
@@ -398,30 +399,76 @@ lists (`.hed` names). Nothing of it is in the repository.
 - **Drive cost in KH2 (for reference).** 4 bars: 03system `cmd` 0x2A1 "Limit Form" (execute 4,
   argument 3, the form id), and 0x2A2 "Limit" (Auto Limit's reaction command), both cost 4.
 
-### Its commands in KH2 (Data; not in the port yet)
+### Its commands in KH2 (Data, and its script `limi` read)
 
 - **Magic is replaced by "Limit"** (`cmd` 0x2C3, execute 707, submenu 12, icon 7). Its list:
 
-  | Limit | `cmd` | MP | Follow-ups (`cmd`, no cost) | Help (sys.bar) | Motions (from `limi`'s motion calls; inferred) |
+  | Limit | `cmd` | MP | Follow-ups (`cmd`, no cost) | Help (sys.bar) | Motions (from `limi`'s motion calls) |
   |---|---|---|---|---|---|
-  | Sonic Rave | 0x2BA | 60 | Rave 0x2BB, Finish 0x2BC | "attack on an enemy as you pass by. Press [it] at the right tempo for a combo" | 211..213 (K400..K402) |
-  | Last Arcanum | 0x2BD | 75 | Bash 0x2BE, The End 0x2BF | "a powerful combo attack. Press [it] for a consecutive combo" | 221..227 (K410..K416) |
-  | Strike Raid | 0x2C0 | 65 | Raid 0x2C1, Judgment 0x2C2 | "throw the Keyblade at the target. Press [it] for a combo" | 231..235 (K420.., next to `trap_strike_raid_calc_xyzrot`) |
-  | Infinity | 0x2AB | 80 | Shoot 0x2AC, Impact 0x2AD, Giga Impact 0x2AE | "can be unleashed by pressing [it] after an aerial combo" | 241..248 (K430..K437; rows 52..56) |
+  | Sonic Rave | 0x2BA (698) | 60 | Rave 0x2BB, Finish 0x2BC | "attack on an enemy as you pass by. Press [it] at the right tempo for a combo" | 211 (K400) into 212 (K401), 212 again per Rave, 213 (K402) the Finish |
+  | Last Arcanum | 0x2BD (701) | 75 | Bash 0x2BE, The End 0x2BF | "a powerful combo attack. Press [it] for a consecutive combo" | 221 (K410), 222..226 one per Bash, 227 (K416) The End |
+  | Strike Raid | 0x2C0 (704) | 65 | Raid 0x2C1, Judgment 0x2C2 | "throw the Keyblade at the target. Press [it] for a combo" | 231 (K420), the throw 232 (Raid) / 233 (Judgment), the catch 234; the Keyblade's own 235 |
+  | Infinity | 0x2AB (683) | 80 | Shoot 0x2AC, Impact 0x2AD, Giga Impact 0x2AE | "can be unleashed by pressing [it] after an aerial combo" | 241 (K430), combo rows 52..56 (242..246), 247 (Shoot, Impact) / 248 (Giga Impact) |
 
-  The follow-ups are reaction commands that the script puts on Triangle
-  (`trap_command_override`). `00battle` `limt` rows 27..30 name these limits' files
-  (`sonic_rave.bar`, `last_alcanam.bar`, `strike_raid.bar`, `ragnarok.bar`). On the install those
-  are `limit/us/*.bar`, all four 72480 bytes. That is likely their menu banners: they aren't
-  extracted, so this isn't checked. Infinity's file is Ragnarok's, and its `cmd` 0x2AB is KH2FM's
-  Ragnarok under its PC name.
-  The commands' flags (0x10112) differ from Arcana's (0x10111). What 0x10000 does to a cost
-  above his MP isn't traced.
-- **Its script.** `limi` (BAR entry type 3 of the model, as Wisdom's `wisd`) runs the limits:
-  `trap_limit_start_thread`, `trap_limit_start_command`, `trap_command_override`,
-  `trap_limit_time`, `trap_limit_light`, `trap_obj_party_attack`,
-  `trap_strike_raid_calc_xyzrot`, `trap_teamwork_alloc`, and motion pushes / starts / trigger
-  checks. `kh2-magic`'s host has none of the limit traps.
+  `00battle` `limt` rows 27..30 name these limits' files (`sonic_rave.bar`, `last_alcanam.bar`,
+  `strike_raid.bar`, `ragnarok.bar`). On the install those are `limit/us/*.bar`, all four 72480
+  bytes. That is likely their menu banners: they aren't extracted, so this isn't checked.
+  Infinity's file is Ragnarok's, and its `cmd` 0x2AB is KH2FM's Ragnarok under its PC name.
+- **Their MP.** The costs are plain costs (not 255, "all remaining MP"). All of KH2's limits
+  that cost MP (these four, and the party limits 0x21E / 0x220 at 50) have flag 0x10000 and no
+  spell has it; what it does to a cost above Sora's MP isn't traced (no KH2 executable here). The
+  flags also have 0x2, the Land flag (`reaction-commands.md`: a Land command can't be used in
+  the air), on the limits and their follow-ups.
+- **Its script** (`limi`, BAR entry type 3 of the model, as Wisdom's `wisd`; work 128 bytes).
+  Read from its code:
+  - **Trigger 22** starts a limit with a limit record. It asks `trap_limit_start_command` for
+    the command, keeps the limit's control block in work memory, starts a thread that offers
+    the party member's commands while `trap_limit_time` lasts (none in a solo limit), and runs
+    the command's code: that sets the light (`trap_limit_light`, `trap_light_set_color`; other
+    colours in world 13), the follow-up pair and count (Sonic Rave: Rave, Finish, 5; Strike
+    Raid: Raid, Judgment, 3), and Sora's hook.
+  - **The hook** (`trap_obj_hook`, one per object, a new one replacing the old) drives his
+    motions: `trap_sysobj_motion_start` / `_push` (a queue; pushing 0 ends the chain in idle),
+    waits on `trap_sysobj_motion_is_end` / `_id`, turns him (`trap_obj_wish_dir`: Rave and
+    Finish turn him round to pass back through), and pushes him back (`trap_obj_hitback`,
+    Infinity's shots). The script checks his object is Limit Form's (`trap_obj_get_entry_id`
+    0x95D..0x961) before it moves him.
+  - **The main loop** runs while his motion is the one the hook last started (or one of
+    Infinity's 241..248). While the count is above 0 it offers the first follow-up during the
+    motion's script range 1 (`trap_obj_motion_check_range (obj, 1)`), at 0 the second during
+    range 2 (`trap_command_override`, every frame the range is open). When the motion is no
+    longer the hook's, the limit ends (`trap_limit_reference` waited on, its targets freed,
+    `trap_obj_stop_end_all (17)`); Strike Raid then catches the Keyblade.
+  - **Trigger 23** runs a follow-up command chosen (its count down by one): Rave starts 212
+    again, Finish 213; Bash 222..226 in turn (a counter in work memory), The End 227; Raid and
+    Judgment throw the Keyblade (232 / 233, then the catch 234); Shoot, Impact and Giga Impact
+    start 247 / 247 / 248 with 10 / 17 / 25 shots.
+  - **Trigger 17** with 100 (frame trigger 7 [100, 0] of 247 / 248) fires Infinity's shots (ATKP
+    1862, radius 80, homing).
+  - **Strike Raid's throw** (frame trigger 9 of 232 / 233) detaches the Keyblade
+    (`trap_party_get_weapon`, `trap_obj_detach`, `trap_obj_motion_unsync`) and flies it at the
+    target as an attack (ATKP 1867 radius 190 for Raid, 1866 radius 160 for Judgment), turning it
+    with `trap_strike_raid_calc_xyzrot` / `trap_obj_set_xyzrot` and moving it with
+    `trap_obj_move_request`, back to his hand for the catch (`trap_obj_attach`,
+    `trap_party_hand_to_bone`).
+  - **Infinity** starts with 241 and plays combo rows 52..55 (242..245) by
+    `trap_obj_party_attack`, then row 56 (246), whose frame trigger 9 starts its effect.
+- **The motions' own parts.** Range 16 and 17 are the script ranges 1 and 2 (Sonic Rave's 212:
+  frames 16..46; Strike Raid's 234: 0..38). Range 20 (command, 0) offers a command on the
+  reaction button while open: Last Arcanum's Bash (221..225) and The End (226), Infinity's Shoot,
+  Impact and Giga Impact (246). Range 26 names the limit the motion belongs to. The hits are the
+  Keyblade's (`W_EX010_KH1F`): Rave ATKP 1878, Finish 1879, Last Arcanum 1883..1895, Infinity's
+  combo 1857..1861, each with the guard row 162. The body's ranges 27 make him invulnerable
+  (211 all through, 212 frames 0..12, 213 0..48, 221 0..120, ...). Frame trigger 1 starts the
+  form's effect elements (211 [40], 212 [26, 27, 28], 213 [29, 30, 31], ...), 14 its voices,
+  the Keyblade's 8 its sounds.
+- **Ours (inferred from the script and the data together):** `trap_obj_motion_check_range (obj,
+  n)` reads range 15 + n, and `trap_obj_motion_check_trigger (obj, n)` frame trigger 8 + n (the
+  throw frames of 232 / 233 and Infinity's 246 carry trigger 9 and no trigger 1). A command the
+  motions offer by range 20 goes, when chosen, to the limit's trigger 23 as the script's own
+  offers do (they are all `cmd` execute 707). Not checked against the executable.
+- **Not read:** ranges 23 (parameters 1, 3, 78, 92), 29, 31, 44 and 49, and frame triggers 16,
+  19 and 31 of these motions. Nothing in the script moves the camera.
 - **Square.** Standing, it is the guard (row 11, motion 173; KH2's Limit Form keeps the guard).
   Moving, it is Dodge Roll (motion 209). Attack during the guard's repel (motion 42) is the
   Zantetsu Counter (row 39). All three are the controller's own rules (`character_core`), which
@@ -445,18 +492,61 @@ lists (`.hed` names). Nothing of it is in the repository.
 - **Look.** No tint (`tint::refresh(None)`): Sora's drawn model is KH1's, which Limit Form is
   modelled on. With KH2's player model (off since s259) its own body `P_EX100_KH1F.mdlx` is
   drawn (`model.rs`).
-- **No magic, no KH1 limits.** Magic is greyed and refused as in Valor (`drive::fill`,
-  `combat::run_entry`): KH2's Limit Form can't cast, and its Limit commands aren't in. KH1's
-  specials stay refused as in every form (s278).
-- **Next steps.**
-  - The Limit menu in Magic's place, with Sonic Rave, Last Arcanum, Strike Raid and Infinity.
-    That means running `limi` in `kh2-magic` with the limit traps, the Triangle follow-ups
-    (`command_override`) and their MP costs (KH2's 60..80 against KH1's bars, the user's call).
-    Another way, the user's call: KH1's own Strike Raid / Ars Arcanum / Ragnarok / Sonic Blade in
-    their place, which s278's rule refuses now.
-  - Motions 231..248 in the controller's moveset (`kh2_data::sora::moves` stops at 230).
+- **No magic.** KH1's spells (a shortcut's too) are refused in the form (`combat::run_entry`):
+  KH2's Limit Form can't cast.
+- **The Limit menu (the user's pick: "KH2's own limits").** `limits.rs`:
+  - The top's Magic row reads "Limit" (record 2's word answered by `limits::word`) and opens our
+    list in the magic list's place: records 0x82..0x85 (words 0x1FA..0x1F7, spell-type records
+    with arguments 0x20..0x23, written over empty ones as the Drive forms are), named Sonic
+    Rave, Last Arcanum, Strike Raid, Infinity. KH1's magic list has no cost column, so no cost
+    is shown. A row is greyed in the air (the Land flag), with the MP short, while a limit runs,
+    or when it isn't in yet.
+  - **MP (ours).** Each limit costs one of KH1's bars (KH1's payment `0x1402A39D0` with 100). The
+    mod's KH2 spells (Wisdom's, Final's, base Sora's, Reflect) cost KH1's own 1 MP each whatever
+    KH2's cost (`reflect::COST`, `kh1_spell_cost`), and KH2's cost / 100 rounded up gives the same
+    bar for 60..80, so both rules agree; it is logged when a limit is paid. Short of a bar the
+    limit can't be used (KH2's own rule for a cost above his MP isn't traced, above). The form's
+    own drain goes on; a limit that spends the last bar runs to its end before the out-of-MP
+    revert (that waits for `can_change_form`, never true in a scripted motion).
+  - **Running.** Chosen, a limit waits in the list until KH2's move takes a command
+    (`can_take_command`, as a spell waits for `can_cast`). Then its bar is paid and `limi` is
+    started at trigger 22 with the command (`kh2_magic::Magic::limit`). Each frame after KH2's
+    step the script runs (`limits::after_step`, Sora as `LimitWorld`); what it asks is done
+    before the next step (`limits::before_step`): `Character::play` for a start, the controller's
+    one-slot queue (`push_scripted`) fed from ours for the pushes, `set_facing` for a turn. A
+    motion's hook runs before the script's main loop each frame (`kh2_magic`: an object's hook
+    runs in its own update, before the scripts that run after it; the other order ended Sonic
+    Rave as 212 began).
+  - **Triangle.** A follow-up the script offers, or the one the motion's range 20 offers, is put
+    in KH1's own Triangle box: the top menu's fourth entry, record 0x86 (word 0x1F6, its name the
+    follow-up's), written after KH1's context fill (the fill's tail jump `0x140292320` pointed
+    at `limits::context_fill`). Its record has KH1's "run while held" flag (0x10), the only kind
+    KH1's step runs from that box; we take only a fresh press (KH1's logical Triangle
+    `0x4000000` pressed that frame), once per window: after a follow-up, none is offered until
+    its motion starts.
+  - **Done:** Sonic Rave and Last Arcanum, with all their follow-ups (`kh2-magic`'s
+    `tests/limits.rs` runs both from the real script against the form's moveset: Rave five
+    times, then Finish; Bash five times, then The End).
+  - **Not yet (listed, greyed):** Strike Raid (the thrown Keyblade: a second object, its
+    attachment, flight and catch, `trap_strike_raid_calc_xyzrot`) and Infinity
+    (`trap_obj_party_attack`, its shots and their hits, the hit-back).
+- **No KH1 limits in any form** (the user: "KH1 limits that are equipped shouldn't even prompt
+  in any drive form. No drive form should be able to use KH1 Limits"). KH1 offers its limits
+  (Sonic Blade, Ars Arcanum, Strike Raid, Ragnarok, ...) in its Triangle box: `0x14028AF60`,
+  called once, from the end of the context fill (`0x140292B12`), checks up to five equipped ones
+  (`0x14052904C`, the bits at `0x14299CC40`) against the target's distance and their MP
+  (`0x1402A2A80`) and puts the best in the box (`0x140290E70 (3, id)`, the id from
+  `0x140529041`; greyed by `0x140290E20` when the MP is short). In any Drive Form that call is
+  skipped (`limits::specials_prompt`): they never show. The refusal of every KH1 move but Attack,
+  magic and items in a form (`combat::command`, `exec`, s278) stays as the backstop. Limit
+  Form's KH2 limits are the only limits in a form.
 - **Unchecked in game:** all of it. In particular:
   - whether the KH1F archive loads as a PAX;
+  - the Limit menu's rows and names, and the Triangle box with our record (KH1's step runs it
+    only at the menu's top level);
+  - the follow-ups' timing against KH2's (the press reaches the script one or two frames later);
+  - the limits' hits (KH2's ATKP powers on KH1's enemies) and their invulnerability;
+  - KH1's limits gone from the Triangle box in every form;
   - Ripple Drive's body group 20 shapes on KH1's contact code;
   - Zantetsuken's power 600 against KH1's enemies;
   - Sora's `plyr` stand-in.
@@ -464,6 +554,7 @@ lists (`.hed` names). Nothing of it is in the repository.
 ## Not modelled
 
 - Form keyblade stats (forms deal Sora's base damage).
-- Limit Form's limit commands (its `limi` script, above), summons, party members.
+- Limit Form's Strike Raid and Infinity (its `limi` script, above); the limits' light; summons,
+  party members.
 - The form change's full-screen effect.
 - Drive Recovery items.

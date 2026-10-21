@@ -191,9 +191,9 @@ pub unsafe fn fill(actor: usize, _flags: usize) {
     // valor form magic command menu should be unselectable"). KH1 keeps the same bit (1) set
     // when Sora has no spell, so the list doesn't open; page 2's Drive row is drawn from the
     // magic list's own bit (`fill` below), so Revert stays usable.
-    // (Limit Form too: KH2's Limit can't cast either; its Limit commands, which take Magic's place
-    // there, are not in yet.)
-    if super::form::in_valor() || super::form::in_limit() {
+    // (Limit Form: KH2's Limit can't cast either; its Limit commands take Magic's place there,
+    // `limits::fill`.)
+    if super::form::in_valor() {
         let top = base + MENU_RVA;
         if rd::<u8>(top + 0x14 + 1) == 2 {
             for off in [4usize, 8] {
@@ -201,6 +201,7 @@ pub unsafe fn fill(actor: usize, _flags: usize) {
             }
         }
     }
+    super::limits::fill(actor);
     // In Anti Form, Magic and Items greyed and blocked too, and Summon (the magic list's last
     // entry, the fourth row on page 1): KH2's Anti uses none of them, as Valor has no magic.
     // Page 2's Drive row is greyed below (no form `usable`: no Revert in Anti).
@@ -283,6 +284,10 @@ pub unsafe fn fill(actor: usize, _flags: usize) {
 pub fn word(index: i32) -> Option<usize> {
     if !on() {
         return None;
+    }
+    // (Limit Form's "Limit", its limits and the follow-up on Triangle first.)
+    if let Some(p) = super::limits::word(index) {
+        return Some(p);
     }
     let (drive, forms, revert) = NAMES.get()?;
     if index == SUMMON as i32 && PAGE2.load(Ordering::Relaxed) {

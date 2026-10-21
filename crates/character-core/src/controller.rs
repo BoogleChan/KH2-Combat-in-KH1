@@ -469,6 +469,9 @@ pub struct Character {
     push: Option<([f32; 2], f32)>,
     /// Frames left without air commands after a ceiling bonk (exe).
     ceiling_lock: f32,
+    /// The motion a host queued after the scripted one playing (`push_scripted`): it starts on
+    /// the frame that one ends. Any other action starting drops it.
+    scripted_next: Option<u16>,
 }
 
 /// The mid-air button that glides (a host binding choice).
@@ -590,6 +593,7 @@ impl Character {
             snap: None,
             push: None,
             ceiling_lock: 0.0,
+            scripted_next: None,
         }
     }
 
@@ -1036,6 +1040,24 @@ impl Character {
         true
     }
 
+    /// Queues `motion` to play, as [`play`](Self::play) does, the moment the scripted motion now
+    /// playing ends (an object script's "push": KH2's Limit Form chains its limits' motions so).
+    /// `None` clears it: the scripted motion then ends into free movement. Returns false (and
+    /// queues nothing) when no scripted motion plays or the motion doesn't exist.
+    pub fn push_scripted(&mut self, motion: Option<u16>) -> bool {
+        if !self.scripted() || motion.is_some_and(|m| self.clip(m).is_none()) {
+            self.scripted_next = None;
+            return false;
+        }
+        self.scripted_next = motion;
+        motion.is_some()
+    }
+
+    /// The motion queued after the scripted one (`push_scripted`).
+    pub fn scripted_next(&self) -> Option<u16> {
+        self.scripted_next
+    }
+
     /// Whether a Drive or a Revert is taken now (the KH1 port's user: only on "end frames", no
     /// buffer): free (idle, walking, running, jumping, falling), landing, or at the end of what
     /// plays: an attack or a cast once its combo / finisher / reaction-command window is open
@@ -1257,6 +1279,7 @@ impl Character {
     fn start_action(&mut self, kind: ActionKind, motion: u16) {
         self.get_up = None;
         self.cast_hold = None;
+        self.scripted_next = None;
         self.swing_counter += 1;
         self.mode = Mode::Action(Action { kind, motion, frame: 0, swing: self.swing_counter, timer: 0.0, brake: 1.0, lunge: 0.0 });
     }
@@ -2287,6 +2310,14 @@ impl Character {
         if !finished {
             self.mode = Mode::Action(act);
             return false;
+        }
+        // A scripted motion's queued successor starts now (`push_scripted`), as a scripted one.
+        if let (ActionKind::Scripted { invulnerable, .. }, Some(next)) = (&act.kind, self.scripted_next.take()) {
+            if self.clip(next).is_some() {
+                let invulnerable = *invulnerable;
+                self.start_action(ActionKind::Scripted { invulnerable, hold: false }, next);
+                return false;
+            }
         }
         self.mode = Mode::Free;
         if self.airborne && self.arc.is_none() {

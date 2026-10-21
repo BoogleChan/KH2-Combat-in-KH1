@@ -33,6 +33,12 @@ pub enum WindowKind {
     /// command areas open this way).
     EnableGroup(u8),
     DisableGroup(u8),
+    /// A range an object's script asks about by number (`n` of 1..3): the controller does
+    /// nothing with it (KH2's Limit Form follow-up windows).
+    ScriptRange(u8),
+    /// A command offered on the reaction button while open (KH2's range 20: Limit Form's
+    /// follow-ups that its motions carry). The controller does nothing with it.
+    OfferCommand(u16),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

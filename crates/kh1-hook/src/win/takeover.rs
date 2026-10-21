@@ -1772,7 +1772,7 @@ unsafe fn takeover(actor: usize) -> bool {
     // A spell chosen and waiting for the move's window goes first: an Attack pressed meanwhile
     // doesn't take that window from it (the user: in a second finisher, magic then Attack, and
     // the Attack overrode the magic).
-    let spell_first = combat::spell_waiting() || super::reflect::waiting() || super::formmagic::waiting();
+    let spell_first = combat::spell_waiting() || super::reflect::waiting() || super::formmagic::waiting() || super::limits::waiting();
     let attack = attack && !spell_first;
     // KH1 holding him still (its control step skipped or him unable to act: cutscene moments,
     // tutorial windows; the user: he moved anyway): KH2 gets no input (he still falls, lands
@@ -1972,6 +1972,8 @@ unsafe fn takeover(actor: usize) -> bool {
     super::form::before_step(&mut d.drive, &mut d.character, &mut d.anim, kh2, actor);
     // A KH2 spell chosen in Wisdom Form: its cast (`formmagic`).
     super::formmagic::before_step(actor, &mut d.character);
+    // A Limit Form limit chosen, its script's requests (`limits`).
+    super::limits::before_step(actor, &mut d.character);
     let tp = Instant::now();
     let mut out = d.character.step(&input, &env);
     super::prof::add(super::prof::STEP, tp);
@@ -2361,6 +2363,7 @@ unsafe fn takeover(actor: usize) -> bool {
     super::prof::add(super::prof::EVENTS, tp);
     let tp = Instant::now();
     super::form::shots_step(actor, &out, d.character.airborne(), &mut d.strikes, &battle_rows, lock);
+    super::limits::after_step(actor, &out, d.character.airborne(), &mut d.strikes, &battle_rows, lock);
     super::form::after_step(&mut d.drive, actor, rd::<u32>(base + BATTLE_RVA) & 1 != 0);
     super::prof::add(super::prof::FORM, tp);
     super::kh2sound::tick();

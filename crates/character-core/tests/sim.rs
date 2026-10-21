@@ -1546,3 +1546,28 @@ fn wall_hit_without_a_repelled_motion_doesnt_loop() {
     assert!(frames.len() < 200, "never left the swing");
     assert!(frames.windows(2).all(|p| p[1] >= p[0]), "the swing went back: {frames:?}");
 }
+
+/// A host's scripted chain (KH2's Limit Form scripts push the next motion): the queued motion
+/// starts the frame the scripted one ends, with no free frame between; any other action
+/// starting drops the queue.
+#[test]
+fn a_pushed_scripted_motion_follows_without_a_gap() {
+    let mut ch = sora();
+    ch.moveset.clips.insert(211, Clip::plain(211, 6));
+    ch.moveset.clips.insert(212, Clip::plain(212, 8));
+    let mut w = World::new(ch);
+    assert!(!w.ch.push_scripted(Some(212)), "nothing scripted plays yet");
+    assert!(w.ch.play(211, false));
+    assert!(w.ch.push_scripted(Some(212)));
+    let outs = w.run(16, IDLE);
+    let motions: Vec<u16> = outs.iter().map(|o| o.motion).collect();
+    assert_eq!(&motions[..7], &[211; 7], "{motions:?}");
+    assert_eq!(&motions[7..15], &[212; 8], "{motions:?}");
+    assert!(outs[7..15].iter().all(|o| o.state == StateName::Scripted));
+    assert_ne!(outs[15].state, StateName::Scripted);
+    // Dropped by another start.
+    assert!(w.ch.play(211, false));
+    assert!(w.ch.push_scripted(Some(212)));
+    assert!(w.ch.play(211, false));
+    assert_eq!(w.ch.scripted_next(), None);
+}
