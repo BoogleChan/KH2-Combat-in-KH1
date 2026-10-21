@@ -1097,3 +1097,9 @@ The user: "the game should tell you when you get a drive form and reflect". When
 the story while the same save plays, a box reads "New Drive Form: <name>" (`menu::Growth::form_box`,
 the same queue as Reflect's "New Magic" / "Magic Up" and the bosses' gifts). Loading a save with
 forms already open shows none (its story bytes or level jump).
+
+## MP while in a form (s310)
+
+The 2 extra MP bars a form added (s269) are switched off (`valorstats::DRIVE_MP_ON`), and the drain
+is three times slower: one unit of yellow MP every 9 frames of battle (`form::DRAIN_FRAMES`), half
+as fast out of battle. A top bar of value n breaks into n × 30 units.

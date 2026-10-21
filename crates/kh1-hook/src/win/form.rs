@@ -47,7 +47,7 @@
 //!   (`ANTI_SIDE_SPIN_ROW`). Neither guards.
 //! It takes half his MP to enter (`cost_mp`), and it runs on Sora's MP as every form here does (the user: "Drive
 //! forms in this mod run out when you're out of MP, so sora will revert when he is out of MP"):
-//! the same drain (`after_step`), the same 2 extra bars (`valorstats::DRIVE_MP`), and out of MP
+//! the same drain (`after_step`), the same extra bars if on (`valorstats::DRIVE_MP`, off since s310), and out of MP
 //! (or knocked out) back to Sora.
 //!
 //! Limit Form (the user: "lets begin working on limit form"; `docs/drive-model.md`, "Limit Form in
@@ -120,18 +120,23 @@ pub const MASTER_COST_MP: i32 = 2;
 /// Anti Form's Side Spin: its PTYA row 12 (motion 161), Square in a ground combo (Data).
 const ANTI_SIDE_SPIN_ROW: u8 = 12;
 
-/// Whether `have` MP lets form `kind` start: its cost and some left to run on. Anti starts at any
-/// MP (it takes half; its `valorstats::DRIVE_MP` bars are there to run on).
+/// Whether `have` MP lets form `kind` start: its cost and some left to run on. Anti starts with
+/// any MP left (it takes half; with `valorstats::DRIVE_MP` off it needs one bar to run on).
 fn mp_enough(have: i32, kind: Kind) -> bool {
-    kind == Kind::Anti || have > cost_mp(kind, have)
+    if kind == Kind::Anti {
+        return have > 0 || super::valorstats::DRIVE_MP > 0;
+    }
+    have > cost_mp(kind, have)
 }
 /// The form's level (KH1 has no form experience): Lv 1, 40 s of battle.
 const LEVEL: u32 = 1;
 /// Frames of battle per unit of yellow MP the form uses up (half as fast out of battle). A blue
 /// bar breaks into its number × 30 units (KH1's own conversion), so the top bar lasts that many
 /// units.
-/// (3: the user, "lets also have drive forms drain a little slower"; it was 2.)
-const DRAIN_FRAMES: u32 = 3;
+/// (3: the user, "lets also have drive forms drain a little slower"; it was 2. 9 since s310: "lets
+/// make drive forms drain MP MUCH slower", with the 2 extra bars switched off,
+/// `valorstats::DRIVE_MP`.)
+const DRAIN_FRAMES: u32 = 9;
 /// Upper Slash's ability (KH2's id): Sora's Square launch, given to Valor (`pose::port_moves`).
 const UPPER_SLASH: u16 = 95;
 

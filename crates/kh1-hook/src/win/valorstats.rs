@@ -46,7 +46,12 @@ const WEAPON: usize = 0x36;
 /// Bars of max MP every Drive Form adds while it lasts, filled as it starts (the user: "when
 /// entering a drive form, add 2 bars of MP for the duration of the drive form, just so sora has
 /// a little more time to be in drive").
-pub const DRIVE_MP: i32 = 2;
+/// (Switched off: the user, "comment off about the 2 additional MP in drive forms. Instead, lets
+/// make drive forms drain MP MUCH slower" (`form::DRAIN_FRAMES`). Set `DRIVE_MP_ON` to bring the
+/// bars back.)
+const DRIVE_MP_BARS: i32 = 2;
+const DRIVE_MP_ON: bool = false;
+pub const DRIVE_MP: i32 = if DRIVE_MP_ON { DRIVE_MP_BARS } else { 0 };
 /// A form just started: its bars are filled on the first step that has them in his max MP.
 static FILL_PENDING: AtomicBool = AtomicBool::new(false);
 
@@ -224,7 +229,7 @@ pub unsafe fn step(sora: usize) {
     }
     clamp_mp(stats, m);
     // The form's extra bars filled as it starts (once it has them in his max).
-    if super::form::in_form() && FILL_PENDING.swap(false, Ordering::Relaxed) {
+    if super::form::in_form() && FILL_PENDING.swap(false, Ordering::Relaxed) && DRIVE_MP > 0 {
         let mp = rd::<i32>(stats + MP);
         let filled = (mp + DRIVE_MP).min(m);
         wr(stats + MP, filled);

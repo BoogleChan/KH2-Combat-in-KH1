@@ -3583,3 +3583,9 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   turn `0x1402AB8F0`, on a temporary attack object of Sora's swing row), no clash record, no
   bounce, the swing goes on. Ini `walls = kh1 | clink | pass` (default kh1; `wall_clink` no longer
   read). Enemies' guards clink as before. `docs/kh1-clash.md`.
+
+### 2026-10-21: Stage 310 (no extra MP bars in forms; the drain three times slower)
+- The user: "comment off about the 2 additional MP in drive forms. Instead, lets make drive forms
+  drain MP MUCH slower". `valorstats::DRIVE_MP_ON = false` (the bars' code kept); `form::DRAIN_FRAMES`
+  3 -> 9 (one unit of yellow MP every 9 frames of battle, half as fast out of it). Anti now needs
+  one bar to start (it had the extra bars to run on).
