@@ -5,6 +5,8 @@ old model, KH2's controller had him whenever KH1 showed him standing, walking or
 KH1's own idle, walk, run and jump were drawn back over KH2's when a move style was KH1. Drive
 Forms still use the old model: KH2's controller has them all through.
 
+Every move's animation (KH1 slot, KH2 motion, owner, setting) is listed in `animations.md`.
+
 ## The rule
 
 The user (2026-10-20): "The goal is to share the animation state and logic between both
