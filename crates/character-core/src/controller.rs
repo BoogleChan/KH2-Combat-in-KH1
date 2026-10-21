@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use crate::clip::{Clip, EventKind, WindowKind};
-use crate::combo::{condition, select, Choice, ComboRow, Situation, TargetGeom, FLAG_JUMP_ADJUST};
+use crate::combo::{condition, miss, select, Choice, ComboRow, Situation, TargetGeom, FLAG_JUMP_ADJUST};
 use crate::params::{Abilities, AttackParams, ComboRules, GrowthLevel, MoveParams};
 
 /// Motion ids used by the controller (KH2 player moveset numbering).
@@ -337,6 +337,9 @@ const GUARD_ROW: u8 = 11;
 /// Finishing Leap (row 37, ability 95), Upper Slash (12, 18), Horizontal Slash (38, 99).
 const SQUARE_MOVES: [(u8, u16, bool); 3] = [(37, 95, false), (12, 18, false), (38, 99, true)];
 const RETALIATING_SLASH_ROW: u8 = 40;
+/// Abilities whose rows are watched for the host's log (`take_combo_note`): Vicinity Break
+/// (row 51) and Magnet Burst (rows 49 and 50), with their names.
+const WATCHED: [(u16, &str); 2] = [(180, "Vicinity Break"), (179, "Magnet Burst")];
 /// Hit-back starting speed per unit of distance (exe: 0.1).
 const HIT_BACK_SPEED: f32 = 0.1;
 
@@ -472,6 +475,11 @@ pub struct Character {
     /// The motion a host queued after the scripted one playing (`push_scripted`): it starts on
     /// the frame that one ends. Any other action starting drops it.
     scripted_next: Option<u16>,
+    /// Lines for the host's log on the watched rows (`WATCHED`): why one wasn't taken, or that
+    /// it was; once per combo each (`noted`).
+    combo_notes: Vec<String>,
+    /// The watched abilities noted in this combo: (ability, taken).
+    noted: Vec<(u16, bool)>,
 }
 
 /// The mid-air button that glides (a host binding choice).
@@ -594,6 +602,19 @@ impl Character {
             push: None,
             ceiling_lock: 0.0,
             scripted_next: None,
+            combo_notes: Vec::new(),
+            noted: Vec::new(),
+        }
+    }
+
+    /// The next line for the host's log on Vicinity Break's and Magnet Burst's rows: when one is
+    /// equipped and could be used where Sora is, why the press didn't take it (once per combo),
+    /// or that it did.
+    pub fn take_combo_note(&mut self) -> Option<String> {
+        if self.combo_notes.is_empty() {
+            None
+        } else {
+            Some(self.combo_notes.remove(0))
         }
     }
 
@@ -1204,8 +1225,12 @@ impl Character {
         if !self.auto_target {
             return None;
         }
-        // Auto-target: nearest within the longest combo-row reach or the
-        // auto lock-on range, whichever is larger (not yet checked).
+        self.nearest_target(env)
+    }
+
+    /// The game's auto-target: the nearest within the longest combo-row reach or the auto
+    /// lock-on range, whichever is larger (not yet checked).
+    fn nearest_target<'e>(&self, env: &'e Env) -> Option<&'e TargetInfo> {
         let reach = self.moveset.combo_rows.iter().map(|r| r.far).fold(self.attack.auto_lock_on_range, f32::max);
         env.targets
             .iter()
@@ -1371,6 +1396,10 @@ impl Character {
             self.count = 1;
             self.finishers = 1;
         }
+        if !in_attack && !carry {
+            // A new combo: the watched rows may be noted again (`take_combo_note`).
+            self.noted.clear();
+        }
 
         // Locked on (when the host asks for it): the swing faces the target, near or far,
         // before the row is picked (rows that want the target dead ahead then see it there).
@@ -1391,16 +1420,26 @@ impl Character {
         // measured from it. (Before, Sora's own facing was used: kind-1 rows such as Aerial
         // Sweep, Aerial Dive, Slide Dash and the jump to an airborne foe almost never passed.)
         let primary_info = self.primary_target(env);
+        // With no primary (no lock, the host's auto-target off) the rows are still measured as
+        // KH2 measures them, from the direction to the target KH2 would aim at, the nearest in
+        // reach: one foe behind him is not "surrounded" (Vicinity Break), nor is one beside him
+        // "off to the side" (Magnet Burst); it is the one KH2 would face.
         let aim = primary_info
+            .or_else(|| self.nearest_target(env))
             .map(|t| [t.pos[0] - env.pos[0], t.pos[2] - env.pos[2]])
             .filter(|d| len2(*d) > 1e-3)
             .map(norm)
             .unwrap_or_else(|| self.forward());
-        // Locked on, the locked target is the only one the rows are measured against (the user:
-        // locked onto one ahead with another beside him, Sora took the base finisher and lunged
-        // at the one beside him instead of the locked one's Aerial Finish).
+        // Every target near counts for the rows that look at every foe (kind 2), locked on or
+        // not, as in KH2: Vicinity Break wants one behind him, Magnet Burst one off to the side
+        // of the one he aims at. (s206 measured them against the locked target alone; with
+        // KH1's soft target taken as a lock that was nearly always, so Vicinity Break never
+        // came and Magnet Burst came only from its other row, a lone target 3..6.5 m away: the
+        // player, "fires vs one enemy, not vs groups".) The base rows still see only the locked
+        // one (`Situation::lock`; the user, s206: another foe beside the locked one swapped its
+        // Aerial Finish for the base finisher), and every swing goes for the locked one (below).
         let locked = self.lock.filter(|id| env.targets.iter().any(|t| t.id == *id));
-        let all: Vec<TargetGeom> = env.targets.iter().filter(|t| locked.is_none_or(|id| t.id == id)).map(|t| self.geom(env, t, aim)).collect();
+        let all: Vec<TargetGeom> = env.targets.iter().map(|t| self.geom(env, t, aim)).collect();
         let primary = primary_info.map(|t| TargetGeom { facing_dot: 1.0, ..self.geom(env, t, aim) });
         let sit = Situation {
             air,
@@ -1410,6 +1449,7 @@ impl Character {
             current_motion: current_motion.unwrap_or(u16::MAX),
             primary,
             all: &all,
+            lock: locked,
             equipped: &self.abilities.equipped,
             jump_height: self.params.jump_height,
         };
@@ -1434,6 +1474,19 @@ impl Character {
             (Some(_), None) => None,
             (None, None) => select(&self.moveset.combo_rows, &sit),
         };
+        if wanted.is_none() {
+            for (ab, taken, line) in watch_notes(&self.moveset.combo_rows, &sit, picked.as_ref(), &self.noted) {
+                self.noted.push((ab, taken));
+                // (A few at most wait for a host that doesn't read them.)
+                if self.combo_notes.len() < 8 {
+                    self.combo_notes.push(line);
+                }
+            }
+        }
+        // Locked on, the swing goes for the locked target whichever target its row passed on
+        // (the user, s206: Sora lunged at the one beside the locked one; KH2 aims only at KH1's
+        // R1 lock or soft target here, `takeover`).
+        let picked = picked.map(|c| Choice { target: if locked.is_some() { sit.primary } else { c.target }, ..c });
         let Some(choice) = picked else {
             (self.count, self.finishers) = saved;
             return false;
@@ -2542,6 +2595,47 @@ impl Character {
             },
         }
     }
+}
+
+/// Lines for the watched rows (`WATCHED`) after a press's pick: (ability, taken, line), for those
+/// equipped, with a row where Sora is (ground or air) at this step of the combo (a finisher row at
+/// the combo's end, another before its finishers), not yet noted this combo.
+fn watch_notes(rows: &[ComboRow], s: &Situation, picked: Option<&Choice>, noted: &[(u16, bool)]) -> Vec<(u16, bool, String)> {
+    let stage = |r: &ComboRow| if r.is_finisher() { s.count as i32 + r.combo_offset as i32 >= s.max_count as i32 } else { s.finishers <= 1 };
+    let took = picked.map_or("nothing".to_string(), |c| format!("row {} (motion {})", c.row.id, c.row.motion));
+    let mut out = Vec::new();
+    for (ab, name) in WATCHED {
+        if !s.equipped.contains(&ab) {
+            continue;
+        }
+        let mine: Vec<&ComboRow> = rows.iter().filter(|r| r.ability == ab && r.is_air() == s.air && stage(r)).collect();
+        if mine.is_empty() {
+            continue;
+        }
+        let taken = picked.is_some_and(|c| c.row.ability == ab);
+        if noted.contains(&(ab, taken)) {
+            continue;
+        }
+        let near = format!("count {} of {}, {} target(s) seen{}", s.count, s.max_count, s.all.len(), if s.lock.is_some() { ", locked on" } else { "" });
+        let line = if taken {
+            format!("{name} taken: {took} ({near})")
+        } else {
+            let why: Vec<String> = mine
+                .iter()
+                .map(|r| {
+                    let reason = match miss(r, s) {
+                        Some(m) => m,
+                        None if r.motion == s.current_motion => "passed, but its motion is playing (passed over)".to_string(),
+                        None => "passed, but an earlier row in the table was taken".to_string(),
+                    };
+                    format!("row {}: {reason}", r.id)
+                })
+                .collect();
+            format!("{name} not taken ({near}): {}; took {took}", why.join("; "))
+        };
+        out.push((ab, taken, line));
+    }
+    out
 }
 
 fn closest_on_segment(a: [f32; 3], b: [f32; 3], p: [f32; 3]) -> [f32; 3] {

@@ -1571,3 +1571,138 @@ fn a_pushed_scripted_motion_follows_without_a_gap() {
     assert!(w.ch.play(211, false));
     assert_eq!(w.ch.scripted_next(), None);
 }
+
+/// A kind-2 row (checked against every target near) with a facing window and a lenient height
+/// window, needing `ability`.
+fn all_row(id: u8, motion: u16, finisher: bool, air: bool, far: f32, inner: (f32, f32), ability: u16) -> ComboRow {
+    ComboRow { kind: 2, far, low: 500.0, high: -500.0, inner_min: inner.0, inner_max: inner.1, ability, ..row(id, motion, finisher, air) }
+}
+
+/// The test moveset with rows shaped as KH2's: Vicinity Break (ability 180, a ground swing on a
+/// foe behind the one he aims at, within 3 m), and an air finisher of Magnet Burst (ability 179:
+/// a foe off to the side within 6.5 m, or the aimed one alone 3..6.5 m away) ahead of the base
+/// air finisher for a foe beside (no ability) and the lone one's.
+fn surround_sora() -> Character {
+    let mut ch = sora();
+    for m in [170, 183, 184, 197] {
+        ch.moveset.clips.insert(m, attack_clip(m, 30, (5, 10), 6, 15));
+    }
+    let mut magnet_far = row(50, 197, true, true);
+    magnet_far.kind = 1;
+    magnet_far.near = 300.0;
+    magnet_far.far = 650.0;
+    magnet_far.low = 500.0;
+    magnet_far.high = -500.0;
+    magnet_far.inner_min = 0.9999;
+    magnet_far.inner_max = 1.0;
+    magnet_far.ability = 179;
+    ch.moveset.combo_rows = vec![
+        row(1, 110, true, false),
+        all_row(51, 170, false, false, 300.0, (-1.0, -0.17), 180),
+        row(0, 100, false, false),
+        all_row(49, 197, true, true, 650.0, (-1.0, 0.92), 179),
+        all_row(7, 184, true, true, 260.0, (-0.7, 0.92), 0),
+        magnet_far,
+        row(8, 183, true, true),
+        row(2, 120, false, true),
+    ];
+    ch.abilities.combo_master = true;
+    ch
+}
+
+fn foe(id: u32, x: f32, z: f32) -> TargetInfo {
+    TargetInfo { id, pos: [x, 0.0, z], radius: 30.0, height: 100.0 }
+}
+
+/// The attack motions a mashed ground combo (or, with `air`, an air combo after a jump) plays.
+fn combo_motions(ch: Character, targets: Vec<TargetInfo>, lock: Option<u32>, air: bool) -> Vec<u16> {
+    let mut w = World::new(ch);
+    w.targets = targets;
+    w.ch.set_lock(lock);
+    if air {
+        w.run(3, Pad { jump: true, ..IDLE });
+        w.run(12, IDLE);
+    }
+    let mut motions = Vec::new();
+    for f in 0..160 {
+        let o = w.step(Pad { attack: true, ..IDLE }.with_attack(f));
+        if o.state == StateName::Attack && o.clip_frame == 0 {
+            motions.push(o.motion);
+        }
+    }
+    motions
+}
+
+/// Vicinity Break (the player: never seen with it equipped): KH2 uses it when foes are around
+/// him, one behind the one he aims at. With three around it comes, locked on (KH1's R1 lock or
+/// its soft target, nearly always there) or not; with one, never, wherever it stands (with no
+/// lock and no auto-target the rows still measure from the nearest, as KH2 does).
+#[test]
+fn vicinity_break_when_surrounded_only() {
+    let mut ch = surround_sora();
+    ch.abilities.equipped = vec![180];
+    let around = vec![foe(1, 0.0, 100.0), foe(2, 30.0, -150.0), foe(3, 150.0, 0.0)];
+    for lock in [Some(1), None] {
+        let m = combo_motions(ch.clone(), around.clone(), lock, false);
+        assert!(m.contains(&170), "lock {lock:?}, three around: {m:?}");
+    }
+    let mut no_aim = ch.clone();
+    no_aim.set_auto_target(false);
+    assert!(combo_motions(no_aim.clone(), around.clone(), None, false).contains(&170), "no auto-target");
+    // One foe: ahead (locked), or behind him with nothing locked (aimed at or not).
+    assert!(!combo_motions(ch.clone(), vec![foe(1, 0.0, 100.0)], Some(1), false).contains(&170));
+    assert!(!combo_motions(ch.clone(), vec![foe(2, 30.0, -150.0)], None, false).contains(&170));
+    assert!(!combo_motions(no_aim, vec![foe(2, 30.0, -150.0)], None, false).contains(&170));
+    // Not equipped: never.
+    let mut off = ch.clone();
+    off.abilities.equipped.clear();
+    assert!(!combo_motions(off, around.clone(), Some(1), false).contains(&170));
+    // Only foes near count: the one behind 5 m away doesn't.
+    assert!(!combo_motions(ch.clone(), vec![foe(1, 0.0, 100.0), foe(2, 30.0, -500.0)], Some(1), false).contains(&170));
+
+    // The log line says why it wasn't taken, once per combo.
+    let mut w = World::new(ch);
+    w.targets = vec![foe(1, 0.0, 100.0)];
+    w.ch.set_lock(Some(1));
+    let mut notes = Vec::new();
+    for f in 0..160 {
+        w.step(Pad { attack: true, ..IDLE }.with_attack(f));
+        while let Some(n) = w.ch.take_combo_note() {
+            notes.push(n);
+        }
+    }
+    assert!(!notes.is_empty() && notes[0].starts_with("Vicinity Break not taken"), "{notes:?}");
+    assert!(notes[0].contains("deg from the aim"), "{notes:?}");
+    assert!(notes.len() <= 2, "more than once a combo: {notes:?}");
+}
+
+/// Magnet Burst (the player: it fires against one enemy and not against groups, as if by chance):
+/// KH2 has no chance on it; its air finisher row wants a foe off to the side of the one he aims
+/// at, within 6.5 m, so a group brings it, locked on or not. Against one it comes only from its
+/// other row, the aimed foe alone 3..6.5 m away (KH2's own); a lone foe close gets the plain
+/// finisher.
+#[test]
+fn magnet_burst_with_foes_beside() {
+    let mut ch = surround_sora();
+    ch.abilities.equipped = vec![179];
+    let group = vec![foe(1, 0.0, 100.0), foe(2, 250.0, 50.0), foe(3, -250.0, 50.0)];
+    for lock in [Some(1), None] {
+        let m = combo_motions(ch.clone(), group.clone(), lock, true);
+        assert!(m.contains(&197), "lock {lock:?}, a group: {m:?}");
+    }
+    let m = combo_motions(ch.clone(), vec![foe(1, 0.0, 100.0)], Some(1), true);
+    assert!(!m.contains(&197) && m.contains(&183), "one close: {m:?}");
+    let m = combo_motions(ch.clone(), vec![foe(1, 0.0, 100.0)], None, true);
+    assert!(!m.contains(&197), "one close, no lock: {m:?}");
+    let m = combo_motions(ch.clone(), vec![foe(1, 0.0, 450.0)], Some(1), true);
+    assert!(m.contains(&197), "one 4.5 m away: {m:?}");
+
+    // The base finisher for a foe beside (no ability) is measured against the locked one alone
+    // (the user, s206: the locked one's finisher, not the base one for the one beside).
+    let mut base = ch.clone();
+    base.abilities.equipped.clear();
+    let m = combo_motions(base.clone(), group.clone(), Some(1), true);
+    assert!(!m.contains(&184) && m.contains(&183), "locked: {m:?}");
+    let m = combo_motions(base, group, None, true);
+    assert!(m.contains(&184), "not locked: {m:?}");
+}

@@ -317,10 +317,58 @@ unsafe extern "system" fn reward_line(ev: usize) -> u64 {
     f(ev)
 }
 
+/// KH1's level-up (`0x1402B3020(member)`) gives the stat of the level, then the next nonzero
+/// byte of the member's level-up table (Sora's picked by the Dive's choice, `save + 0x48C`:
+/// offsets at `0x140529A10` into `btltbl.bin`), both through `0x1402B34C0(member, reward)`
+/// (1..=7 a stat; anything else an ability, appended to the member's list by `0x140282CA0`
+/// with no check for one he has). Then its box: `0x1402B3210(actor, &[stat, reward])`, a line
+/// each, the ability's name from the ability table (ours: Ripple Drive reads "Vicinity Break").
+/// These two are called only from the level-up.
+const LEVEL_REWARD_RVA: Rva = Rva(0x2B34C0);
+const LEVEL_REWARD_PROLOGUE: [u8; 10] = [0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x6C, 0x24, 0x10];
+const LEVEL_BOX_RVA: Rva = Rva(0x2B3210);
+const LEVEL_BOX_PROLOGUE: [u8; 7] = [0x48, 0x8B, 0xC4, 0x48, 0x89, 0x48, 0x08];
+static ORIG_LEVEL_REWARD: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static ORIG_LEVEL_BOX: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// The reward this level-up didn't give (0: none), so its box leaves its line out.
+static LEVEL_SKIPPED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// KH2 learns each ability once (the player's report: Vicinity Break and Aerial Sweep "got"
+/// again on level-ups, one of each in the list): a level-up's single KH2 ability Sora has
+/// already (`Kh1Sora::level_up_spare`, the mod's early gift mostly) isn't added at all.
+unsafe extern "system" fn level_reward(member: i32, reward: u32) {
+    let f: unsafe extern "system" fn(i32, u32) = std::mem::transmute(ORIG_LEVEL_REWARD.load(std::sync::atomic::Ordering::Acquire));
+    if reward <= 7 {
+        // (Each level-up's stat comes first: a skip from an earlier one is stale.)
+        LEVEL_SKIPPED.store(0, std::sync::atomic::Ordering::Relaxed);
+    } else if member == 0 && super::settings::get().abilities == growth::Mode::Kh1 {
+        let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
+        if let Some(s) = Growth::kh1(base).filter(|s| s.level_up_spare(reward)) {
+            LEVEL_SKIPPED.store(reward, std::sync::atomic::Ordering::Relaxed);
+            log(&format!("level {}: KH1's level-up gives {} again: not added, no line for it (Sora has it; KH2 learns it once)", s.level, growth::name(reward as u8)));
+            return;
+        }
+    }
+    f(member, reward)
+}
+
+/// The box of a level-up whose ability was skipped (`level_reward`): its stat line only (none
+/// at all when the level has no stat, as KH1 does for such a level).
+unsafe extern "system" fn level_box(actor: usize, pair: usize) {
+    let f: unsafe extern "system" fn(usize, usize) = std::mem::transmute(ORIG_LEVEL_BOX.load(std::sync::atomic::Ordering::Acquire));
+    let skipped = LEVEL_SKIPPED.swap(0, std::sync::atomic::Ordering::Relaxed);
+    if skipped != 0 && pair > 0x10000 && rd::<u32>(pair + 4) == skipped {
+        std::ptr::write_unaligned((pair + 4) as *mut u32, 0);
+    }
+    f(actor, pair)
+}
+
 pub unsafe fn install() {
     let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
     super::hook::install(base + TABLE_LOAD_RVA, &TABLE_LOAD_PROLOGUE, table_load as *const () as usize, &ORIG_LOAD, "ability table load");
     super::hook::install(base + REWARD_LINE_RVA, &REWARD_LINE_PROLOGUE, reward_line as *const () as usize, &ORIG_REWARD_LINE, "reward message line");
+    super::hook::install(base + LEVEL_REWARD_RVA, &LEVEL_REWARD_PROLOGUE, level_reward as *const () as usize, &ORIG_LEVEL_REWARD, "level-up reward");
+    super::hook::install(base + LEVEL_BOX_RVA, &LEVEL_BOX_PROLOGUE, level_box as *const () as usize, &ORIG_LEVEL_BOX, "level-up box");
     super::hook::install(base + STATS_RVA, &STATS_PROLOGUE, stats as *const () as usize, &ORIG_STATS, "party stats");
 }
 

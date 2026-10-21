@@ -289,6 +289,58 @@ its moves. The playground's Shadows walk up and swipe when close, sometimes dash
 
 The pull itself doesn't use weight.
 
+## Combo rows for the foes around him (Vicinity Break, Magnet Burst)
+
+The rule that picks a combo row is in `movement-model.md` ("Combo selection"). Some rows
+depend on the foes around Sora; this section covers those.
+
+**KH2's rows (PTYA set 1, read from the install's `00battle`; Checked (data)).** Neither
+ability uses a random chance. The selector has none (`score` isn't read). Both depend only
+on where the foes are:
+- **Vicinity Break** (ability 180) is one ground row of kind 2. It is the first ground swing
+  row in the table, ahead of Flash Step, Dodge Slash and Slide Dash. It needs any foe within
+  3 m, at a usual height, more than about 100° away from the direction Sora aims (the
+  direction to the primary target). The aimed foe is always at 0°, so it takes a second
+  foe, behind or beside him: KH2's "surrounded".
+- **Magnet Burst** (ability 179) is an air finisher with two rows, ahead of the base air
+  finishers and Aerial Finish:
+  - kind 2: any foe within 6.5 m more than about 22° off the aim, so a group;
+  - kind 1: the aimed foe alone, 3 to 6.5 m away.
+  Against a single foe it therefore comes only when that foe is a few metres off.
+
+**What went wrong (s206 to s300).** Locked on, the rows were measured against the locked
+target alone. The hook takes KH1's soft target as a lock too (lock states 1, 2 and 4, the
+small cursor: `kh1-lockon.md`), so this was nearly always the case.
+- Vicinity Break's row only ever saw the aimed foe at 0°. It never came.
+- Magnet Burst came only from its kind-1 row: one foe 3 to 6.5 m away, never a group. To
+  the player this looked like a chance.
+
+The menu ids were right all along (Ripple Drive 56 → 180, our Magnet Burst 77 → 179; tested in
+`growth.rs`).
+
+**Ours now (`character_core::combo`, `Situation::lock`):**
+- Every target the host passes counts for the kind-2 rows that an ability brings
+  (Vicinity Break, Magnet Burst, Explosion, Dodge Slash, Flash Step, Slide Dash, Aerial
+  Spiral), locked on or not. This is KH2's rule.
+- Kind-2 rows that need no ability (the base finishers and swings for a foe beside him) are
+  still measured against the locked target alone. This is the user's s206 wish: the locked
+  foe's Aerial Finish, not the base finisher for the one beside it.
+- Locked on, every swing goes for the locked target, whichever target its row passed on.
+- With no primary target (nothing locked and the host's `auto_aim` off), the rows are
+  measured from the direction to the nearest target, the one KH2 would aim at, instead of
+  from Sora's facing. So one foe behind him is not "surrounded".
+- Only targets within a row's own range count (3 m for Vicinity Break). The hook's list
+  reaches 15 m.
+
+**Log.** `Character::take_combo_note`, written by the hook as `combo rows: ...` (at most 300
+lines), covers Vicinity Break and Magnet Burst while equipped. Once per combo, and only at a
+step where the row could be used (ground or air; a finisher row at the combo's end), it
+says that the row was taken or why not:
+- not equipped;
+- the combo's step;
+- per target: distance, height, or angle from the aim, with the window each needs;
+- the row passed but an earlier row came first, or its motion was already playing.
+
 ## Not modelled yet
 
 - Enemy AI (BDX scripts) and revenge limits per enemy.

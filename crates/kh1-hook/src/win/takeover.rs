@@ -2098,6 +2098,15 @@ unsafe fn takeover(actor: usize) -> bool {
     let tp = Instant::now();
     let mut out = d.character.step(&input, &env);
     super::prof::add(super::prof::STEP, tp);
+    // Vicinity Break's and Magnet Burst's rows, when equipped: why a press didn't take one, or
+    // that it did (once per combo each, `Character::take_combo_note`; the player: Vicinity
+    // Break never came).
+    while let Some(n) = d.character.take_combo_note() {
+        static NOTES: AtomicU32 = AtomicU32::new(0);
+        if NOTES.fetch_add(1, Ordering::Relaxed) < 300 {
+            log(&format!("combo rows: {n}"));
+        }
+    }
     // Out of flight for a combo: he stays up through it (the user: Sora should remain in
     // flight throughout the combo); KH2's aerial attacks sink between hits, so no sinking while
     // attacking (rises, as an upward finisher's, stay). Flight takes him again once it's done.

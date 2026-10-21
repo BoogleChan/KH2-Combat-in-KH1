@@ -265,7 +265,8 @@ If the ray misses, a ray straight down by ATKP `floor_check` is tried.
    - A normal row needs finishers ≤ 1.
 3. **Range check** by `kind`:
    - 1: against the primary target.
-   - 2: against every target.
+   - 2: against every target. Ours: locked on, a kind-2 row with no ability sees only the
+     locked target (`combat-model.md`, "Combo rows for the foes around him").
    - 3: no range check.
    - 0: never picked directly.
    

@@ -98,7 +98,14 @@ pub struct Situation<'a> {
     /// The motion currently playing; used for the anti-repeat swap.
     pub current_motion: u16,
     pub primary: Option<TargetGeom>,
+    /// Every target near (kind-2 rows), measured from the direction to the primary target.
     pub all: &'a [TargetGeom],
+    /// The host's lock-on, if any (ours): a kind-2 row that needs no ability (the base
+    /// finishers and swings) is measured against the locked target alone, so another foe beside
+    /// it doesn't swap the locked one's finisher for the base one (the user, s206). Rows an
+    /// ability brings (Vicinity Break, Magnet Burst, Explosion, Dodge Slash...) see every target
+    /// near, as KH2's do: they are about the foes around him.
+    pub lock: Option<u32>,
     pub equipped: &'a [u16],
     /// Character's jump height (for [`FLAG_JUMP_ADJUST`]).
     pub jump_height: f32,
@@ -140,6 +147,84 @@ pub fn in_range(r: &ComboRow, t: &TargetGeom, jump_height: f32) -> bool {
     r.inner_min < t.facing_dot && t.facing_dot <= r.inner_max
 }
 
+/// The targets a kind-2 row is checked against (`Situation::lock`).
+pub fn candidates<'s>(r: &'s ComboRow, s: &'s Situation) -> impl Iterator<Item = &'s TargetGeom> + 's {
+    s.all.iter().filter(move |t| r.ability != 0 || s.lock.is_none_or(|id| t.id == id))
+}
+
+/// Whether a row passes its conditions and range checks, and the target it passed on.
+pub fn passes(r: &ComboRow, s: &Situation) -> Option<Option<TargetGeom>> {
+    if !condition(r, s) {
+        return None;
+    }
+    match r.kind {
+        1 => s.primary.filter(|t| in_range(r, t, s.jump_height)).map(Some),
+        2 => candidates(r, s).find(|t| in_range(r, t, s.jump_height)).map(|t| Some(*t)),
+        3 => Some(s.primary),
+        _ => None,
+    }
+}
+
+/// Why one target fails a row's range checks (`in_range`), in words; `None` when it passes.
+pub fn range_miss(r: &ComboRow, t: &TargetGeom, jump_height: f32) -> Option<String> {
+    let d = t.distance - t.radius;
+    if !(r.near <= d && d < r.far) {
+        return Some(format!("{d:.0} away (needs {:.0}..{:.0})", r.near, r.far));
+    }
+    let mut low = r.low;
+    let mut high = r.high;
+    if r.flag & FLAG_JUMP_ADJUST != 0 {
+        high -= jump_height;
+    }
+    if r.flag & FLAG_LOW_SUB != 0 { low -= t.height } else { low += t.height }
+    if r.flag & FLAG_HIGH_ADD != 0 { high += t.height } else { high -= t.height }
+    if !(high < -t.dy && -t.dy <= low) {
+        return Some(format!("{:.0} up (needs {:.0}..{:.0})", t.dy, -low, -high));
+    }
+    if !(r.inner_min < t.facing_dot && t.facing_dot <= r.inner_max) {
+        let deg = |c: f32| c.clamp(-1.0, 1.0).acos().to_degrees();
+        return Some(format!("{:.0} deg from the aim (needs {:.0}..{:.0})", deg(t.facing_dot), deg(r.inner_max), deg(r.inner_min)));
+    }
+    None
+}
+
+/// Why a row doesn't pass (`passes`), in words; `None` when it does.
+pub fn miss(r: &ComboRow, s: &Situation) -> Option<String> {
+    if r.motion == 0 {
+        return Some("no motion".into());
+    }
+    if r.ability != 0 && !s.equipped.contains(&r.ability) {
+        return Some(format!("ability {} not equipped", r.ability));
+    }
+    if r.is_air() != s.air {
+        return Some(if r.is_air() { "an air row, on the ground".into() } else { "a ground row, in the air".into() });
+    }
+    if r.is_finisher() && (s.count as i32 + r.combo_offset as i32) < s.max_count as i32 {
+        return Some(format!("a finisher, the combo is at {} of {}", s.count, s.max_count));
+    }
+    if !r.is_finisher() && s.finishers > 1 {
+        return Some("not a finisher, the combo is in its finishers".into());
+    }
+    match r.kind {
+        1 => match s.primary {
+            None => Some("no primary target".into()),
+            Some(t) => range_miss(r, &t, s.jump_height).map(|m| format!("primary target {m}")),
+        },
+        2 => {
+            let seen: Vec<String> = candidates(r, s)
+                .map(|t| range_miss(r, t, s.jump_height).map(|m| format!("#{:x} {m}", t.id)))
+                .collect::<Option<Vec<_>>>()?;
+            if seen.is_empty() {
+                return Some(format!("no target ({} in all)", s.all.len()));
+            }
+            let more = if seen.len() > 4 { format!(" and {} more", seen.len() - 4) } else { String::new() };
+            Some(format!("{} target(s), none fits: {}{more}", seen.len(), seen[..seen.len().min(4)].join("; ")))
+        }
+        3 => None,
+        _ => Some("reached only by id".into()),
+    }
+}
+
 /// What [`select`] chose: the row and, for range-checked rows, the target
 /// it was checked against.
 #[derive(Clone, Copy, Debug)]
@@ -159,21 +244,7 @@ pub struct Choice<'a> {
 /// on instead, which is where KH2's mix of finishers and modifiers comes from.)
 pub fn select<'a>(rows: &'a [ComboRow], s: &Situation) -> Option<Choice<'a>> {
     let by_id = |id: u8| rows.iter().find(|r| r.id == id);
-    let passes = |r: &'a ComboRow| -> Option<Choice<'a>> {
-        if !condition(r, s) {
-            return None;
-        }
-        let target = match r.kind {
-            1 => match s.primary {
-                Some(t) if in_range(r, &t, s.jump_height) => Some(t),
-                _ => return None,
-            },
-            2 => Some(*s.all.iter().find(|t| in_range(r, t, s.jump_height))?),
-            3 => s.primary,
-            _ => return None,
-        };
-        Some(Choice { row: r, target })
-    };
+    let pass = |r: &'a ComboRow| -> Option<Choice<'a>> { passes(r, s).map(|target| Choice { row: r, target }) };
     let walk = |valid: &[Choice<'a>]| -> Option<Choice<'a>> {
         let mut alt: Option<Choice<'a>> = None;
         for c in valid {
@@ -188,7 +259,7 @@ pub fn select<'a>(rows: &'a [ComboRow], s: &Situation) -> Option<Choice<'a>> {
         }
         alt
     };
-    let mut valid: Vec<Choice<'a>> = rows.iter().filter_map(passes).collect();
+    let mut valid: Vec<Choice<'a>> = rows.iter().filter_map(pass).collect();
     if let Some(c) = walk(&valid) {
         return Some(c);
     }
@@ -222,7 +293,7 @@ mod tests {
     fn sit(count: u8, motion: u16, t: Option<TargetGeom>) -> Situation<'static> {
         Situation {
             air: false, count, finishers: 1, max_count: 3, current_motion: motion, primary: t, all: &[],
-            equipped: &[], jump_height: 0.0,
+            lock: None, equipped: &[], jump_height: 0.0,
         }
     }
 

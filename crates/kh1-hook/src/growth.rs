@@ -337,6 +337,15 @@ pub fn keep_one(list: &[u8], ids: &[u8]) -> (Vec<u8>, Vec<u8>) {
     (out, removed)
 }
 
+/// KH1 abilities that are one KH2 ability each here: the combo modifiers (`MODIFIERS`), Guard,
+/// Dodge Roll and Combo Master. KH2 learns each once, and a second copy does nothing (`kh2`
+/// counts each once), so a level-up doesn't give one Sora already has (`level_up_spare`).
+/// Combo Plus and Air Combo Plus stack, as in KH2, and KH1's own abilities keep their copies.
+pub fn single(id: u8) -> bool {
+    let id = id & 0x7F;
+    MODIFIERS.iter().any(|m| m.0 == id) || [kh1::GUARD, kh1::DODGE_ROLL, kh1::COMBO_MASTER].contains(&id)
+}
+
 /// Whether a list has `id` in it at all (equipped or not).
 pub fn has(list: &[u8], id: u8) -> bool {
     list.iter().take_while(|b| **b != 0).any(|b| b & 0x7F == id)
@@ -508,6 +517,18 @@ impl Kh1Sora {
             l.iter().enumerate().map(|(i, b)| if i < n { b & 0x7F } else { *b }).collect::<Vec<u8>>()
         };
         Kh1Sora { level: self.level, abilities: on(&self.abilities), shared: on(&self.shared), progress: self.progress.clone() }.kh2()
+    }
+
+    /// A reward of KH1's level-up table (a byte: 1..=7 a stat, else an ability id, bit 7 set)
+    /// that Sora shouldn't get, read before KH1 adds it: a single KH2 ability (`single`) he
+    /// already has, usually the mod's early gift (a player's report: Vicinity Break again at
+    /// 39, the mod's at 36).
+    pub fn level_up_spare(&self, reward: u32) -> bool {
+        if !(8..=0xFF).contains(&reward) {
+            return false;
+        }
+        let id = reward as u8 & 0x7F;
+        single(id) && has(&self.abilities, id)
     }
 
     /// KH2's abilities from KH1's menu and Sora's level.
@@ -751,6 +772,11 @@ mod tests {
         assert_eq!(c.kh2().glide, 4);
         assert!(a.equipped.contains(&kh2::FLASH_STEP) && !a.equipped.contains(&kh2::SLAPSHOT));
         assert!(a.equipped.contains(&kh2::GUARD));
+        // Vicinity Break is KH1's Ripple Drive (56), Magnet Burst ours (77): their KH2 ids, the
+        // combo rows' (51: 180; 49 and 50: 179).
+        let b = sora(99, &[kh1::RIPPLE_DRIVE, 77], &[]).kh2();
+        assert!(b.equipped.contains(&180) && b.equipped.contains(&179), "{:?}", b.equipped);
+        assert_eq!(name(kh1::RIPPLE_DRIVE), "Vicinity Break");
     }
 
     #[test]
@@ -762,6 +788,28 @@ mod tests {
         let (out, removed) = keep_one(&list, &ids);
         assert_eq!(out, vec![kh1::GUARD, kh1::SLIDING_DASH, kh1::COMBO_PLUS, kh1::COMBO_PLUS, 0, 0]);
         assert_eq!(removed, vec![kh1::SLIDING_DASH]);
+    }
+
+    #[test]
+    fn level_ups_give_kh2_abilities_once() {
+        // KH1's level-up table bytes carry bit 7 (Ripple Drive 0xB8).
+        let rd = kh1::RIPPLE_DRIVE as u32 | 0x80;
+        // The mod's Vicinity Break (level 36, off) already there: KH1's at 39 is a spare.
+        assert!(sora(39, &[kh1::GUARD, kh1::RIPPLE_DRIVE | 0x80], &[]).level_up_spare(rd));
+        assert!(sora(39, &[kh1::RIPPLE_DRIVE], &[]).level_up_spare(kh1::RIPPLE_DRIVE as u32));
+        // Not had yet (a Rod player's at 12): given, with its box.
+        assert!(!sora(12, &[kh1::GUARD], &[]).level_up_spare(rd));
+        // Guard and Combo Master are single too; Combo Plus and KH1's own abilities stack.
+        assert!(sora(40, &[kh1::GUARD], &[]).level_up_spare(kh1::GUARD as u32 | 0x80));
+        assert!(!sora(40, &[kh1::COMBO_PLUS], &[]).level_up_spare(kh1::COMBO_PLUS as u32 | 0x80));
+        assert!(!sora(40, &[kh1::AIR_COMBO_PLUS], &[]).level_up_spare(kh1::AIR_COMBO_PLUS as u32 | 0x80));
+        assert!(!sora(40, &[5], &[]).level_up_spare(5 | 0x80));
+        // Stats (1..=7) and nothing (0) are never spares.
+        assert!((0..=7).all(|r| !sora(40, &[kh1::GUARD, 6, 7], &[]).level_up_spare(r)));
+        // Every early KH1 gift is single (a second copy from KH1's level-up never comes).
+        assert!(early_kh1().iter().all(|id| single(*id)));
+        // Ours aren't KH1's level-up's (it never gives ids past 65).
+        assert!(MENU.iter().all(|a| !single(a.id)));
     }
 
     #[test]

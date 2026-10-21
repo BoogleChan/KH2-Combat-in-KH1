@@ -110,6 +110,37 @@ Ability" box):
 Earlier than KH1's level-ups (Dream Shield: 45 / 39 / 69 / 78 / 60), if Sora doesn't have them yet: Counterguard at 22, Slide Dash at 30, Vicinity Break at 36, Finishing Leap at 48; Flash Step comes for beating Sabor. Aerial Sweep also comes at level 28 if Clayton hasn't given it yet (KH1's Dream Shield gives it
 only at 84). Guard Break stays at KH1's own level 18 (Dream Shield).
 
+KH2 learns each of its abilities once, so a level-up never gives a second copy of one. KH1's
+level-up (`0x1402B3020`) takes the next reward from Sora's level-up table, which the Dive's
+choice picks (`save + 0x48C`; three offsets at `0x140529A10` into `btltbl.bin`). It adds the
+ability with no check for one he already has (`0x140282CA0`), then names it in its box by its
+ability-table name (KH1's Ripple Drive shows "Vicinity Break"). So once the mod had given an
+ability early, the later KH1 copy showed a second "got" box. The spare was taken out of the
+list a second later, so the list still showed one (a player's report: Vicinity Break and
+Aerial Sweep twice). Now, with `abilities = kh1`, a level-up reward that is a single KH2
+ability (a combo modifier, Guard, Dodge Roll or Combo Master) that Sora already has is not
+added. Its line is left out of the box, and the level's stat line still shows. Combo Plus,
+Air Combo Plus and KH1's own abilities (Treasure Magnet, Tech Boost, MP Rage, Critical Plus...)
+still stack, as KH1's table gives them. The table never repeats a modifier itself. Its levels
+for the KH2 moves (high: read from `btltbl.bin`; the level reached is the entry's number,
+counting from 1, plus 1; Dream Shield's match the levels above):
+
+| | Sword (0) | Shield (1) | Rod (2) |
+|---|---|---|---|
+| Slapshot | 12 | 6 | 69 |
+| Slide Dash (Sliding Dash) | 6 | 39 | 51 |
+| Counterguard (Counterattack) | 15 | 45 | 57 |
+| Guard | 24 | 15 | 33 |
+| Explosion (Hurricane Blast) | 27 | 51 | 18 |
+| Finishing Leap (Blitz) | 33 | 60 | 78 |
+| Vicinity Break (Ripple Drive) | 39 | 69 | 12 |
+| Guard Break (Stun Impact) | 51 | 18 | 6 |
+| Flash Step (Vortex) | 57 | 78 | 84 |
+| Aerial Sweep | 60 | 84 | 36 |
+
+Where the mod's gift comes first (above), KH1's own entry now gives nothing. Examples: Vicinity
+Break at 39 with the Sword, Aerial Sweep at 36 with the Rod.
+
 Each of these Sora learns raises his max AP by its own AP (`bonus_ap`), so the KH2
 abilities take none of the AP KH1 gives him: +2 at level 4, +32 in all by level 50 (KH1's
 cap of 100 still holds). The save keeps KH1's own AP; the bonus is added while the game runs.

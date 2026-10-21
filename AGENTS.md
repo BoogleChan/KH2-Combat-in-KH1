@@ -3495,3 +3495,19 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - The user: a form's growth ability one above base Sora's "EVEN IF SORA DOESNT ACTIVELY HAVE
   QUICK RUN EQUIPPED": `growth::Kh1Sora::learned` (every ability in his lists counted as on),
   `menu::LEARNED`, `form::growth_of`.
+
+### 2026-10-21: Stage 302 (a player's reports: Vicinity Break / Magnet Burst, the Large Body's slam, repeated abilities)
+- "Vicinity Break not working", "magnet burst uses the same 30% chance that stun impact does":
+  s206's lock filter checked every all-foes row against the locked target only, and KH1's soft
+  cursor counts as a lock, so Vicinity Break (a second foe >100° off the aim within 300) never
+  passed and Magnet Burst only ever took its one-foe-at-range row. Ability rows now see every
+  foe near (base rows still the locked one); with no lock rows measure from the nearest foe.
+  `combo rows:` log lines (`docs/combat-model.md`).
+- "Large Body ... Sora immediately gets nuked": KH1's 30-frame no-damage flag after a reaction
+  (`0x80`, `0x140295DA0`) is never set while KH2 reacts, and our 20-frame same-attacker grace let
+  a pass's other records, later flinch hits and get-up hits through. `mercy.rs`: one hit per
+  pass; no damage or reaction through KH2's reaction motion (10..39) and 30 frames after (KH2's
+  own rule); KH1's own no-damage flags honoured. `REHIT_GRACE` replaced. `docs/kh1-rehit.md`.
+- "got an ability that I already had": KH1's level-up (`0x1402B34C0`) adds its later copy of an
+  ability the mod gave early, with its box; now skipped and its line blanked for single KH2
+  abilities (`growth::single`, `level_up_spare`; hooks at `0x2B34C0` / `0x2B3210`).
