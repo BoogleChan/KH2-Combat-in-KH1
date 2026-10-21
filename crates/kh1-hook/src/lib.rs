@@ -13,8 +13,9 @@ pub mod growth;
 pub mod kh1phys;
 
 /// The mod's version as the user sees it (the Config menu's Camera Style help line, the log):
-/// the stage of the latest `AGENTS.md` entry, bumped with each build handed out (a test checks).
-pub const VERSION: &str = "s298";
+/// the stage of the latest `AGENTS.md` entry, bumped with every change to the source (a test
+/// checks). `t` for the testing branch (the user, from stage 300; `s` before it).
+pub const VERSION: &str = "t301";
 
 #[cfg(all(windows, target_arch = "x86_64"))]
 mod win;

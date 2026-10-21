@@ -604,6 +604,61 @@ pub mod physics {
         m
     }
 
+    /// KH1's aerial combo swings' own lunge (their starting sideways speed, units a 60 Hz frame,
+    /// along his facing), as KH1's own combo starts them: the same in every room, with or without
+    /// a target or the stick (the user's traces t299: 7.80, 3.90, 11.70, each slowed by
+    /// `LUNGE_DECAY` a frame).
+    const LUNGES: [(u32, f32); 3] = [(0xCC, 7.8), (0xCD, 3.9), (0xCE, 11.7)];
+    const LUNGE_DECAY: f32 = 0.975;
+    /// The game frame a KH1 air attack was started out of KH2's move (`combat::command`), 0 none.
+    static LUNGE_FROM: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    /// A KH1 air attack was just started out of KH2's air move: its lunge to be seeded once it
+    /// plays (`seed_kh1_lunge`).
+    pub fn kh1_air_attack_from_kh2() {
+        LUNGE_FROM.store(game_frame().max(1), Ordering::Relaxed);
+    }
+
+    /// After KH1's physics frame (`takeover::physics`): a KH1 air attack started out of KH2's air
+    /// move went on with no sideways speed at all (the user: "this bug also appears any time a kh2
+    /// air attack transitions into kh1 attack"; the traces: KH1's start left `+0x3C0` at 0, the
+    /// finisher only rose and fell where it began, where KH1's own combo sends it ~280 forward).
+    /// On its first frame of a KH1 aerial swing it gets that swing's own lunge along his facing, as
+    /// far into its slowing as the swing is (`ARC_T`), so it travels as in KH1's own combo.
+    pub unsafe fn seed_kh1_lunge(actor: usize) {
+        let from = LUNGE_FROM.load(Ordering::Relaxed);
+        if from == 0 || !is_sora(actor) {
+            return;
+        }
+        if game_frame().saturating_sub(from) > 4 || rd::<i32>(actor + 0x70) != 2 {
+            LUNGE_FROM.store(0, Ordering::Relaxed);
+            return;
+        }
+        let motion: u32 = rd(actor + 0x164);
+        let Some(&(_, speed)) = LUNGES.iter().find(|(m, _)| *m == motion) else { return };
+        LUNGE_FROM.store(0, Ordering::Relaxed);
+        let v: [f32; 4] = rd(actor + VEL);
+        let had = v[0].hypot(v[2]);
+        let t: f32 = rd(actor + ARC_T);
+        let t = if t.is_finite() { t } else { 1.0 };
+        let s = speed * LUNGE_DECAY.powf((t - 1.0).clamp(0.0, 30.0));
+        let set = had < 0.5;
+        if set {
+            let yaw: f32 = rd(actor + 0x3C);
+            if !yaw.is_finite() {
+                return;
+            }
+            wr(actor + VEL, [yaw.sin() * s, v[1], yaw.cos() * s, s]);
+        }
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 40 {
+            super::super::log(&format!(
+                "KH1's air attack (motion {motion:#x}) out of KH2's move: {}",
+                if set { format!("its own lunge {s:.1}/frame given (KH1 left it {had:.1}; {speed:.1} at its start, frame {t:.0})") } else { format!("it has {had:.1}/frame already, left as it is") }
+            ));
+        }
+    }
+
     /// One of KH1's own air moves just started from `kh1_takes_air`'s motion `before` (KH1's
     /// command step ran it): an air attack's start sets its own sideways lunge and hop in place of
     /// what was there (`0x1402A4760`); it keeps the faster speed and the higher rise

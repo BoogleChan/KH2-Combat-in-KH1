@@ -25,6 +25,10 @@ Notes for anyone (human or AI agent) working on this repo.
 - `combat-core` must stay free of KH2 knowledge and engine dependencies. KH2-specific
   mapping belongs in `kh2-data`.
 - Write down every rule's source and confidence in `docs/combat-model.md`.
+- Every change to the source gets a new stage: an entry in the development log below and
+  `VERSION` in `crates/kh1-hook/src/lib.rs` bumped to match (the user: "every time a change is made
+  to the source code make sure the version updates"). On the testing branch the version is
+  `t<stage>` (`t300` on), not `s<stage>`; `tests/version.rs` checks it.
 - When code is ported from another project, credit it in `NOTICE` and `CREDITS.md`
   and keep its licence.
 
@@ -46,6 +50,45 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 ```
 
 ## Development log
+
+### 2026-10-20: Stage 301 (testing branch: KH1's air attacks out of KH2's air moves get their lunge)
+- The user's traces (t299): KH1's aerial combo swings start at a fixed sideways speed along his
+  facing, 7.80 / 3.90 / 11.70 a frame for motions 0xCC / 0xCD / 0xCE, slowed x0.975 a frame (the
+  finisher also rises 40); its finisher goes ~280 forward. Started out of KH2's air move (KH2's
+  combo with the combo style KH1's), KH1's start left `+0x3C0` at 0: no sideways travel at all, he
+  rose and fell where he was, under either Physics setting. The user: "lets give sora a fixed 11.7
+  starting speed to match how the move would normally behave in a kh1 combo, this bug also appears
+  any time a kh2 air attack transitions into kh1 attack". `shared::physics::seed_kh1_lunge`: after
+  KH1's physics frame, within 4 frames of such a start (`combat::command`), the first frame of a
+  KH1 aerial swing with no sideways speed gets that swing's lunge along his facing, decayed to the
+  swing's frame (`+0x3B0`). It starts a frame late (its first frame's ~12 units are not made up).
+- The trace's `kh2_*` columns are empty on frames KH2 doesn't have him (they showed KH2's last
+  move, stale, all through KH1's).
+
+### 2026-10-20: Stage 300 (testing branch: versions are `t<stage>`, bumped with every change)
+- The user: "every time a change is made to the source code make sure the version updates, also
+  instead of S for our lettering lets do T for test branch so now we should be at T300". `VERSION`
+  is `t300`; the version test expects `t<latest stage>`; the rule is in Ground rules above.
+- Stage 299's trace: the row built in `takeover::trace_frame` was missing the new `config` field
+  (the build failed); it is set there (`trace::frame` fills it).
+
+### 2026-10-20: Stage 299 (testing branch: Sora's per-frame trace)
+- The user: "have the log keep track of kh1s soras position, kh2s soras position, the current
+  anim state, etc... anything that would help you debug soras current actions and physics without
+  me having to show you a video". `trace.rs`: a row for each of Sora's physics frames (who has him,
+  where he is, how far he moved and how far KH2 asked, KH1's actor: state, motion, height above
+  the floor, collision flags, velocity, arc; KH2's controller: state, motion, frame, air, on top,
+  facing, combo, lock-on; Drive Form; the pad; the log lines of that frame). The last 10 s are kept
+  in memory and written to `kh1-kh2-traces\` as a CSV on Select + Triangle (the user's pick; KH1
+  doesn't see Select while Triangle is held, its first-person view) or, a second later, on their
+  own when something looks wrong (a jump of more than 150 a 60 Hz step, 30 under the floor for 3
+  frames, KH1 and KH2 trading him 8 times in 60 frames, a NaN). Ini `trace = on | always | off`
+  (`always`: every row to `kh1-kh2.trace.csv` too).
+- The user: "another important thing to add to the csv file is what settings are set in the config
+  menu". Each row has the Config menu's KH1 / KH2 rows on that frame (Camera Style, Physics, every
+  move style) and `physics_now`, whose numbers moved him (KH2's in a Drive Form).
+- Every `kh1-kh2.log` line starts with the game frame it was written on (`[f123]`, the trace's
+  `frame`), so the two line up.
 
 ### 2026-10-20: Stage 298 (testing branch: the Physics KH1 / KH2 setting)
 - The user: "In the config there's not a setting to switch between KH1 and KH2 physics". Ini

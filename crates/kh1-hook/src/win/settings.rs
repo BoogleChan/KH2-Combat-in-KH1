@@ -132,7 +132,11 @@ player_model = kh1\r\n\
 battle_quotes = kh1\r\n\
 ; gummi: vanilla = fly the Gummi Ship between worlds; skip = land in the chosen world at once\r\n\
 ; (the Config menu's Gummi Routes row switches it in game too)\r\n\
-gummi = vanilla\r\n";
+gummi = vanilla\r\n\
+; trace: on = the last 10 seconds of Sora's frames (position, KH1's and KH2's states, the pad)\r\n\
+; are kept and written to the kh1-kh2-traces folder on Select + Triangle, or on their own when\r\n\
+; something looks wrong; always = every frame is also written to kh1-kh2.trace.csv; off = none\r\n\
+trace = on\r\n";
 
 #[derive(Debug)]
 pub struct Settings {
@@ -202,6 +206,7 @@ pub struct Settings {
     /// KH2's moves as new slots in KH1 Sora's motion table (`kh2slots.rs`): `None` off (the
     /// default), `Some(None)` every move that has one (`on`), else only these KH2 motions.
     pub kh2_slots: Option<Option<Vec<u16>>>,
+    pub trace: super::trace::Mode,
 }
 
 static SETTINGS: OnceLock<Settings> = OnceLock::new();
@@ -287,6 +292,7 @@ pub fn get() -> &'static Settings {
                 Some("on") | Some("all") | Some("yes") => Some(None),
                 Some(v) => Some(Some(v.split([',', ' ']).filter_map(|t| t.trim().parse().ok()).collect())),
             },
+            trace: super::trace::Mode::parse(setting(&text, "trace").as_deref()),
         };
         log(&format!("settings ({path}): {s:?}"));
         s

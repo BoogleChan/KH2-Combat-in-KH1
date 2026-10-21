@@ -289,6 +289,12 @@ unsafe extern "system" fn pad(src: usize, out: usize, cfg: usize) {
     } else if !super::takeover::kh1_keeps_square() && !shortcuts {
         std::ptr::write_unaligned(out as *mut u16, b & !super::takeover::SQUARE);
     }
+    // Select + Triangle writes Sora's trace (`trace`): with Triangle held KH1 doesn't see Select,
+    // its first-person view.
+    if super::trace::hides_select(b_all) {
+        let now: u16 = rd(out);
+        std::ptr::write_unaligned(out as *mut u16, now & !super::trace::RAW_SELECT);
+    }
     // Sticks to 3 levels each, so drift doesn't flood the log.
     let q = |v: u8| -> u64 { if v < 0x50 { 0 } else if v > 0xB0 { 2 } else { 1 } };
     let key = b as u64 | q(st[0]) << 16 | q(st[1]) << 18 | q(st[2]) << 20 | q(st[3]) << 22 | ((out as u64 & 0xFFFF) << 32);

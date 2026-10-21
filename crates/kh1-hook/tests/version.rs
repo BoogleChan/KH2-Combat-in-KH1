@@ -1,5 +1,5 @@
 //! The version the mod shows (`VERSION` in `lib.rs`) is the latest stage in `AGENTS.md`, so a
-//! build handed out says which one it is.
+//! build handed out says which one it is. The testing branch writes it `t<stage>`.
 
 #[test]
 fn version_is_the_latest_stage() {
@@ -13,5 +13,5 @@ fn version_is_the_latest_stage() {
         .filter_map(|l| l.split(|c: char| !c.is_ascii_digit()).next()?.parse::<u32>().ok())
         .max()
         .expect("a stage in AGENTS.md");
-    assert_eq!(version, format!("s{latest}"), "bump VERSION in lib.rs with each AGENTS.md stage");
+    assert_eq!(version, format!("t{latest}"), "bump VERSION in lib.rs with each AGENTS.md stage (`t` for the testing branch)");
 }

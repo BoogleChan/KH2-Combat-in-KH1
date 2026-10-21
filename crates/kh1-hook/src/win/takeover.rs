@@ -398,6 +398,8 @@ unsafe fn count_steps(base: usize) -> u32 {
 
 unsafe extern "system" fn physics(actor: usize) {
     let sora = actor > 0x10000 && actor == rd::<u64>(BASE.load(Ordering::Relaxed) + PARTY_RVA) as usize;
+    // Where he starts the frame (`trace`).
+    let start = if sora { rd::<[f32; 4]>(actor + 0x10) } else { [0.0; 4] };
     if sora {
         let n = count_steps(BASE.load(Ordering::Relaxed));
         TICKS.fetch_add(n as u64, Ordering::Relaxed);
@@ -418,6 +420,9 @@ unsafe extern "system" fn physics(actor: usize) {
         room_watch(actor, took);
     }
     if took {
+        if sora {
+            trace_frame(actor, start);
+        }
         return;
     }
     // KH1 has him this frame: a Keyblade trail KH2's swing asked for ends, and KH2's effects
@@ -435,6 +440,82 @@ unsafe extern "system" fn physics(actor: usize) {
     }
     let f: PhysFn = std::mem::transmute(ORIG_PHYS.load(Ordering::Acquire));
     f(actor);
+    if sora {
+        // A KH1 air attack out of KH2's air move: its lunge (`shared::physics::seed_kh1_lunge`).
+        super::shared::physics::seed_kh1_lunge(actor);
+        trace_frame(actor, start);
+    }
+}
+
+/// Sora's frame for the trace (`trace`), once his physics frame is over (KH2's or KH1's): KH1's
+/// actor, KH2's controller, the pad. `start`: where he was when the frame began (KH1's y-down).
+unsafe fn trace_frame(actor: usize, start: [f32; 4]) {
+    if !super::trace::on() {
+        return;
+    }
+    let base = BASE.load(Ordering::Relaxed);
+    let p = rd::<[f32; 4]>(actor + 0x10);
+    // (KH2's side only on KH2's own frames: on KH1's its last move stays in the controller.)
+    let kh2_frame = FRAME_KIND.load(Ordering::Relaxed) == 1;
+    let kh2 = DRIVER.try_lock().ok().filter(|_| kh2_frame).and_then(|g| {
+        let kh2 = g.as_ref().map(|d| {
+            let o = d.last_out.as_ref();
+            super::trace::Kh2 {
+                state: format!("{:?}", d.character.state_name()),
+                motion: o.map_or(0, |o| o.motion),
+                frame: o.map_or(0, |o| o.clip_frame),
+                air: d.character.airborne(),
+                grounded: d.grounded,
+                on_top: d.on_top,
+                facing: o.map_or(f32::NAN, |o| o.facing),
+                combo: o.map_or(0, |o| o.combo_count),
+                lock: o.and_then(|o| o.locked),
+                invulnerable: o.is_some_and(|o| o.invulnerable),
+                guarding: o.is_some_and(|o| o.guarding),
+            }
+        });
+        kh2
+    });
+    let sticks = RAW_STICKS.load(Ordering::Relaxed).to_le_bytes();
+    super::trace::frame(super::trace::Row {
+        frame: GAME_FRAME.load(Ordering::Relaxed),
+        ticks: TICKS.load(Ordering::Relaxed),
+        steps: steps(),
+        ms: now_ms(),
+        owner: match FRAME_KIND.load(Ordering::Relaxed) {
+            1 => "KH2",
+            2 => "handoff",
+            _ => "KH1",
+        },
+        shared: super::shared::active(),
+        world: rd::<u32>(base + WORLD_RVA),
+        room: rd::<u32>(base + ROOM_RVA),
+        event: rd::<u32>(base + EVENT_RVA) != 0,
+        // (Filled by `trace::frame`.)
+        config: 0,
+        pos: [p[0], -p[1], p[2]],
+        moved: [p[0] - start[0], start[1] - p[1], p[2] - start[2]],
+        asked: super::trace::take_asked(),
+        above: rd::<f32>(actor + 0x3D4),
+        floor_up: -rd::<f32>(actor + 0x324),
+        collision: rd::<u32>(actor + 0x2D0),
+        stand_on: rd::<u32>(actor + 0x398),
+        platform: rd::<u32>(actor + 0x160) & 4 != 0,
+        yaw: rd::<f32>(actor + 0x3C),
+        kh1_state: rd::<i32>(actor + 0x70),
+        kh1_motion: rd::<u32>(actor + 0x164),
+        flags: rd::<u32>(actor),
+        combo_window: rd::<u32>(actor + 0x1CC),
+        velocity: rd::<[f32; 4]>(actor + 0x3C0),
+        arc: rd::<[f32; 4]>(actor + 0x3B0),
+        push: rd::<[f32; 3]>(actor + 0x120),
+        kh2,
+        form: super::form::current().map(|k| format!("{k:?}")),
+        buttons: RAW_BUTTONS.load(Ordering::Relaxed) as u16,
+        kh1_buttons: rd::<u32>(base + BUTTONS_RVA + 4),
+        sticks,
+        events: String::new(),
+    });
 }
 
 /// KH1's ground state's jump press (`0x1402CA3F0`, state 0's `+0x38`: its ground test, then the
@@ -2545,6 +2626,8 @@ unsafe fn takeover(actor: usize) -> bool {
         if settings.carry && step == 0 {
             wr(actor + 0x90, 0u64);
         }
+        // What KH2 asks KH1's mover for (`trace`).
+        super::trace::asked(out.displacement, carry);
         let mv: MoveFn = std::mem::transmute(base + MOVE_RVA);
         // Rising: the rise goes through KH1's mover too, in KH1's fall state for the move so that
         // it collides as in the air (its collision query `0x140297F20` takes that from the movement

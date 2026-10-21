@@ -37,6 +37,7 @@ mod probe;
 mod reflect;
 mod takeover;
 mod tint;
+mod trace;
 mod valor;
 mod valorstats;
 mod equip;
@@ -59,14 +60,17 @@ static IN_KH1: AtomicBool = AtomicBool::new(false);
 
 pub const KH1_EXE: &str = "KINGDOM HEARTS FINAL MIX.exe";
 
-/// Appends a line to `kh1-kh2.log` next to the game.
+/// Appends a line to `kh1-kh2.log` next to the game, with the game frame it was written on
+/// (`[f123]`, Sora's physics frames: `takeover::GAME_FRAME`, the trace's `frame`), and keeps it
+/// for that frame's trace row (`trace`).
 pub fn log(line: &str) {
     if let Ok(mut g) = LOG.lock() {
         if let Some(f) = g.as_mut() {
-            let _ = writeln!(f, "{line}");
+            let _ = writeln!(f, "[f{}] {line}", takeover::GAME_FRAME.load(Ordering::Relaxed));
             let _ = f.flush();
         }
     }
+    trace::note(line);
 }
 
 /// The host executable's full path.
