@@ -1,3 +1,15 @@
+### 2026-10-21: Stage 315 (testing branch: KH1's fall pose at the end of KH2's move in the air)
+- The user: after an Aerial Dodge "sora's feet seem to glitch out before snapping to his falling
+  pose". The traces (t314, Aerial Dodge out of KH1's and KH2's High Jump): KH1's motion request is
+  0x07 (its landing, slot 11) all through the dodge and for the 1-2 frames after KH2's move ends,
+  until KH1's air step asks for its fall, 0x06 (slot 10). The 0x07 is the landing KH1 queues when the
+  borrow sets its state to 0 (`set(actor, 0)`). `shared_give_back` (Back::Air) now asks KH1's
+  fall request (`0x14029D7F0 (actor, 6, 0)`) at the hand-back when the request is still 0x07.
+- Line endings: the testing branch's files are CRLF; stages 313-314 wrote LF into `AGENTS.md`,
+  `lib.rs`, `shared.rs`, `pose.rs` and `combat.rs`; put back to CRLF.
+- Not done yet (the user: wait, KH1's glide logic first): the Aerial Dodge's first frame still
+  shows KH1's last jump slot (12 / 13, now the High Jump clip) and the 0x71 glide slot for a frame.
+
 ### 2026-10-21: Stage 314 (testing branch: KH2's High Jump clip on KH1's High Jump)
 - The user: "kh2 high jump is not using kh2s high jump animation". The traces (KH1 High Jump,
   height ~235: requests 0x9 / 0xa / 0xb / 0xc, slots 12 / 13 / 10 / 11; KH1 plain jump, height

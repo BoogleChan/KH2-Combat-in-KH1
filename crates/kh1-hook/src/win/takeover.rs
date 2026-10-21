@@ -1646,6 +1646,14 @@ unsafe fn shared_give_back(base: usize, actor: usize, d: &mut Driver, back: supe
         super::shared::physics::kh1_takes_air(actor);
         wr(actor + 0x3D0, 0u32);
         wr(actor, rd::<u32>(actor) & !0x1_0000);
+        // Falling: KH1's fall request now. Its leaving the ground state (the borrow's `set(0)`)
+        // queued its landing, 0x07, which stood through KH2's move and showed as the landing pose
+        // for the 1-2 frames before KH1's air step asked for its fall, 0x06 (the t314 Aerial Dodge
+        // traces). Out of a landing (`Land`) it stays KH1's own.
+        if matches!(back, super::shared::Back::Air) && rd::<u32>(actor + 0x164) == 0x07 {
+            let setm: unsafe extern "system" fn(usize, u32, f32) -> usize = std::mem::transmute(base + SET_MOTION_RVA);
+            setm(actor, 0x06, 0.0);
+        }
     }
     d.last_state = None;
     d.held = (true, true);
