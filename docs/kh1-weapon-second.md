@@ -564,3 +564,40 @@ hand would be wrong.
 - Final Form's are KH2's own (`docs/kh2-effects.md` §12.3): the weapon point is the Keyblade's
   blade bone (bone 2, which carries its type-0xF collision point), turn included, taken where
   KH1's floated Keyblade is drawn (`leftblade::final_blade`).
+
+## 10. The Dream Sword in the left hand (Valor's default)
+
+Valor's second weapon is the Dream Sword (item `0x52`, `xw_dh_5000.wpn`) until a Keyblade is
+picked (`docs/kh1-equipment.md`, "Valor's default: the Dream Sword"). It goes through the same
+path as a Keyblade: the file name from its weapon row (row 2), KH1's loader into our buffer, the
+model and HD setup, the second queue call. What differs is the hold:
+
+- **The right hand's rule** (`pose::dream_hold`, s226 / s250): the dream weapons and the wooden
+  sword (`0x52..=0x55`) are not turned teeth-up and get no keychain swing; every weapon bone is
+  held rigidly where KH1's own hold of that weapon puts it from the hand (the grip from the hand,
+  each bone from the grip), noted from KH1's pose on frames KH1 posed him. `Retarget::set_grip`
+  (s50, KH1's live grip when it is turned more than 1 rad from the battle idle's) is no longer
+  called.
+- **The left hand** (`leftblade::dream_left`, used by `note_pose` when the left item is a dream
+  weapon):
+  - with KH1's hold noted this session (Sora held the Dream Sword in the Dive): the turn from
+    the right Keyblade's grip as drawn to where that hold would put the Dream Sword in the right
+    hand (`grip⁻¹ · right hand · hold[0]`) is put on the left grip, and the bones follow the hold;
+  - else (the usual case): the Keyblade's left grip, every bone after it as in KH1's bind (the
+    mesh undeformed: the Keyblade's keychain swing on bones 283.. would bend it).
+- Why the Keyblade's grip is a fair fallback [low-med]: the weapon rows give the trail's blade
+  range along the same bone with the same sign for both (`+0x24` / `+0x28`: −4.3 / 0 against
+  the Kingdom Key's −3.7 / 0; `+0x20` is 40.0 in both), which suggests the Dream Sword's blade
+  lies along its bones the way a Keyblade's does. KH1's motion table
+  (`xa_ex_0010.mset`, 118 slots) has no motion with a grip turned more than 1 rad that keeps it in
+  the hand (slots 84..90 turn it 1.75..3.1 rad but 20..180 units from the hand: weapon-out
+  motions), so the Dive's hold is in another moveset, not read here. Whether its face (the roll
+  about the blade) matches KH1's Dive hold is **not checked**: the log names the source used
+  ("left Keyblade: item 0x52 isn't a Keyblade: held rigidly, by ...").
+- **Stats**: its row's Strength (+1) and MP (0) count in Valor (`valorstats::bonus`).
+- **Trail**: its own `.wpn` effect data (the file's second section) and its own row's blade range,
+  as any left Keyblade (s300's left-blade windows, owner refreshed after the pose). The owner's
+  matrices are moved by the turn from the right grip to the left one as drawn, so with KH1's hold
+  they follow the Dream Sword's grip. KH1 makes a trail from the weapon object's effect data only
+  (`0x1402C0160` → `0x1402AC100`): a weapon whose data has no trail of that id gets none from KH1;
+  ours then takes the right Keyblade's look (logged "the right Keyblade's look").

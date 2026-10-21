@@ -940,6 +940,13 @@ unsafe fn dream_hold(pose: &mut [Mat4], parents: &[i16], kh1_world: Option<usize
     }
 }
 
+/// KH1's own hold of dream weapon `w`, if one was noted this session (`dream_hold`: the grip
+/// relative to the hand, then each weapon bone after the grip relative to the grip), for the
+/// same weapon in Valor's left hand (`leftblade`, the Dream Sword).
+pub fn dream_hold_of(w: u8) -> Option<Vec<Mat4>> {
+    DREAM_HOLD.try_lock().ok().and_then(|h| h.as_ref().filter(|(id, _)| *id == w).map(|(_, r)| r.clone()))
+}
+
 /// The same on world matrices (KH1's own animation blending back in).
 unsafe fn dream_hold_world(world: usize, parents: &[i16]) {
     let Some(w) = held_weapon().filter(|w| dream_weapon(*w)) else { return };

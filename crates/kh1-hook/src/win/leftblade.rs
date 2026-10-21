@@ -12,6 +12,9 @@
 //!    then the file record with its textures, with the `.wpn` release handler kept out of it).
 //! 2. **Pose**: `pose` hands over the left hand's 13 weapon matrices each frame (`note_pose`),
 //!    from KH2's own left Keyblade (the Valor rig's second weapon, `kh2_left` from `takeover`).
+//!    A weapon that isn't a Keyblade (Valor's default, the Dream Sword, item 0x52) is held
+//!    rigidly as the right hand holds one (`dream_left`): KH1's own hold of it put on the left
+//!    grip, or the Keyblade's grip with the bones as in KH1's bind.
 //! 3. **Draw**: after KH1 queues Sora with his Keyblade out, queue him a second time with every
 //!    body mesh hidden, our model as the weapon and the left-hand matrices put in bones
 //!    280..292 for that call only (put back at once).
@@ -35,7 +38,7 @@
 use super::addr::Rva;
 use super::log;
 use glam::Mat4;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
@@ -155,6 +158,8 @@ static MESH: AtomicUsize = AtomicUsize::new(0);
 static EFFECTS: AtomicUsize = AtomicUsize::new(0);
 /// The buffer of the load under way (0: none).
 static PENDING_BUF: AtomicUsize = AtomicUsize::new(0);
+/// The left weapon's KH1 item, as last shown (0: none): a dream weapon is held its own way.
+static LEFT_ITEM: AtomicU8 = AtomicU8::new(0);
 
 struct Loaded {
     item: u8,
@@ -389,6 +394,7 @@ pub unsafe fn show(item: Option<u8>) {
         return;
     }
     SHOWN.store(true, Ordering::Relaxed);
+    LEFT_ITEM.store(item.unwrap_or(0), Ordering::Relaxed);
     let Some(item) = item else {
         MESH.store(0, Ordering::Relaxed);
         return;
@@ -823,8 +829,12 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
     }
     let inv_grip = kh1[GRIP].inverse();
     let mut out = [Mat4::IDENTITY; WEAPON_BONES];
-    for (i, m) in out.iter_mut().enumerate() {
-        *m = grip * inv_grip * kh1[GRIP + i];
+    if let Some(held) = dream_left(kh1, kh1_bind, grip) {
+        out = held;
+    } else {
+        for (i, m) in out.iter_mut().enumerate() {
+            *m = grip * inv_grip * kh1[GRIP + i];
+        }
     }
     log_n(&N, 3, || format!("left grip posed, {from_hand:.1} units from the {} hand", if hand == RIGHT_HAND { "right" } else { "left" }));
     // (Final's and Master's blade bones as drawn, for the effects on their weapon anchors; Master's
@@ -848,6 +858,58 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
             fill_owner();
         }
     }
+}
+
+/// KH1 items held rigidly, not as a Keyblade (the dream weapons and the wooden sword,
+/// `pose::dream_weapon`); of them only the Dream Sword can be in Valor's left hand.
+const DREAM_WEAPONS: std::ops::RangeInclusive<u8> = 0x52..=0x55;
+
+/// The left hand's weapon bones (KH1 model space) when the left weapon isn't a Keyblade (Valor's
+/// default, the Dream Sword), from `grip`, where the right Keyblade's grip is put in the left hand.
+/// The right hand holds such a weapon rigidly, the way KH1 holds it (`pose::dream_hold`: its grip
+/// from the hand and every weapon bone from the grip, noted from KH1's own pose; no Keyblade
+/// half-turn, no keychain swing): the left hand the same way.
+/// - KH1's hold noted this session (Sora held it in the Dive to the Heart): the turn from the
+///   right Keyblade's grip as drawn to where that hold puts the weapon in the right hand is put on
+///   the left grip, and the bones follow the hold.
+/// - Else (the usual case: the Dive is long past): the Keyblade's grip, every bone after it as in
+///   KH1's bind (the mesh as it was made, nothing swinging it apart). The Dream Sword's weapon row
+///   gives the trail's blade range along the same bone with the same sign as a Keyblade's (-4.3..0
+///   against the Kingdom Key's -3.7..0), so its blade should lie where a Keyblade's does (its roll
+///   against KH1's own Dive hold is unchecked: the log names the source).
+fn dream_left(kh1: &[Mat4], kh1_bind: &[Mat4], grip: Mat4) -> Option<[Mat4; WEAPON_BONES]> {
+    let item = LEFT_ITEM.load(Ordering::Relaxed);
+    if !DREAM_WEAPONS.contains(&item) || kh1.len() < GRIP + WEAPON_BONES || kh1_bind.len() < GRIP + WEAPON_BONES {
+        return None;
+    }
+    let mut out = [Mat4::IDENTITY; WEAPON_BONES];
+    let (how, source) = match super::pose::dream_hold_of(item).filter(|r| r.len() >= WEAPON_BONES) {
+        Some(rel) => {
+            let g = grip * (kh1[GRIP].inverse() * kh1[RIGHT_HAND] * rel[0]);
+            out[0] = g;
+            for i in 1..WEAPON_BONES {
+                out[i] = g * rel[i];
+            }
+            (1, "KH1's own hold of it (noted this session)")
+        }
+        None => {
+            let inv = kh1_bind[GRIP].inverse();
+            out[0] = grip;
+            for i in 1..WEAPON_BONES {
+                out[i] = grip * inv * kh1_bind[GRIP + i];
+            }
+            (2, "the Keyblade's grip, its bones as in KH1's bind (no hold of KH1's noted this session)")
+        }
+    };
+    if !out.iter().all(|m| m.is_finite()) {
+        return None;
+    }
+    static LOGGED: AtomicU32 = AtomicU32::new(0);
+    let key = (item as u32) << 8 | how;
+    if LOGGED.swap(key, Ordering::Relaxed) != key {
+        log(&format!("left Keyblade: item {item:#x} isn't a Keyblade: held rigidly, by {source}"));
+    }
+    Some(out)
 }
 
 /// Master Form's second Keyblade: KH2's blade this close to its left hand or closer is held there

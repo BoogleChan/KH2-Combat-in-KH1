@@ -20,6 +20,11 @@
 //!   (1-based), `+0xC` the help text's handle.
 //! - Sora's weapons that aren't Keyblades: `0x52..=0x55` (Dream Sword / Shield / Rod and the
 //!   wooden sword; KH1 keeps the weapon row locked while one is held, `0x1402E6C60`).
+//! - Valor's default second weapon is the Dream Sword (`VALOR_DEFAULT`, the user: "whenever the
+//!   player gets valor form, i want the Dream Sword to be in the second keyblade slot by
+//!   default"): an empty or invalid Valor slot gets it, it needs no copy owned and holds none
+//!   (as Final's and Master's Kingdom Key fallbacks), and the Valor row always offers it beside
+//!   the free Keyblades (`valor_candidates`).
 //!
 //! Used by `equipmenu` (the Valor and Final rows in the Equipment page).
 
@@ -51,6 +56,12 @@ const WEAPON_ROW_SIZE: usize = 0x58;
 const SORA_WEAPON: u8 = 2;
 /// Sora's weapons that aren't Keyblades.
 const NOT_KEYBLADES: std::ops::RangeInclusive<u8> = 0x52..=0x55;
+/// The Dream Sword (KH1 item 0x52: Sora's weapon kind, weapon row 2, `xw_dh_5000`; the Dive to
+/// the Heart's sword, not a Keyblade by `is_keyblade`).
+pub const DREAM_SWORD: u8 = 0x52;
+/// Valor's second weapon when its slot holds none it may take (empty: a save that never had
+/// Valor, or the first unlock): the Dream Sword. Sora needn't own it and it holds no copy.
+pub const VALOR_DEFAULT: u8 = DREAM_SWORD;
 
 /// The proposed place of the Valor Keyblade's id in the save: `+0x488`, the four bytes between
 /// the ten party records (`0x74 * 10 = 0x488`) and Sora's growth bytes `+0x48C / +0x48D`, which
@@ -143,6 +154,12 @@ pub unsafe fn valor_may_hold(base: usize, id: u8) -> bool {
     is_keyblade(base, id) && owned(base, id) as u32 > equipped_count(base, id)
 }
 
+/// `id` may be Valor's second weapon: the Dream Sword (`VALOR_DEFAULT`, always: no copy needed),
+/// or a Keyblade it may hold (`valor_may_hold`).
+pub unsafe fn valor_may_use(base: usize, id: u8) -> bool {
+    id == VALOR_DEFAULT || valor_may_hold(base, id)
+}
+
 /// `id` may be Final's: a Keyblade with a copy that neither a member nor Valor's slot holds.
 pub unsafe fn final_may_hold(base: usize, id: u8) -> bool {
     let valor = (valor_held(base) == id) as u32;
@@ -151,6 +168,7 @@ pub unsafe fn final_may_hold(base: usize, id: u8) -> bool {
 
 /// The Keyblade a copy of which Valor's slot holds (0: none): the slot's, while Valor is unlocked
 /// (`form::unlocked`; a slot whose row isn't shown takes nothing from Sora) and it may be Valor's.
+/// The Dream Sword (`VALOR_DEFAULT`) holds no copy.
 pub unsafe fn valor_held(base: usize) -> u8 {
     let id = slot_byte(base, VALOR_OFF);
     if id != 0 && super::form::unlocked(super::form::Kind::Valor) && valor_may_hold(base, id) {
@@ -207,12 +225,15 @@ pub unsafe fn owned_keyblades(base: usize) -> Vec<u8> {
     (1..=ITEMS as u8).filter(|&id| owned(base, id) > 0 && is_keyblade(base, id)).collect()
 }
 
-/// The Keyblades Valor's slot may take: owned, with a copy that no member has equipped and
-/// neither Final's nor Master's slot holds (so never Sora's own weapon or another slot's unless
-/// he owns another copy); Valor's own current one included.
+/// What Valor's slot may take: the Dream Sword first (`VALOR_DEFAULT`, always, owned or not: so
+/// the player can go back to it), then the Keyblades owned with a copy that no member has
+/// equipped and neither Final's nor Master's slot holds (so never Sora's own weapon or another
+/// slot's unless he owns another copy); Valor's own current one included.
 pub unsafe fn valor_candidates(base: usize) -> Vec<u8> {
     let (fin, master) = (final_held(base), master_held(base));
-    owned_keyblades(base).into_iter().filter(|&id| owned(base, id) as u32 > equipped_count(base, id) + (fin == id) as u32 + (master == id) as u32).collect()
+    let mut v = vec![VALOR_DEFAULT];
+    v.extend(owned_keyblades(base).into_iter().filter(|&id| owned(base, id) as u32 > equipped_count(base, id) + (fin == id) as u32 + (master == id) as u32));
+    v
 }
 
 /// The Keyblades Final's slot may take: as Valor's, with Valor's and Master's slots' copies taken
@@ -254,15 +275,29 @@ unsafe fn weapon_row(base: usize, id: u8) -> Option<usize> {
     super::crash::readable(at + WEAPON_ROW_SIZE - 1).then_some(at)
 }
 
-/// The id stored for Valor (`VALOR_OFF`), if it is still a Keyblade Valor may take
-/// (`valor_may_hold`: it keeps its copy before Final's slot); else the candidate with the most
-/// Strength (the lowest id on a tie; never Final's copy); `None`: Valor can't be entered.
-pub unsafe fn valor_keyblade(base: usize) -> Option<u8> {
+/// The id stored for Valor (`VALOR_OFF`), if Valor may still use it (`valor_may_use`: the Dream
+/// Sword, or a Keyblade with its copy, kept before Final's slot); else the Dream Sword
+/// (`VALOR_DEFAULT`; `valor::keyblade` then writes it in the slot). Valor is never refused for
+/// want of a second weapon (it took the strongest free Keyblade before, and none refused Valor).
+pub unsafe fn valor_keyblade(base: usize) -> u8 {
     let stored = slot_byte(base, VALOR_OFF);
-    if stored != 0 && valor_may_hold(base, stored) {
-        return Some(stored);
+    if stored != 0 && valor_may_use(base, stored) {
+        stored
+    } else {
+        VALOR_DEFAULT
     }
-    valor_candidates(base).into_iter().max_by_key(|&id| (weapon_strength(base, id).unwrap_or(0), std::cmp::Reverse(id)))
+}
+
+/// Valor's slot as it is stored (kept by `valor::keyblade`), the Dream Sword when it holds neither
+/// a Keyblade nor the Dream Sword: for the model, the stats and the menu during a pick, as
+/// `final_stored`.
+pub unsafe fn valor_stored(base: usize) -> u8 {
+    let stored = slot_byte(base, VALOR_OFF);
+    if stored == VALOR_DEFAULT || is_keyblade(base, stored) {
+        stored
+    } else {
+        VALOR_DEFAULT
+    }
 }
 
 /// The id stored for Final (`FINAL_OFF`), if it is a Keyblade Sora owns with a copy that no

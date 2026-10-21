@@ -397,10 +397,10 @@ Keyblade is in use like an equipped one (`equip::form_held`):
   the same at Steam `0x1402E8770`; `equipmenu::free_count`): KH1's figure less the slots' copies,
   at least 0. So the shops count them as in use (not on the sell list, not in the sell quantity).
   Installed on its own, first in `equipmenu::install`.
-- **Valor's automatic pick** (an empty or no longer valid slot) takes the strongest Keyblade with
-  a copy free of the members and Final's slot. Because a slot's Keyblade now leaves Sora's list,
-  a Keyblade Valor took on its own is no longer offered as his weapon until Valor's slot is
-  changed.
+- **Valor's automatic pick** (an empty or no longer valid slot) was the strongest Keyblade with
+  a copy free of the members and Final's slot; it is now the Dream Sword, which holds no copy
+  (section "Valor's default: the Dream Sword"). A Keyblade an older version put there on its
+  own stays (it can't be told from a pick) and keeps holding its copy.
 - While a form row's pick is under way (`equipmenu::pick_own`), `valor::final_keyblade` reads the
   slot as stored and writes nothing, as the Valor row already did: KH1's preview puts the
   hovered Keyblade in Sora's weapon byte and the copies can't be counted then.
@@ -435,8 +435,8 @@ To test in the game:
 3. Confirm on an accessory row: the right accessory slot is replaced (first, last).
 4. The V row's Keyblade isn't in Sora's own weapon list (row 0) unless he owns a second copy
    (step 10); with a second copy, equipping it leaves the V row as it is.
-5. With only the Kingdom Key (or in Dive to the Heart): the V row is empty and confirm on it
-   buzzes.
+5. With only the Kingdom Key: the V row shows the Dream Sword and its list offers only the
+   Dream Sword (section "Valor's default: the Dream Sword").
 6. Sora with 7 or 8 accessory slots (9 / 10 rows): scrolling, the last accessory, its help.
 7. Steam build: the same, and the install line without "some patches failed".
 8. Final unlocked: an "F: <Keyblade>" row under the V row (the Kingdom Key on a save that never
@@ -462,6 +462,41 @@ To test in the game:
     and Sora's row 0 no longer offer it (one copy). Enter Master: that Keyblade floating by his
     left hand, its Strength and MP in the Status page. With all three rows up and 8 accessory
     slots (12 rows): scrolling, the last accessory, the help line on each row.
+
+### Valor's default: the Dream Sword
+
+The user: "whenever the player gets valor form, i want the Dream Sword to be in the second keyblade
+slot by default".
+
+- **The item** (high, the user's `btltbl.bin`): `0x52`, kind 2 (Sora's weapon), weapon row 2,
+  `xw_dh_5000` (`docs/kh1-weapon-second.md` §1.1); its row's Strength `+0x30` is **+1** and MP
+  `+0x38` **0** (the Kingdom Key's: +3, 0). Not a Keyblade by `equip::is_keyblade`
+  (`0x52..=0x55`), and normally not in the inventory once the Dive to the Heart is over.
+- **The default** (`equip::VALOR_DEFAULT`, `equip::valor_keyblade`, `valor::keyblade`): Valor's
+  slot (`save + 0x488`) that is empty (Valor just unlocked, or a save from before this) or holds
+  anything Valor may not use (not the Dream Sword, not a Keyblade with a copy free:
+  `equip::valor_may_use`) gets `0x52` written in it, logged with the reason ("Valor's second
+  weapon: the slot was empty ...: Dream Sword (0x52) written in the slot"). A Keyblade picked in
+  the menu, or one an older version put there, is kept ("kept from the save, its copy held").
+  Valor is never refused for want of a second weapon now; `form`'s refusal remains only for a
+  save that doesn't read.
+- **No copy**: the Dream Sword needn't be owned and holds none. `valor_held` (and so
+  `form_held`, Sora's own list, KH1's free count, the other slots' lists) never counts it, as
+  Final's and Master's Kingdom Key fallbacks. Unlike those it is stored in the slot (it is a
+  pick of its own, and no Keyblade can be mistaken for it).
+- **The V row's list** (`equip::valor_candidates`, `equipmenu::fill`): KH1's fill lists only what
+  Sora owns, so the Dream Sword is put in first (count 1, which KH1 shows as none), then the free
+  Keyblades. So the player can go back to it after picking a Keyblade; picking it gives the
+  Keyblade's copy back. Master's and Final's lists (Keyblades only) never offer it; Sora's own
+  weapon list (row 0) is KH1's as before. The preview (KH1 loads the hovered weapon into his hand,
+  `0x1402845A0`) and the compare box work on it as on a Keyblade (its row's Strength and MP).
+- While a pick's preview may have the hovered Keyblade in Sora's weapon byte
+  (`equipmenu::pick_own`), `valor::keyblade` reads the slot as stored (`equip::valor_stored`) and
+  writes nothing, as Final's and Master's do: a preview of the slot's own Keyblade would
+  otherwise look equipped and the slot be reset.
+- **In Valor Form**: its Strength and MP count (`valorstats::bonus`, `equip::valor_stored`); its
+  `.wpn` is loaded and drawn in the left hand as a Keyblade's (`leftblade`), held rigidly as the
+  dream weapons are in the right hand (`docs/kh1-weapon-second.md` §10).
 
 ## 5. Spare save bytes for the Valor, Final and Master Keyblades
 

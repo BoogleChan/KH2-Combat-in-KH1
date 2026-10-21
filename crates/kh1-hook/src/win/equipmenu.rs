@@ -8,6 +8,11 @@
 //! equipped and not another slot's); the pick is stored in that form's slot and Sora's own weapon
 //! is left as it was.
 //!
+//! - Valor's row always offers the Dream Sword (`equip::VALOR_DEFAULT`, Valor's default, the
+//!   user: "whenever the player gets valor form, i want the Dream Sword to be in the second
+//!   keyblade slot by default"), first in its list beside the free Keyblades, though Sora doesn't
+//!   own it (KH1's fill lists only what he owns, so it is put in: `fill`); picking it holds no
+//!   copy. Master's and Final's rows don't offer it.
 //! - A slot's Keyblade is in use like an equipped one (the user: "When you put a keyblade in any
 //!   of the drive equipment slots ... it doesn't remove the keyblade from the list"): it leaves
 //!   the other slot's list and Sora's own weapon list (`fill_sora`) until the slot changes, and
@@ -504,13 +509,13 @@ unsafe fn row_id(row: usize) -> u8 {
 }
 
 /// A form's Keyblade for its row (0 for none). Valor: `valor::keyblade`, which keeps its slot up
-/// to date (refilled when its Keyblade stops being free); Final: `valor::final_keyblade` (the
-/// Kingdom Key when its slot holds none Sora may take). During a pick, the slots as stored (the
-/// preview's Keyblade in Sora's byte would look equipped).
+/// to date (the Dream Sword when it holds none Valor may use); Final: `valor::final_keyblade`
+/// (the Kingdom Key when its slot holds none Sora may take). During a pick, the slots as stored
+/// (the preview's Keyblade in Sora's byte would look equipped).
 unsafe fn form_id(save: usize, form: Form) -> u8 {
     let guarded = pick_guard(save).is_some();
     match (form, guarded) {
-        (Form::Valor, true) => rd::<u8>(save + equip::VALOR_OFF),
+        (Form::Valor, true) => equip::valor_stored(base()),
         (Form::Valor, false) => super::valor::keyblade().unwrap_or(0),
         (Form::Final, true) => equip::final_stored(base()),
         (Form::Final, false) => super::valor::final_keyblade(),
@@ -565,10 +570,10 @@ unsafe fn prepare(save: usize, win: usize) -> bool {
             None => (0, 0),
         };
         ROW_FORM[i].store(form, Ordering::Relaxed);
-        // Valor's row holds a Keyblade only when one is free; Final's and Master's hold the
-        // Kingdom Key at least, but offer a choice only when one is free. (A Keyblade to choose
-        // from: owned, not equipped, not another slot's copy, counted with his own weapon; the
-        // row's own one counts.)
+        // Valor's row holds the Dream Sword at least, and always offers it; Final's and Master's
+        // hold the Kingdom Key at least, but offer a choice only when one is free. (A Keyblade
+        // to choose from: owned, not equipped, not another slot's copy, counted with his own
+        // weapon; the row's own one counts.)
         let free = match Form::from(form) {
             Some(f) => with_real_weapon(save, || !candidates(f).is_empty()),
             None => false,
@@ -738,9 +743,13 @@ unsafe fn candidates(form: Form) -> Vec<u8> {
 }
 
 /// The copies of `id` a list shows as Sora's to take: owned less those the form slots hold, his
-/// own slot's (`form`, during its pick) left in.
+/// own slot's (`form`, during its pick) left in. The Dream Sword in Valor's list: 1 (it needs
+/// none owned; KH1 shows no count for 1).
 unsafe fn shown_count(id: u8, form: Option<Form>) -> u32 {
     let b = base();
+    if form == Some(Form::Valor) && id == equip::VALOR_DEFAULT {
+        return 1;
+    }
     let held = match form {
         None => equip::form_held(b, id),
         Some(Form::Valor) => (equip::final_held(b) == id) as u32 + (equip::master_held(b) == id) as u32,
@@ -820,15 +829,27 @@ unsafe extern "system" fn fill() {
     let n = g::<i32>(LIST_LEN).clamp(0, 256) as usize;
     let (list, counts) = (base() + LIST, base() + LIST_COUNTS);
     let before: Vec<i32> = (0..n).map(|i| rd::<i32>(list + i * 4)).collect();
-    let mut k = 0;
+    // (Valor's Dream Sword first, though KH1's fill lists only what he owns: `equip::valor_candidates`
+    // offers it always.)
+    let mut out: Vec<(i32, i32)> = Vec::with_capacity(n + 1);
+    if let Some(j) = keep.iter().position(|&c| form == Form::Valor && c == equip::VALOR_DEFAULT) {
+        out.push((equip::VALOR_DEFAULT as i32, shown[j]));
+    }
     for i in 0..n {
         let id = rd::<i32>(list + i * 4);
+        if out.iter().any(|(o, _)| *o == id) {
+            continue;
+        }
         if let Some(j) = keep.iter().position(|&c| c as i32 == id) {
-            wr(list + k * 4, id);
-            wr(counts + k * 4, shown[j]);
-            k += 1;
+            out.push((id, shown[j]));
         }
     }
+    out.truncate(256);
+    for (i, &(id, c)) in out.iter().enumerate() {
+        wr(list + i * 4, id);
+        wr(counts + i * 4, c);
+    }
+    let k = out.len();
     s(LIST_LEN, k as i32);
     let at = (0..k).find(|&i| rd::<i32>(list + i * 4) == current).unwrap_or(0) as i32;
     let (top, cur) = if (k as i32) < 7 { (0, at) } else { let t = at.min(k as i32 - 7); (t, at - t) };
@@ -879,8 +900,9 @@ unsafe extern "system" fn list_update(win: usize) {
                 let was = rd::<u8>(save + form.off());
                 wr(save + form.off(), picked as u8);
                 let item = equip::item_name(base(), picked as u8).unwrap_or_default();
+                let held = if form == Form::Valor && picked as u8 == equip::VALOR_DEFAULT { "no copy held (Valor's default)" } else { "its copy held" };
                 log(&format!(
-                    "Equipment: {name}'s Keyblade stored: {picked:#04x} {item}, its copy held ({was:#04x} given back; Sora keeps {weapon:#04x}; model loaded {:#04x}, put back by KH1)",
+                    "Equipment: {name}'s Keyblade stored: {picked:#04x} {item}, {held} ({was:#04x} given back; Sora keeps {weapon:#04x}; model loaded {:#04x}, put back by KH1)",
                     rd::<i32>(loaded_at)
                 ));
             }

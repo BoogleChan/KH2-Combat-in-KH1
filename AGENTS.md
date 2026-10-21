@@ -3539,3 +3539,12 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   which never reported. Now a landed shot of the form's script counts for the swing playing
   (151 -> 151 -> 154). Hidden on level-100 saves by Combo Master. (Commits stay under the user's
   name: the user, "under my name".)
+
+### 2026-10-21: Stage 306 (Valor's default second weapon: the Dream Sword)
+- The user: "whenever the player gets valor form, i want the Dream Sword to be in the second
+  keyblade slot by default". Valor's fallback (empty or unusable slot) is the Dream Sword (0x52),
+  written into the slot, needing and holding no copy; a Keyblade already there is kept. The V:
+  row always offers it (inserted at its list's top); M: / F: / Sora's own don't. Drawn in the left
+  hand through the left-blade path (`xw_dh_5000.wpn`), held rigidly (`leftblade::dream_left`,
+  from KH1's own dream hold when recorded, else the left grip with KH1's bind pose); its stats
+  (+1 Strength) count. `docs/kh1-equipment.md`, `docs/kh1-weapon-second.md` 10.

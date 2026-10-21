@@ -344,12 +344,13 @@ unsafe fn held_weapon(base: usize) -> Option<u8> {
     (save >= 0x10000 && super::crash::readable(save + 0x36)).then(|| std::ptr::read_unaligned((save + 0x36) as *const u8))
 }
 
-/// The left Keyblade's KH1 item (Valor's, Master's, Final's), if he holds two.
+/// The left weapon's KH1 item (Valor's, Master's, Final's), if he holds two.
 unsafe fn left_weapon(base: usize) -> Option<u8> {
     match super::form::current()? {
         Kind::Final => Some(super::equip::final_stored(base)),
         Kind::Master => Some(super::equip::master_stored(base)),
-        Kind::Valor => super::equip::valor_keyblade(base),
+        // (The Dream Sword by default: no KH2 Keyblade of its name, so KH1's is drawn.)
+        Kind::Valor => Some(super::equip::valor_stored(base)),
         Kind::Wisdom | Kind::Limit | Kind::Anti => None,
     }
 }

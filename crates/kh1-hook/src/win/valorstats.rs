@@ -81,24 +81,26 @@ unsafe fn wr<T: Copy>(p: usize, v: T) {
     std::ptr::write_unaligned(p as *mut T, v)
 }
 
-/// The second Keyblade's (item, Strength, max MP) while Sora is Valor or Final: the form's slot's
-/// Keyblade (`equip::VALOR_OFF`, kept by `valor::keyblade`; `equip::FINAL_OFF`, kept by
+/// The second weapon's (item, Strength, max MP) while Sora is Valor, Master or Final: the form's
+/// slot's (`equip::VALOR_OFF`, kept by `valor::keyblade`, the Dream Sword when it holds none:
+/// its weapon row's Strength and MP count as a Keyblade's; `equip::FINAL_OFF`, kept by
 /// `valor::final_keyblade`, the Kingdom Key when it holds none).
 pub unsafe fn bonus() -> Option<(u8, i32, i32)> {
     if !super::form::two_blades() {
         return None;
     }
     let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
-    let save = super::menu::save_block(base)?;
+    super::menu::save_block(base)?;
     let item = if super::form::in_final() {
         super::equip::final_stored(base)
     } else if super::form::in_master() {
         // (Master's slot, kept by `valor::master_keyblade`, the Kingdom Key when it holds none.)
         super::equip::master_stored(base)
     } else {
-        rd::<u8>(save + super::equip::VALOR_OFF)
+        // (Valor's: a Keyblade or the Dream Sword, `equip::valor_stored`.)
+        super::equip::valor_stored(base)
     };
-    if item == 0 || !super::equip::is_keyblade(base, item) {
+    if item == 0 || !(super::equip::is_keyblade(base, item) || item == super::equip::VALOR_DEFAULT) {
         return None;
     }
     let s = super::equip::weapon_strength(base, item)? as i32;
