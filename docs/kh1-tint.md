@@ -350,4 +350,42 @@ his shoes black". `Look::Limit` on KH1 Sora's own textures:
   0.85, brightness 0.55 + 0.45 × v; a plain hue shift of the dark blue came out olive). It runs
   first, so the black pass leaves it.
 - `-1c3` (shoes): the yellow, the red and the blue black. The sole's grey and the laces' metal stay.
-- The hood's lining and the jacket's blue trim stay blue (not asked).
+
+### The jacket black too
+
+The user: "make limit forms jacket fully black as well including the inside of his hood". Then,
+on `-1c1`, the whole jacket goes black, shaded like the jumpsuit (`Op::Darken`: every texel of
+the part made grey at `0.04 + 0.16 × v`, never brighter than it was, so the jacket's own black
+trim stays black, a little darker). Its cream is about the hue and saturation of the silver
+(hue ~40, saturation ~0.14), so no colour test can tell them apart: the jacket is found by the
+mesh.
+
+Mesh 1 of `-c0.cvbl` (the clothes) splits into UV islands (triangles of one mesh joined by
+shared UV vertices). Plotted on `-1c1` and painted onto a render of the bind pose:
+
+| island (u, v box) | part |
+|---|---|
+| 0.72–1.0, 0.0–0.53 | the shorts (red) |
+| 0.26–0.77, 0.06–0.73 | the jumpsuit's top, with its zipper |
+| 0.33–0.45, 0.63–0.73 | the jumpsuit's crotch (the red hexagon) |
+| 0.0–0.22, 0.43–0.84 | **the sleeves** (cream, black trim on the left) |
+| 0.22–0.67, 0.63–1.0 | **the vest** (black, cream hem); its open zipper (teeth and tape, u < 0.257) is painted on the same triangles |
+| 0.77–1.0, 0.54–1.0 | **the hood**, outside black, lining blue |
+| 0.72–0.76, 0.64–0.74 | **the sleeves' inside** (black and blue, seen at the arm hole) |
+| 0.0–0.19, 0.85–1.0 | the crown |
+| 0.82–0.94, 0.9–1.0 | the shoes' tongues |
+| 0.21–0.57, 0.08–0.31 | the belt and its sides; meshes 4–8 the chain, belt and buckle |
+
+The cream with the blue stripe and the metal disc (0.0–0.5, 0.18–0.42) and the cream beside the
+hood are on no triangle of slot 1.
+
+`Mask::Jacket` (`JACKET` in `tint.rs`): one point (u, v) in each bold island; at start the hook
+reads `-c0.cvbl` from the PKG (`texmap::cvbl_uv_triangles`), and when the Limit texture is made,
+`texmap::island_mask` rasterises the islands holding those points (a texel past their edges, for
+filtering), less the vest's zipper (u 0.2–0.257, v ≥ 0.6). Until the mesh is read the Limit
+`-1c1` isn't made; if it can't be read (or none of the points lands on a triangle) the jacket
+keeps its colours and the log says so (`form tint: … -c0.cvbl not read`, `… of the jacket's 4
+parts found`). Checked on the user's files in a numpy preview and a software render of the bind
+pose: the jacket and the hood's inside black, the chain, crown, zipper and its rail silver, the
+belt yellow. Blue still left on triangles of slot 1 is all the belt's (s293's `BELT` rect
+leaves its less saturated rim and the strap end by the buckle, u 0.67–0.77, v 0.0–0.07).

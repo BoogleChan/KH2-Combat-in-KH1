@@ -2,7 +2,8 @@
 //! s233: Wisdom's sleeves blue too, and Valor red: "his shoes red, his sleeves red, his belt red,
 //! the inside part of his hoodie red"). Each look recolours its parts of the textures (`ops`):
 //! a hue shift (red or yellow or blue to another hue) or a colourize (light grey and cream given
-//! a hue), some only within a region of the texture (`SLEEVES`, `BELT`, `HOOD_LINING`).
+//! a hue), some only within a region of the texture (`SLEEVES`, `BELT`, `HOOD_LINING`), or
+//! within a part found by the mesh's triangles (`Mask`: Limit Form's jacket).
 //!
 //! The PC draws the remastered Sora (`docs/kh1-tint.md`): 9 meshes on 4 HD textures, the
 //! jumpsuit, jacket, hood, zipper and crown all on the second (`-1c1.dds`, slot 1), and a strip
@@ -134,6 +135,17 @@ enum Eyes {
 const SLEEVES: [[f32; 4]; 2] = [[0.035, 0.415, 0.236, 0.85], [0.236, 0.415, 0.215 + 0.025, 0.62]];
 const BELT: [f32; 4] = [0.035, 0.07, 0.57, 0.14];
 const HOOD_LINING: [f32; 4] = [0.755, 0.72, 1.0, 1.0];
+/// The jacket on `-1c1` (`Mask::Jacket`): the UV islands of the remastered mesh (`-c0.cvbl`, mesh
+/// 1) holding these points (u, v), each less a region if given: the sleeves, the vest less its
+/// open zipper (the teeth and tape along its front edges, painted on the vest's own triangles),
+/// the hood (outside and lining), the sleeves' inside. Its cream has the hue and saturation of
+/// the silver chain and zipper, so the jacket is found by its triangles, not by colour
+/// (`docs/kh1-tint.md`).
+const JACKET: [([f32; 2], Option<[f32; 4]>); 4] = [([0.12, 0.65], None), ([0.45, 0.88], Some([0.2, 0.6, 0.257, 1.0])), ([0.92, 0.75], None), ([0.737, 0.69], None)];
+
+/// Sora's remastered mesh's triangles on its textures (`-c0.cvbl`, read at start; `None`: not
+/// read, so the jacket can't be found).
+static UV_TRIS: OnceLock<Option<Vec<kh1_data::texmap::UvTri>>> = OnceLock::new();
 
 /// A form's look (`form`): Wisdom's blue, Valor's red, Final's white, Limit's black and yellow,
 /// Anti's Shadow Sora.
@@ -142,7 +154,8 @@ pub enum Look {
     Wisdom,
     Valor,
     Final,
-    /// Limit Form: KH1 Sora's outfit with the jumpsuit black, the belt yellow, the shoes black.
+    /// Limit Form: KH1 Sora's outfit with the jumpsuit, the jacket and the shoes black, the belt
+    /// yellow.
     Limit,
     /// (`form` maps Anti Form here; until it does, nothing names it.)
     Anti,
@@ -167,6 +180,48 @@ enum Op {
     /// Every texel given hue `to` at saturation `sat`, brightness `lo + (hi - lo) × v` (Shadow
     /// Sora's black); then, if `eyes` is given, Anti's solid yellow eyes there.
     Shadow { to: f32, sat: f32, lo: f32, hi: f32, eyes: Option<Eyes> },
+    /// Every texel within `mask`, whatever its colour, made grey: brightness `lo + (hi - lo) × v`,
+    /// never brighter than it was (so a black stays black).
+    Darken { lo: f32, hi: f32, mask: Mask },
+}
+
+/// A part of a texture found by the mesh (`mask`).
+#[derive(Clone, Copy, Debug)]
+enum Mask {
+    /// The jacket on `-1c1` (`JACKET`).
+    Jacket,
+}
+
+/// `m`'s texels on a `w`×`h` texture (row-major), or `None` (the mesh not read, or the part not
+/// found on it).
+fn mask(m: Mask, w: u32, h: u32) -> Option<Vec<bool>> {
+    let tris = UV_TRIS.get()?.as_ref()?;
+    match m {
+        Mask::Jacket => {
+            let (wu, hu) = (w as usize, h as usize);
+            let mut all = vec![false; wu * hu];
+            let mut found = 0;
+            for (seed, less) in JACKET {
+                let (mut v, n) = kh1_data::texmap::island_mask(tris, 1, w, h, &[seed]);
+                found += n.min(1);
+                if let Some([u0, v0, u1, v1]) = less {
+                    let (x0, x1) = (((u0 * w as f32) as usize).min(wu), ((u1 * w as f32).ceil() as usize).min(wu));
+                    let (y0, y1) = (((v0 * h as f32) as usize).min(hu), ((v1 * h as f32).ceil() as usize).min(hu));
+                    for y in y0..y1 {
+                        v[y * wu + x0..y * wu + x1.max(x0)].fill(false);
+                    }
+                }
+                all.iter_mut().zip(v).for_each(|(a, b)| *a |= b);
+            }
+            if found != JACKET.len() {
+                log(&format!("form tint: {found} of the jacket's {} parts found on the mesh", JACKET.len()));
+                if found == 0 {
+                    return None;
+                }
+            }
+            Some(all)
+        }
+    }
 }
 
 /// What each look does to each texture (`TEXTURES` order); none: that one isn't swapped.
@@ -209,9 +264,16 @@ fn ops(look: Look, k: usize) -> Vec<Op> {
         // his belt yellow, and his shoes black"): the reds (jumpsuit, collar) black, shaded as
         // Final's belt; the belt's dark blue a bright yellow near the shoes' (first, so nothing
         // after touches it; a plain hue shift left it olive);
-        // the shoes' yellow, red and blue black. The hood's lining stays blue.
+        // the shoes' yellow, red and blue black. Then (the user: "make limit forms jacket fully
+        // black as well including the inside of his hood") the whole jacket black, shaded the
+        // same: its cream, blue trim and the hood's blue lining; its zipper, the chain, the crown
+        // and the belt stay.
         (Look::Limit, 0) => vec![black(RED, RED_WIDTH, 0.0)],
-        (Look::Limit, 1) => vec![Op::Paint { from: BLUE_HUE, width: BLUE_WIDTH, to: LIMIT_BELT_HUE, sat: LIMIT_BELT_SAT, lo: LIMIT_BELT_LO, hi: 1.0, rect: Some(BELT) }, black(RED, RED_WIDTH, 0.0)],
+        (Look::Limit, 1) => vec![
+            Op::Paint { from: BLUE_HUE, width: BLUE_WIDTH, to: LIMIT_BELT_HUE, sat: LIMIT_BELT_SAT, lo: LIMIT_BELT_LO, hi: 1.0, rect: Some(BELT) },
+            black(RED, RED_WIDTH, 0.0),
+            Op::Darken { lo: BLACK_LO, hi: BLACK_HI, mask: Mask::Jacket },
+        ],
         (Look::Limit, 2) => vec![black(YELLOW_HUE, YELLOW_WIDTH, YELLOW_MIN_V), black(RED, RED_WIDTH, 0.0), black(BLUE_HUE, BLUE_WIDTH, 0.0)],
         // Anti (the user: "make sora look like shadow sora in this form (the miniboss from
         // neverland)"): all of him black, the face's eye frames too (else KH1 would paste
@@ -300,7 +362,17 @@ fn apply(p: &mut Pixels, op: Op) -> usize {
         Op::Colourize { rect, .. } => Some(rect),
         Op::Grey { rect, .. } => rect,
         Op::Paint { rect, .. } => rect,
-        Op::Shadow { .. } => None,
+        Op::Shadow { .. } | Op::Darken { .. } => None,
+    };
+    let within = match op {
+        Op::Darken { mask: m, .. } => match mask(m, p.w, p.h) {
+            Some(v) => Some(v),
+            None => {
+                log(&format!("form tint: {m:?} not found on the mesh, left as it is"));
+                return 0;
+            }
+        },
+        _ => None,
     };
     let [u0, v0, u1, v1] = rect.unwrap_or([0.0, 0.0, 1.0, 1.0]);
     let (x0, x1) = ((u0 * w as f32) as usize, ((u1 * w as f32).ceil() as usize).min(w));
@@ -344,6 +416,11 @@ fn apply(p: &mut Pixels, op: Op) -> usize {
                     (k, rgb(to, sat, v * 0.85))
                 }
                 Op::Shadow { to, sat, lo, hi, .. } => (1.0, rgb(to, sat, lo + (hi - lo) * v)),
+                Op::Darken { lo, hi, .. } => {
+                    let k = if within.as_ref().is_some_and(|m| m[y * w + x]) { 1.0 } else { 0.0 };
+                    let l = (lo + (hi - lo) * v).min(v);
+                    (k, (l, l, l))
+                }
             };
             if k <= 0.0 {
                 continue;
@@ -468,10 +545,18 @@ pub fn install() {
             Ok(i) => i,
             Err(e) => {
                 log(&format!("Wisdom tint: KH1's files not found ({e})"));
+                let _ = UV_TRIS.set(None);
                 let _ = ANTI.set(Err(format!("KH1's files not found ({e})")));
                 return;
             }
         };
+        // The mesh's triangles on its textures (for the parts found by the mesh, `Mask`).
+        let tris = install.read_remastered(kh1_data::Source::Live, MODEL, "-c0.cvbl").map_err(|e| e.to_string()).and_then(|(_, b)| kh1_data::texmap::cvbl_uv_triangles(&b));
+        match &tris {
+            Ok(t) => log(&format!("form tint: {MODEL} -c0.cvbl read from the PKG ({} triangles)", t.len())),
+            Err(e) => log(&format!("form tint: {MODEL} -c0.cvbl not read from the PKG ({e}); Limit Form's jacket keeps its colours")),
+        }
+        let _ = UV_TRIS.set(tris.ok());
         for (k, (_, asset)) in TEXTURES.iter().enumerate() {
             let asset = format!("{asset}.dds");
             let p = match install.read_remastered(kh1_data::Source::Live, MODEL, &asset) {
@@ -617,6 +702,10 @@ unsafe fn ours_for(s: &mut Swap, k: usize, src: usize, look: Look) -> Option<u64
     } else {
         None
     };
+    // A part found by the mesh: not until the mesh has been read (at start).
+    if UV_TRIS.get().is_none() && ops(look, k).iter().any(|op| matches!(op, Op::Darken { .. })) {
+        return None;
+    }
     // The pixels: the DDS KH1 keeps (the same file), else the PKG's.
     let dds = rd::<u64>(src + TEX_DDS) as usize;
     let mem = if baked.is_some() {

@@ -106,13 +106,122 @@ pub fn bind_pose(mdls: &[u8]) -> Result<Vec<Mat4>, String> {
 /// The triangles of a remastered mesh (`-c0.cvbl`), each vertex placed by its bone's matrix in
 /// `bones` (the bind pose: `kh2_anim::Pose::bind` of the model's skeleton).
 pub fn cvbl_triangles(cvbl: &[u8], bones: &[Mat4]) -> Result<Vec<Tri>, String> {
+    let mut tris = Vec::new();
+    cvbl_strips(cvbl, |_, slot, v, flags| {
+        let place = |(bone, local, _): (usize, Vec3, Vec2)| -> Result<Vec3, String> {
+            Ok(bones.get(bone).ok_or_else(|| format!("cvbl: bone {bone} not in the skeleton ({})", bones.len()))?.transform_point3(local))
+        };
+        let p = [place(v[0])?, place(v[1])?, place(v[2])?];
+        let face = (p[1] - p[0]).cross(p[2] - p[0]);
+        if face.length_squared() < 1e-12 {
+            return Ok(());
+        }
+        // Facing by the strip's winding (flag 1 or 2): the meshes' own normals don't follow
+        // it, but two models sharing geometry wind alike, so the two sides of a double-sided
+        // part stay apart.
+        let n = face.normalize() * if flags >> 16 & 3 == 1 { 1.0 } else { -1.0 };
+        tris.push(Tri { p, uv: [v[0].2, v[1].2, v[2].2], slot, n });
+        Ok(())
+    })?;
+    Ok(tris)
+}
+
+/// A remastered mesh's triangle on its texture: the mesh (its entry in the `-c0.cvbl` table), its
+/// texture slot, its UVs.
+#[derive(Clone, Copy, Debug)]
+pub struct UvTri {
+    pub mesh: u32,
+    pub slot: u32,
+    pub uv: [Vec2; 3],
+}
+
+/// The triangles of a remastered mesh (`-c0.cvbl`) on its textures only (no skeleton needed).
+pub fn cvbl_uv_triangles(cvbl: &[u8]) -> Result<Vec<UvTri>, String> {
+    let mut tris = Vec::new();
+    cvbl_strips(cvbl, |mesh, slot, v, _| {
+        tris.push(UvTri { mesh: mesh as u32, slot, uv: [v[0].2, v[1].2, v[2].2] });
+        Ok(())
+    })?;
+    Ok(tris)
+}
+
+/// Texels of a `w`×`h` texture (row-major, `true`: in) covered by the UV islands of `tris` on
+/// `slot` that hold one of `seeds` (UV points; an island: triangles of one mesh joined by shared
+/// UV vertices), a texel past their edges included (for bilinear filtering). Returns the mask and
+/// how many islands the seeds found.
+pub fn island_mask(tris: &[UvTri], slot: u32, w: u32, h: u32, seeds: &[[f32; 2]]) -> (Vec<bool>, usize) {
+    let on: Vec<&UvTri> = tris.iter().filter(|t| t.slot == slot).collect();
+    let mut parent: Vec<usize> = (0..on.len()).collect();
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    // (UVs within 1/4096 count as shared.)
+    let mut first = std::collections::HashMap::new();
+    for (i, t) in on.iter().enumerate() {
+        for uv in t.uv {
+            let j = *first.entry((t.mesh, (uv.x * 4096.0).round() as i32, (uv.y * 4096.0).round() as i32)).or_insert(i);
+            let (a, b) = (root(&mut parent, i), root(&mut parent, j));
+            parent[a] = b;
+        }
+    }
+    // Signed distances (in `scale` units) of `p` inside each edge of `t`, or `None` if degenerate.
+    let inside = |t: &UvTri, p: Vec2, scale: Vec2| -> Option<f32> {
+        let q = t.uv.map(|uv| uv * scale);
+        let area = (q[1] - q[0]).perp_dot(q[2] - q[0]);
+        if area.abs() < 1e-9 {
+            return None;
+        }
+        let p = p * scale;
+        Some((0..3).map(|k| area.signum() * (q[(k + 1) % 3] - q[k]).perp_dot(p - q[k]) / (q[(k + 1) % 3] - q[k]).length().max(1e-6)).fold(f32::MAX, f32::min))
+    };
+    let mut picked: Vec<usize> = Vec::new();
+    for s in seeds {
+        for i in 0..on.len() {
+            if inside(on[i], Vec2::new(s[0], s[1]), Vec2::ONE).is_some_and(|d| d >= 0.0) {
+                let r = root(&mut parent, i);
+                if !picked.contains(&r) {
+                    picked.push(r);
+                }
+            }
+        }
+    }
+    let (wu, hu) = (w as usize, h as usize);
+    let mut mask = vec![false; wu * hu];
+    let scale = Vec2::new(w as f32, h as f32);
+    for i in 0..on.len() {
+        if !picked.contains(&root(&mut parent, i)) {
+            continue;
+        }
+        let t = on[i];
+        let q = t.uv.map(|uv| uv * scale);
+        let (lo, hi) = (q[0].min(q[1]).min(q[2]), q[0].max(q[1]).max(q[2]));
+        let (x0, x1) = ((lo.x - 1.0).floor().max(0.0) as usize, ((hi.x + 1.0).ceil().max(0.0) as usize).min(wu));
+        let (y0, y1) = ((lo.y - 1.0).floor().max(0.0) as usize, ((hi.y + 1.0).ceil().max(0.0) as usize).min(hu));
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let c = Vec2::new((x as f32 + 0.5) / scale.x, (y as f32 + 0.5) / scale.y);
+                if inside(t, c, scale).is_some_and(|d| d >= -1.0) {
+                    mask[y * wu + x] = true;
+                }
+            }
+        }
+    }
+    (mask, picked.len())
+}
+
+/// Walks a remastered mesh's (`-c0.cvbl`) triangle strips: per triangle, its mesh, texture slot,
+/// three vertices (bone, position in the bone's space, UV) and the last vertex's flags.
+fn cvbl_strips(cvbl: &[u8], mut emit: impl FnMut(usize, u32, [(usize, Vec3, Vec2); 3], u32) -> Result<(), String>) -> Result<(), String> {
     let count = u32_at(cvbl, 4).ok_or("cvbl: too short")? as usize;
     let w = u32_at(cvbl, 8).ok_or("cvbl: too short")?;
     let skip = if w & 0x1_0000 != 0 { (w & 0xFFFF) as usize } else { 0 };
     if count == 0 || count > 64 || skip > 16 {
         return Err(format!("cvbl: {count} meshes, skip {skip}"));
     }
-    let mut tris = Vec::new();
     for m in 0..count {
         let e = 0x10 * (1 + skip * 2 + m);
         let slot = u32_at(cvbl, e + 4).ok_or("cvbl: entry past the end")?;
@@ -136,29 +245,19 @@ pub fn cvbl_triangles(cvbl: &[u8], bones: &[Mat4]) -> Result<Vec<Tri>, String> {
                     if 0x20 + 48 * n > size {
                         return Err(format!("cvbl: mesh {m}: {n} vertices in a chunk of {size:#x}"));
                     }
-                    let mut strip: Vec<(Vec3, Vec2)> = Vec::with_capacity(3);
+                    let mut strip: Vec<(usize, Vec3, Vec2)> = Vec::with_capacity(3);
                     for k in 0..n {
                         let v = o + 0x20 + 48 * k;
                         let flags = u32_at(cvbl, v + 12).ok_or("cvbl: vertex past the end")?;
                         let bone = matrix.get((flags & 0xFFFF) as usize).copied().unwrap_or(0);
-                        let m4 = bones.get(bone).ok_or_else(|| format!("cvbl: bone {bone} not in the skeleton ({})", bones.len()))?;
-                        let pos = m4.transform_point3(vec3_at(cvbl, v + 32).ok_or("cvbl: vertex past the end")?);
+                        let local = vec3_at(cvbl, v + 32).ok_or("cvbl: vertex past the end")?;
                         let uv = Vec2::new(f32_at(cvbl, v + 16).unwrap_or(0.0), f32_at(cvbl, v + 20).unwrap_or(0.0));
                         if strip.len() == 3 {
                             strip.remove(0);
                         }
-                        strip.push((pos, uv));
+                        strip.push((bone, local, uv));
                         if flags >> 16 & 0x1000 == 0 && strip.len() == 3 {
-                            let p = [strip[0].0, strip[1].0, strip[2].0];
-                            let face = (p[1] - p[0]).cross(p[2] - p[0]);
-                            if face.length_squared() < 1e-12 {
-                                continue;
-                            }
-                            // Facing by the strip's winding (flag 1 or 2): the meshes' own
-                            // normals don't follow it, but two models sharing geometry wind
-                            // alike, so the two sides of a double-sided part stay apart.
-                            let n = face.normalize() * if flags >> 16 & 3 == 1 { 1.0 } else { -1.0 };
-                            tris.push(Tri { p, uv: [strip[0].1, strip[1].1, strip[2].1], slot, n });
+                            emit(m, slot, [strip[0], strip[1], strip[2]], flags)?;
                         }
                     }
                 }
@@ -170,7 +269,7 @@ pub fn cvbl_triangles(cvbl: &[u8], bones: &[Mat4]) -> Result<Vec<Tri>, String> {
             o += size;
         }
     }
-    Ok(tris)
+    Ok(())
 }
 
 /// The point of triangle `t` nearest `p`, as barycentric weights (Ericson, "Real-Time Collision
@@ -674,6 +773,33 @@ mod tests {
         // Alpha kept; the uncovered half filled.
         assert_eq!(px(5, 12)[3], 77);
         assert_ne!(px(5, 12)[..3], [9, 9, 9]);
+    }
+
+    #[test]
+    fn islands_are_found_by_a_point() {
+        let tri = |mesh, uv: [[f32; 2]; 3]| UvTri { mesh, slot: 1, uv: uv.map(|p| Vec2::new(p[0], p[1])) };
+        // On a 16×16: a square of two triangles sharing a diagonal (one island), another square
+        // beside it (another), and on slot 0 a triangle over the first (left alone).
+        let tris = [
+            tri(0, [[0.0, 0.0], [0.25, 0.0], [0.25, 0.25]]),
+            tri(0, [[0.0, 0.0], [0.25, 0.25], [0.0, 0.25]]),
+            tri(0, [[0.5, 0.5], [1.0, 0.5], [1.0, 1.0]]),
+            tri(0, [[0.5, 0.5], [1.0, 1.0], [0.5, 1.0]]),
+            UvTri { slot: 0, ..tri(0, [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]) },
+        ];
+        // A point in the first square's upper triangle takes the lower one too.
+        let (m, n) = island_mask(&tris, 1, 16, 16, &[[0.2, 0.05]]);
+        assert_eq!(n, 1);
+        let at = |x: usize, y: usize| m[y * 16 + x];
+        assert!(at(0, 3) && at(3, 0) && at(1, 2));
+        // A texel past the edge, not two; the other square not.
+        assert!(at(4, 2) && !at(5, 2));
+        assert!(!at(12, 12) && !at(8, 8));
+        // Both, by a point in each; a point on nothing finds nothing.
+        let (m, n) = island_mask(&tris, 1, 16, 16, &[[0.1, 0.2], [0.9, 0.6]]);
+        assert_eq!(n, 2);
+        assert!(m[12 * 16 + 12] && m[2 * 16 + 2]);
+        assert_eq!(island_mask(&tris, 1, 16, 16, &[[0.4, 0.1]]).1, 0);
     }
 
     #[test]

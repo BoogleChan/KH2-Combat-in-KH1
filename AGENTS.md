@@ -3434,3 +3434,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   where KH1 draws it (KH2's, as Final's), and script-started effects begin there.
 - A motion the script restarted on its queue's first frame played that frame twice (and its
   voice); no longer.
+
+### 2026-10-20: Stage 296 (Limit Form's jacket black, hood lining too)
+- The user: "make limit forms jacket fully black as well including the inside of his hood". The
+  jacket's cream matches the chain's silver in hue, so it is picked out by the mesh: the four
+  jacket pieces of `-c0.cvbl` (sleeves, vest, hood with its lining, the sleeves' insides) as a
+  texel mask (`texmap::island_mask`, read at start), the vest's zipper teeth cut out; within it
+  every texel grey-black with its folds (`Op::Darken`, `Mask::Jacket`). Chain, crown, zippers and
+  the yellow belt stay. (Version s295 is the testing branch's.)
