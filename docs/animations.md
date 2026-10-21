@@ -63,7 +63,7 @@ Other ini keys that change what is drawn or who moves him:
 | Key | Default | Effect on animation |
 |---|---|---|
 | `shared` | on | KH1's states own base Sora (this doc). Off: the old model, where KH2's controller has him whenever KH1 shows slots 0..7. |
-| `kh2_slots` | off | On (or a list of KH2 motions): KH2's moves that have one (now the ground combo: 151, 152, 154) play as new slots in KH1's own motion table (`kh1-anim-slots.md`): KH1 plays the slot (its clock, hit / combo / trail windows, blends, sounds), KH2's motion is drawn at KH1's time. KH1's slots then report the KH1 slot they stand in for. |
+| `kh1_slots` | on | On (or a list of KH2 motions): KH2's moves that have one (now the ground combo: 151, 152, 154, and the air combo: 183, 184, 181) play as new slots in KH1's own motion table (`kh1-anim-slots.md`): KH1 plays the slot (its clock, hit / combo / trail windows, blends, sounds), KH2's motion is drawn at KH1's time. KH1's slots then report the KH1 slot they stand in for. |
 | `glide` | square | KH1's glide starts on Square while falling, or on the held jump (`jump`). |
 | `hurt` | kh2 | Hits taken while KH2's controller has him play KH2's reactions. kh1: always KH1's. |
 | `grabs` | on | KH1's ledge, vine and rope grabs and swimming take him out of KH2's falls. |

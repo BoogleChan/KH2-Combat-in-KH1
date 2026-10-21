@@ -13,7 +13,7 @@ The problems listed:
 
 This doc covers how KH1 plays Sora's motions (static RE of the Epic exe, checked against the
 user's `xa_ex_0010.mset`), how new slots get in, and how KH2 motions are turned into them. The
-`kh2_slots` ini key switches the prototype on (default off). Related docs: `animations.md` (every
+`kh1_slots` ini key switches the prototype (default on; `off` for the old look; renamed from `kh2_slots` at t311, the old key is ignored). Related docs: `animations.md` (every
 slot and motion), `shared-states.md`, `animation.md`, `kh1-kh2-model.md`. The other helper's
 physics work (KH2's physics inside KH1's system) is not covered here.
 
@@ -280,19 +280,19 @@ Not built yet: phase 4.
   - `sora_slot` gives the stand-in KH1 slot;
   - our slots are drawn by `Play::Slot` at KH1's time;
   - in tier B, not drawn at all.
-- **The borrow path stays** (`kh2_slots = off`, Drive Forms, moves with no slot yet) until every
+- **The borrow path stays** (`kh1_slots = off`, Drive Forms, moves with no slot yet) until every
   KH2 move has one.
 
 ## 5. Phases
 
 1. This doc. The glide slot fix (75..78).
 2. **Prototype (built, `kh2slots.rs`; untested in game):** KH2's 2nd ground swing (152) as KH1
-   slot 118, on request `0xC9` at Base Combo KH2, `kh2_slots = on`. Tier A: KH2's hit window,
+   slot 118, on request `0xC9` at Base Combo KH2, `kh1_slots = on`. Tier A: KH2's hit window,
    combo window and trail as KH1 events. KH2's sounds and effects are kept Rust side, not in
    the motion: `kh2slots::tick` reads them against KH1's time.
 3. **Built (untested in game):** the rest of the ground combo, 151 on `0xC8` / `0xCA` and 154 on
-   `0xCB`. With `kh2_slots = on` the slots are 118..121, in the order 152, 151 (for 98), 151 (for
-   100), 154. `kh2_slots = 152` (a list of KH2 motions) builds only those, for testing one at a
+   `0xCB`. With `kh1_slots = on` the slots are 118..121, in the order 152, 151 (for 98), 151 (for
+   100), 154. `kh1_slots = 152` (a list of KH2 motions) builds only those, for testing one at a
    time.
    - **Next:** the glide (205..207 on `0x71..0x74` / `0x76..0x79`). It needs `Play::Slot` to
      loop with KH1's loop range (`+0x288..+0x28C`), and the template's length kept or the loop

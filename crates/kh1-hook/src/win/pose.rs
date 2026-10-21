@@ -75,8 +75,8 @@ enum Play {
     /// slots sharing a `group` continue the same clip instead of restarting it.
     Motion { motion: u16, field: bool, looping: bool, group: u8 },
     /// A combo swing, stretched to the KH1 swing's length so hits stay in time: on the ground
-    /// KH2's 151 / 152 (its no-target rows) and 154 finishes; in the air 183 / 184 alternate and
-    /// 181 finishes. `second`: which of the two ground swings KH1's slot is (KH1's second swing
+    /// KH2's 151 / 152 (its no-target rows) and 154 finishes; in the air 181 / 182 alternate and
+    /// 183 finishes. `second`: which of the two ground swings KH1's slot is (KH1's second swing
     /// is KH2's second, the user: "sora base attack 2, kh2 base attack 2"), or `None` to
     /// alternate them swing by swing.
     Swing { air: bool, finisher: bool, second: Option<bool> },
@@ -640,7 +640,7 @@ pub fn load_kh2() {
                 }
             }
             log(&format!("KH1 Sora's motion table: {} slots", motions.len()));
-            // KH2's moves as new slots of that table (`kh2slots`, ini `kh2_slots`).
+            // KH2's moves as new slots of that table (`kh2slots`, ini `kh1_slots`).
             if let Some(Ok(k)) = KH2.get() {
                 super::kh2slots::prepare(&bytes, k);
             }
@@ -994,26 +994,6 @@ fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
     follow_play(s, slot, to_world, None)
 }
 
-/// KH2's early-release hop on KH1's jump (`shared::physics`): the frame of KH2's jump clip to show
-/// now (f32 bits; `u32::MAX` none), taken by `follow_play`.
-static JUMP_SKIP: AtomicU32 = AtomicU32::new(u32::MAX);
-/// KH1's takeoff: its rise slot starts this many frames before he leaves the ground (the user's
-/// traces t302/t303: slot 8 / 12 three frames before KH1's state 2), so KH2's jump clip is this far
-/// in at the lift.
-const JUMP_LIFT_LAG: f32 = 3.0;
-
-/// KH2's early release cut KH1's jump to a hop (the user: "kh2 jump doesn't transition into its 2nd
-/// animation when you let go of the jump button, I only saw the 2nd animation when I did a max
-/// jump"). KH2's jump clip (motion 3) is drawn at its own clock from the takeoff, so a hop fell into
-/// the fall loop before it reached the part a full jump shows round its apex. It goes on from the
-/// frame that puts the full jump's apex (`full_uptime` into the rise) at the hop's (`hop_uptime`).
-pub fn jump_released(full_uptime: f32, hop_uptime: f32) {
-    let target = JUMP_LIFT_LAG + full_uptime - hop_uptime;
-    if target.is_finite() && target > 0.0 {
-        JUMP_SKIP.store(target.to_bits(), Ordering::Relaxed);
-    }
-}
-
 /// KH2 Sora's item-use motion (P_EX100 motion 9, `A110`).
 const KH2_ITEM_USE: u16 = 9;
 
@@ -1046,6 +1026,16 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
         f.at = Some((pos, now));
     }
     let play = forced.or_else(|| slot.and_then(play_for));
+    // KH1's jump slots show KH2's jump while KH2's arc rises, then KH2's fall loop (KH2's own rule,
+    // `kh2_rig`): KH1 keeps its rise / apex slot well into the fall, longest after KH2's early
+    // release (the user: "letting go of jump still doesn't transition kh2 soras jump into his
+    // falling animation"; trace t304: released at f5680, KH1's fall slot only at f5699).
+    let play = match play {
+        Some(Play::Motion { motion, .. }) if forced.is_none() && motion == m2::JUMP && super::shared::physics::kh2_arc_falling() => {
+            Some(Play::Motion { motion: m2::FALL, field: false, looping: true, group: 0 })
+        }
+        p => p,
+    };
     let new_slot = slot != f.slot;
     if new_slot {
         if f.logged < 800 {
@@ -1090,9 +1080,9 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
                 (false, true, _) => 154,
                 (false, false, true) => 151,
                 (false, false, false) => 152,
-                (true, true, _) => 181,
-                (true, false, true) => 183,
-                (true, false, false) => 184,
+                (true, true, _) => 183,
+                (true, false, true) => 181,
+                (true, false, false) => 182,
             };
             // Stretch KH2's swing over KH1's, so the blade comes round when KH1's hit lands.
             let kh1_len = slot.and_then(|n| SLOTS.get()?.1.get(n).copied()).unwrap_or(0) as f32;
@@ -1152,20 +1142,6 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
         // (A banked glide the rig lacks: its plain glide.)
         .or_else(|| rig.motions.get(&m2::GLIDE).filter(|_| matches!(motion, m2::GLIDE_TURN_A | m2::GLIDE_TURN_B)))
         .or_else(|| rig.motions.get(&m2::IDLE))?;
-    // KH2's early-release hop (`jump_released`): the jump clip moved on to its apex part (only
-    // ever forward; a request with another motion showing is dropped).
-    let skip = JUMP_SKIP.swap(u32::MAX, Ordering::Relaxed);
-    if skip != u32::MAX && matches!(play, Play::Motion { .. }) && motion == m2::JUMP && kh1_time.is_none() {
-        let target = f32::from_bits(skip);
-        let at = f.since.map_or(0.0, |t| now.duration_since(t).as_secs_f32() * f.rate);
-        if target > at && f.rate > 1.0 {
-            f.since = now.checked_sub(std::time::Duration::from_secs_f32(target / f.rate)).or(f.since);
-            static N: AtomicU32 = AtomicU32::new(0);
-            if N.fetch_add(1, Ordering::Relaxed) < 20 {
-                log(&format!("KH2's jump released early: its clip on from frame {at:.0} to {target:.0} (the full jump's apex part)"));
-            }
-        }
-    }
     let frames = kh1_time.unwrap_or_else(|| f.since.map_or(0.0, |t| now.duration_since(t).as_secs_f32() * f.rate));
     let t = kh2_anim::key_time(clip, frames, looping);
     let mut pose = kh2_anim::evaluate(&rig.skeleton, clip, t, kh2_anim::Options::default()).bones;

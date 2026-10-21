@@ -1,3 +1,77 @@
+### 2026-10-21: Stage 313 (testing branch: a KH1 air swing out of KH2's jump hops, it doesn't keep the jump's rise)
+- The user's traces (physics KH2, KH1 air combo): a swing started just after KH2's jump took off
+  kept the jump's remaining rise (`kh1phys::keep_momentum` takes KH2's arc when it rises more than
+  the swing's hop), so Sora climbed from ~50 to ~214 while swinging; at physics KH1, and with
+  KH2's own air swing (its hop replaces the jump's rise, ~+12), he doesn't.
+  `kh1_air_attack_started` takes `keep_rise`: false for KH1's air attack out of KH2's jump arc on
+  KH1's air state (`combat::command`'s first branch): the swing's own hop and arc, the faster
+  sideways speed kept. True, as before, out of a KH2 move (an Aerial Dodge).
+
+### 2026-10-21: Stage 312 (testing branch: KH2's air swings in KH2's order as KH1 slots)
+- The `select_triangle` trace (t311): the three air swings played from slots 102 / 103 / 104, but
+  stage 310 had built them as 183 / 184 / 181, not KH2's own air order. KH2's air combo is
+  181 <-> 182 with 183 as the finisher (`docs/movement-model.md`, the stage 307 trace "Attack
+  181 / 182 / 183"). `kh2slots::SPECS` and `pose::Play::Swing` now give 102 -> 181, 103 -> 182,
+  104 -> 183.
+- The "KH2 would take row ..." log line (`combomods::attack`) still shows 181 for both swings: it asks
+  a trial copy of KH2's controller with no attack playing, so the anti-repeat step never fires.
+  The log only; it doesn't choose the slots' motions.
+
+### 2026-10-21: Stage 311 (testing branch: `kh1_slots`, on by default)
+- The user: "can you change it to be kh1_slots? (kh2_slots sounds like kh2 is taking control, not
+  kh1) and yes lets turn it on". The ini key `kh2_slots` is now `kh1_slots`, default `on` (a missing
+  key is on; `off` gives the old borrow / draw-over path). An ini's old `kh2_slots` line is
+  ignored. `Settings::kh1_slots`; the module is still `kh2slots.rs`.
+
+### 2026-10-21: Stage 310 (testing branch: KH2's air swings as KH1 motion slots)
+- The user: "can you add kh2s air attacks as slots in kh1?" `kh2slots.rs` (`kh2_slots = on`, or a
+  list) now builds KH2's aerial combo as slots 122..124 after the ground ones, standing in for
+  KH1's air combo (slots 102 / 103 / 104, requests 0xCC / 0xCD / 0xCE): 183, 184 and the
+  finisher 181 (`pose::play_for`'s mapping). Tier A as for the ground combo: KH1's clock, hit /
+  combo / trail windows, blends and sounds; KH2's motion drawn at KH1's time; KH2's sounds and
+  effects from `kh2slots::tick`.
+- With them built, `shared::kh1_combo(air)` is true at Aerial Base Combo KH2 too (`kh2slots::covers`):
+  the Attack in the air stays in KH1's air state instead of borrowing him for KH2's air combo,
+  so the borrow's hand-backs (stage 308's KH2 High Jump) don't apply to it. Hits, damage and
+  lunge are KH1's (its attack rows), as at the ground combo.
+- A request that isn't the slot a spec expects is now logged and that motion left out, not a
+  failure of the whole table.
+- Untested in game. Look for "KH2 slots: KH2 motion 183 / 184 / 181 as KH1 slot" in the log.
+
+### 2026-10-21: Stage 309 (testing branch: stage 308 reverted)
+- The user: "I'm still able to kh2 high jump, can you revert our changes" (trace t308: KH2's High
+  Jump, motion 201, again out of KH2's air swing). `kh2_jump_open` is back to stage 307's (free
+  states and command windows only; no trial step on a copy of KH2's controller).
+
+### 2026-10-21: Stage 308 (testing branch: a jump out of the end of KH2's move is KH1's, again)
+- The user: "do you know why I transition into kh2 high jump" (trace t305, Jump KH1, Physics
+  KH2). A KH1 jump, an Attack in the air (Aerial Base Combo KH2: KH2 borrows him), KH2's air
+  swing (motion 181) touching down on its last frame at f16228; the jump pressed at f16229 went to
+  KH2's controller, which jumped him itself: KH2's High Jump (motion 201, his High Jump ability),
+  not KH1's jump. No `Land` came between (the swing's end took the jump), so stage 307's landing
+  hand-back didn't apply. `JUMP_OUT` (s261: a fresh ground jump where KH2's move can be left is
+  KH1's own) asked `kh2_jump_open`, which knew only free states and command windows; the swing's
+  end is neither, but KH2's own action takes a jump there (its cancel window, `f >= length`).
+  `kh2_jump_open` now also tries the press on a copy of KH2's controller: if it would jump, the
+  jump is KH1's. (The Aerial Dodge after it is by design: the jump press in the air is KH2's.)
+
+### 2026-10-21: Stage 307 (testing branch: KH1 lands KH2's air moves in its own states)
+- The user: KH1 should handle landing KH2's attacks with its own internal animation state instead of
+  giving it back (the `select_triangle` trace: Attack 181 / 182 / 183 in the air, then KH2's `Land`
+  for 26 frames with KH1 sitting in state 0 / motion 0 the whole time, then idle gave him back).
+  `shared::give_back` now returns `Back::Land` the moment KH2's controller enters `Land` on the
+  floor: `shared_give_back` sets KH1's fall state (2) with the mirrored momentum, as for `Back::Air`,
+  and KH1's own state step lands him (its landing request and slot 11, its hold, its can-act
+  rules), at either Jump style (KH2 draws its land over slot 11 at KH2). A command or press of KH2's
+  still waiting keeps KH2's `Land` as before. KH1's own air casts landing into KH2's hold
+  (stage 163, `land_now`) are unchanged.
+
+### 2026-10-21: Stage 306 (testing branch: KH2's landing after an air move plays out)
+- The user's trace (`select_triangle`): an air attack touched down into KH2's Land (motion 5), but
+  `shared::give_back` counted `Land` as over (grounded, no combo) and handed him to KH1 two frames
+  in, so the landing hold never showed. `Land` is out of the give-back; it ends into idle (or walk
+  / run after the hold), and those give him back.
+
 ### 2026-10-20: Stage 295 (testing branch: KH2's physics in KH1's fields; KH2 animations as KH1 motion slots)
 - The user: "kh2s physics gets written into kh1s internal physics system instead" (a KH1 air move
   out of a KH2 air move had no momentum). KH2's every 60 Hz step is mirrored into KH1's own
@@ -50,6 +124,15 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 ```
 
 ## Development log
+
+### 2026-10-21: Stage 305 (testing branch: KH2's jump hands over to its fall loop at the apex)
+- The user: "letting go of jump still doesn't transition kh2 soras jump into his falling
+  animation" (the "2nd animation" of stage 304 was the fall). Trace t304: released at f5680, the
+  hop's apex 5 frames later, but KH1 kept its apex slot 9 (drawn as KH2's jump) to f5699 before its
+  fall slot 10. KH2's own rule (`kh2_rig`): the jump plays while rising, then the fall loop. `pose`
+  now shows KH2's fall (motion 4) on KH1's jump slots (8/9, 12/13) once KH2's arc on KH1's air
+  state is past its apex (`shared::physics::kh2_arc_falling`, set in `air_step`), for every jump,
+  a full one too. Stage 304's skip of the jump clip is taken out.
 
 ### 2026-10-21: Stage 304 (testing branch: a released jump shows KH2's jump clip's apex part)
 - The user: "kh2 jump doesn't transition into its 2nd animation when you let go of the jump button,

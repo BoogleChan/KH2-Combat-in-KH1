@@ -433,7 +433,7 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
         let on_kh2 = if actor == sora && kind == 1 { super::shared::physics::kh2_air_motion(actor) } else { None };
         f(actor, dir);
         if let Some(m) = on_kh2 {
-            super::shared::physics::kh1_air_attack_started(actor, &m);
+            super::shared::physics::kh1_air_attack_started(actor, &m, false);
         }
         return;
     }
@@ -510,7 +510,7 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
         // KH1's air attack out of KH2's move: its start replaced the speed and arc carried in with
         // its own lunge and hop; the faster and the higher are kept (`shared::physics`).
         if let Some(m) = carried.filter(|_| kind == 1) {
-            super::shared::physics::kh1_air_attack_started(actor, &m);
+            super::shared::physics::kh1_air_attack_started(actor, &m, true);
             // (Its lunge, which KH1's start leaves at 0 out of KH2's move: once it plays.)
             super::shared::physics::kh1_air_attack_from_kh2();
         }

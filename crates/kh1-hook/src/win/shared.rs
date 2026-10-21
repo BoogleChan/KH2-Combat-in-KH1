@@ -62,9 +62,11 @@ pub const GLIDE_SLOTS_END: usize = 78;
 
 /// The Attack command runs KH1's own row where he is (KH1's command step, `combat::exec`): the
 /// ground combo is a shared move (KH1's states at either style, KH2's swings and lunges drawn on
-/// them at KH2: `pose::follow`, `physics`); the air combo is KH1's at KH1 and a KH2 borrow at KH2.
+/// them at KH2: `pose::follow`, `physics`); the air combo is KH1's at KH1 and a KH2 borrow at KH2,
+/// unless `kh1_slots` has built KH2's air swings as slots (181 / 182 / 183 on KH1's 102..104):
+/// then it is KH1's air state at either style, KH2's swings played in its motion table.
 pub fn kh1_combo(air: bool) -> bool {
-    !air || styles::kh1_now(Kind::AirCombo)
+    !air || styles::kh1_now(Kind::AirCombo) || super::kh2slots::covers(Kind::AirCombo)
 }
 
 /// KH2's motion is drawn over this KH1 slot: its style is KH2's (base Sora; a Drive Form draws
@@ -285,6 +287,9 @@ pub fn control(s: &Seen) -> u32 {
 pub enum Back {
     Ground,
     Air,
+    /// KH2's air move touched down (its `Land`): KH1's fall state on the floor, so KH1 lands him
+    /// itself (its landing slot, its hold, its can-act rules) instead of KH2 playing the landing.
+    Land,
 }
 
 /// Frames KH2's controller has been in a state KH1 shares.
@@ -297,8 +302,16 @@ const AIR_COMBO_DONE: u32 = 24;
 /// `combo`: KH2's combo going and frames since its last swing; `waiting`: a command or press of
 /// KH2's still to run.
 pub fn give_back(state: StateName, grounded: bool, falling: bool, combo: (bool, u32), waiting: bool) -> Option<Back> {
+    // KH2's air move has touched down: KH1 lands him (t307: "kh1 needs to handle landing kh2
+    // attacks with its own internal animation state instead of giving it back"; t306 let KH2's own
+    // `Land` hold play out and gave him back at idle). At once: no wait for a second frame. A
+    // command or press of KH2's still to run keeps KH2's landing, as before.
+    if state == StateName::Land && grounded && !waiting {
+        SHARED_FRAMES.store(0, Ordering::Relaxed);
+        return Some(Back::Land);
+    }
     let back = match state {
-        StateName::Idle | StateName::Walk | StateName::Run | StateName::Land if grounded && !combo.0 => Some(Back::Ground),
+        StateName::Idle | StateName::Walk | StateName::Run if grounded && !combo.0 => Some(Back::Ground),
         StateName::Air if !grounded && falling && (!combo.0 || combo.1 >= AIR_COMBO_DONE) => Some(Back::Air),
         _ => None,
     };
@@ -604,6 +617,16 @@ pub mod physics {
         m
     }
 
+    /// The last game frame KH2's arc on KH1's air state was past its apex (`air_step`), 0 none.
+    static ARC_FALL_FRAME: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    /// KH2's arc on KH1's air state is falling this frame (or was last frame): KH2's jump clip has
+    /// handed over to its fall loop, as KH2's own does (`kh2_rig`: the jump plays while rising).
+    pub fn kh2_arc_falling() -> bool {
+        let f = ARC_FALL_FRAME.load(Ordering::Relaxed);
+        f != 0 && game_frame().saturating_sub(f) <= 1
+    }
+
     /// KH1's aerial combo swings' own lunge (their starting sideways speed, units a 60 Hz frame,
     /// along his facing), as KH1's own combo starts them: the same in every room, with or without
     /// a target or the stick (the user's traces t299: 7.80, 3.90, 11.70, each slowed by
@@ -664,7 +687,7 @@ pub mod physics {
     /// what was there (`0x1402A4760`); it keeps the faster speed and the higher rise
     /// (`kh1phys::keep_momentum`). A spell keeps KH1's own rule (half the sideways speed,
     /// `0x1402A5380`) and the carried arc, which KH1's cast leaves alone.
-    pub unsafe fn kh1_air_attack_started(actor: usize, before: &Motion) {
+    pub unsafe fn kh1_air_attack_started(actor: usize, before: &Motion, keep_rise: bool) {
         if rd::<i32>(actor + 0x70) != 2 {
             return;
         }
@@ -673,7 +696,14 @@ pub mod physics {
             // (No attack started: KH2's own took the press, or KH1 refused it.)
             return;
         }
-        let kept = kh1phys::keep_momentum(before, &now);
+        // Out of KH2's jump arc on KH1's air state the swing's own hop replaces the jump's rise, as
+        // KH2's own air swing does (the t312 trace: a swing at the jump's start kept ~235 of rise and
+        // sent him to 214 up); the faster sideways speed is still kept. Out of a KH2 move (an Aerial
+        // Dodge) the rise is kept.
+        let kept = {
+            let k = kh1phys::keep_momentum(before, &now);
+            if keep_rise { k } else { Motion { h: k.h, arc: now.arc } }
+        };
         if kept != now {
             set_kh1_motion(actor, &kept, dt());
         }
@@ -725,7 +755,7 @@ pub mod physics {
     /// gravity and fall, its jump for the jump and High Jump, its walk and run, its air steering
     /// and drag, from his stats now); else the moveset's own (`template`: KH2 Sora's, or the
     /// form's). So KH2's borrowed moves (Aerial Dodge, KH2's air combo, its roll, Quick Run, its
-    /// spells) and the `kh2_slots` moves it runs move on KH1's numbers; what they bring themselves
+    /// spells) and the `kh1_slots` moves it runs move on KH1's numbers; what they bring themselves
     /// (Aerial Dodge's height and speed, Quick Run's speed and brake, root motion, an attack row's
     /// hop and lunge) stays theirs, under KH1's gravity and fall (`docs/kh1-physics.md` §7).
     pub unsafe fn kh2_controller(actor: usize, ch: &mut Character, template: &Character) {
@@ -1094,15 +1124,16 @@ pub mod physics {
             let held = super::super::takeover::buttons() & super::super::takeover::jump_button() != 0;
             if !held && air.arc.t > character_core::HOLD_MIN_FRAMES && air.arc.t < air.arc.uptime - character_core::HOLD_APEX_MARGIN {
                 let hop = character_core::release_hop(n.gravity);
-                let full = air.arc.uptime;
                 air.arc = Arc::new(hop, n.gravity);
-                // KH2's jump clip on to its apex part, as the full jump shows it (`pose`).
-                super::super::pose::jump_released(full, air.arc.uptime);
             } else if air.arc.t >= air.arc.uptime - character_core::HOLD_APEX_MARGIN {
                 air.arc.holdable = false;
             }
         }
         let up = air.arc.advance(dt, n.gravity, n.fall_max);
+        // Past the arc's apex (a released jump's hop included): KH2's fall loop shows (`pose`).
+        if !air.arc.rising() {
+            ARC_FALL_FRAME.store(game_frame().max(1), Ordering::Relaxed);
+        }
         let d = &mut *disp;
         d[1] = -up;
         air.last_y = y;

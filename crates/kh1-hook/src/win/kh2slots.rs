@@ -1,4 +1,4 @@
-//! KH2's motions as new slots in KH1 Sora's own motion table (ini `kh2_slots = on`; the user:
+//! KH2's motions as new slots in KH1 Sora's own motion table (ini `kh1_slots = on`; the user:
 //! "lets have it so that our kh2 animations can run entirely through kh1s animation system as new
 //! animation slots"). `docs/kh1-anim-slots.md` has the RE and the plan; this is its phase 2.
 //!
@@ -58,11 +58,19 @@ struct Spec {
 /// (152; the user: "sora base attack 2, kh2 base attack 2"); slot 100 (0xCA, taken as another
 /// swing) KH2's first; its finisher (101, 0xCB) KH2's finisher (154; "kh1 base finisher, kh2 base
 /// finishers").
-const SPECS: [Spec; 4] = [
+///
+/// KH1's air combo (slots 102..104, requests 0xCC..0xCE), KH2's aerial swings for it as `pose`
+/// draws them: 181 for KH1's first air swing (102), 182 for its second (103), 183 for its finisher
+/// (104), KH2's own order in the air (181 / 182 alternate, 183 finishes). With these built, the Attack in the air at Aerial Base Combo KH2 stays in KH1's air
+/// state (`covers`, `shared::kh1_combo`) instead of borrowing him for KH2's own air combo.
+const SPECS: [Spec; 7] = [
     Spec { motion: 152, stands_for: 99, request: 0xC9, kind: Kind::GroundCombo },
     Spec { motion: 151, stands_for: 98, request: 0xC8, kind: Kind::GroundCombo },
     Spec { motion: 151, stands_for: 100, request: 0xCA, kind: Kind::GroundCombo },
     Spec { motion: 154, stands_for: 101, request: 0xCB, kind: Kind::GroundCombo },
+    Spec { motion: 181, stands_for: 102, request: 0xCC, kind: Kind::AirCombo },
+    Spec { motion: 182, stands_for: 103, request: 0xCD, kind: Kind::AirCombo },
+    Spec { motion: 183, stands_for: 104, request: 0xCE, kind: Kind::AirCombo },
 ];
 
 pub struct Move {
@@ -89,7 +97,7 @@ static BUILT: OnceLock<Option<Built>> = OnceLock::new();
 
 /// Builds our motions (the loader thread, `pose::load_kh2`): `mset` is KH1 Sora's file.
 pub fn prepare(mset: &[u8], kh2: &pose::Kh2) {
-    let Some(which) = super::settings::get().kh2_slots.clone() else {
+    let Some(which) = super::settings::get().kh1_slots.clone() else {
         let _ = BUILT.set(None);
         return;
     };
@@ -106,7 +114,9 @@ pub fn prepare(mset: &[u8], kh2: &pose::Kh2) {
                 continue;
             };
             if requests.get(s.request).map(|e| (e & 0xFFF) as usize) != Some(s.stands_for) {
-                return Err(format!("request {:#x} is not KH1's slot {}", s.request, s.stands_for));
+                // (Left out, not a failure of the rest: one wrong request shouldn't drop the others.)
+                log(&format!("KH2 slots: request {:#x} is not KH1's slot {}; KH2 motion {} left out", s.request, s.stands_for, s.motion));
+                continue;
             }
             let template = ks::motion_bytes(mset, s.stands_for).map_err(|e| e.to_string())?;
             let old = u32::from_le_bytes(template[4..8].try_into().unwrap());
@@ -185,6 +195,13 @@ fn built() -> Option<&'static Built> {
 
 fn moved(slot: usize) -> Option<&'static Move> {
     built()?.moves.iter().find(|m| m.slot == slot)
+}
+
+/// Every slot of this kind of move is built (so KH1's state can own the whole move at KH2's
+/// style, not just part of its combo).
+pub fn covers(kind: Kind) -> bool {
+    let Some(b) = built() else { return false };
+    SPECS.iter().any(|s| s.kind == kind) && SPECS.iter().filter(|s| s.kind == kind).all(|s| b.moves.iter().any(|m| m.request == s.request))
 }
 
 /// Our slot's KH2 motion, if `slot` is one of ours.

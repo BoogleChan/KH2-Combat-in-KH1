@@ -1636,9 +1636,11 @@ unsafe fn kh1_fall_speed(actor: usize, vel: Option<([f32; 2], f32)>) -> ([f32; 2
 /// KH2's move is over (`shared::give_back`): KH1's own states again, on the ground or falling
 /// (KH1's fall state as an air command sets it: the air-time fields, KH2's sideways speed).
 unsafe fn shared_give_back(base: usize, actor: usize, d: &mut Driver, back: super::shared::Back, out: &Output) {
-    if back == super::shared::Back::Air {
+    if matches!(back, super::shared::Back::Air | super::shared::Back::Land) {
         // (KH1's air state from KH2's motion, which this step wrote into its fields: KH1's own fall,
-        // or KH2's arc on it with physics KH2, goes on at KH2's speed, `shared::physics`.)
+        // or KH2's arc on it with physics KH2, goes on at KH2's speed, `shared::physics`. For
+        // `Land`, with the floor under him: KH1's air state lands him itself, its landing request
+        // and hold, as out of any fall of its own.)
         let set: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(base + SET_STATE_RVA);
         set(actor, 2);
         super::shared::physics::kh1_takes_air(actor);
@@ -1647,7 +1649,12 @@ unsafe fn shared_give_back(base: usize, actor: usize, d: &mut Driver, back: supe
     }
     d.last_state = None;
     d.held = (true, true);
-    to_kh1_states(&format!("KH2's move is over ({:?}): KH1's own states {}", out.state, if back == super::shared::Back::Air { "falling" } else { "on the ground" }));
+    let how = match back {
+        super::shared::Back::Air => "falling",
+        super::shared::Back::Land => "landing (KH1's fall state on the floor: KH1's own landing)",
+        super::shared::Back::Ground => "on the ground",
+    };
+    to_kh1_states(&format!("KH2's move is over ({:?}): KH1's own states {how}", out.state));
 }
 
 unsafe fn takeover(actor: usize) -> bool {
