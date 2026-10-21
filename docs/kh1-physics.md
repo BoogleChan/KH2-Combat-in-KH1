@@ -41,8 +41,11 @@ Actor fields (Sora is the party's first actor, `0x142D37C80`):
 | flags `+0x0` | `4` an action runs; `0x1000` held in the air; `0x2000`; `0x10000` jumped off something; `0x40000` early-release cut open; `0x400` state changed this frame | [high] for 4 / 0x400 / 0x10000 / 0x40000, [med] others |
 
 Sora's stats block (`+0x6C`): `+4` walk 2.0, `+8` run 8.0, `+0x10` jump height, `+0x14` air
-acceleration, `+0x18` air drag (per 30 Hz frame). `+0x14` / `+0x18` are logged once by
-`shared::physics::takeoff` (not read yet). [high: offsets; values at runtime]
+acceleration, `+0x18` air drag (per 30 Hz frame). KH1's takeoff (`0x1402ADC10`) reads only
+`+0x10` for every jump (no High Jump branch: its High Jump raises the stat; the s261 log's 290 at
+High Jump). With physics KH1 all five are read each frame KH2's controller has him
+(`shared::physics::kh2_controller`, logged when they change); `+0x14` / `+0x18` are also logged by
+`shared::physics::takeoff`. [high: offsets, the takeoff; values at runtime]
 
 There is **no vertical velocity**. The vertical motion is a curve of height against air time:
 
@@ -118,9 +121,10 @@ motion is the jump's (4 / 9), a launch from the stats' jump height (`t 0, y0 = y
 **State 2's step** `0x1402AD510` (the jump's rise and every fall):
 - Flag `0x1000` (held in the air): the arc starts over at his height, no move.
 - Sideways, stick let go (`+0x2C` ≤ 0): `+0x3C0 ×= drag` (`stats[+0x18]`, its square root at 60
-  fps). Stick held: `+0x3C0 += +0x20 × stats[+0x14] × +0x2C`, its length kept to the larger of
-  its old length and the run speed (so speed above the run is kept while steering, never
-  gained). Moved by `+0x3C0 × dt`.
+  fps). Stick held: `+0x3C0 += +0x20 × stats[+0x14] × +0x2C` (once a game frame, no frame scale
+  on the add), its length kept to the larger of its old length and the stats' run `+8` (so
+  speed above the run is kept while steering, never gained). Moved by `+0x3C0 × dt`. No action
+  test: it runs in KH1's air attacks too.
 - Vertical: `t += dt`, the curve above (§1), `+0x3C4` = the frame's drop; rising, the apex
   motion (`0x1402AD4A0` / `0x2AF630`: 6 frames before the apex, `0x14043088C`).
 - `y0 += +0x124` (the push's y).
@@ -196,11 +200,12 @@ KH1's fields are where momentum lives, whoever moves him (`kh1phys`, `shared::ph
    KH1 air move never has less momentum than it took over, nor less than KH1 gives it. Spells
    keep KH1's own rule (half the sideways speed) and the carried arc. Only the first KH1 move out
    of KH2's motion: KH1's later swings are KH1's.
-4. **KH2's numbers on KH1's states** (Jump at KH2, `air_step`): each frame KH1's arc and air speed
-   are KH2's (`Arc::from_kh2`), moved to where he is before KH1's own step reads them (a floor, a
-   ceiling, a push), unless KH1 changed them (its own move's start). KH1's own action in the air
-   (flag 4) moves him from there; after it, KH2's arc picks up from KH1's fields (`Arc::to_kh2`),
-   not from rest.
+4. **KH2's numbers on KH1's states** (physics KH2, `air_step`; before §7's setting, Jump at
+   KH2): each frame KH1's arc and air speed are KH2's (`Arc::from_kh2`), moved to where he is
+   before KH1's own step reads them (a floor, a ceiling, a push), unless KH1 changed them (its own
+   move's start): then KH2's arc goes on from KH1's (`kh1phys::kh1_arc_on_kh2`). KH1's own action
+   in the air (flag 4) keeps its own lunge and hop on KH2's gravity, fall and drift (§7; before,
+   KH1's numbers moved it and KH2's arc picked up from KH1's fields after it).
 5. **KH2 takes him from KH1's air state** (`takeover::kh1_fall_speed`): KH1's air speed and its
    arc's slope (`kh1_velocity`); outside state 2, his travel over the frame divided by the frame
    scale.
@@ -216,38 +221,140 @@ and push would be added once per 60 Hz substep at 30 fps (twice), and `+0x490` w
 substep's. `takeover`'s floor rules exist for those. With the fields written each step, KH1 has
 the same motion to go on from either way.
 
-## 7. The switch point (the later "physics = kh1 / kh2" setting)
+## 7. The physics setting (`physics = kh1 | kh2`)
 
-`shared::physics::source(kind) -> Source` is the one place that says whose numbers move base Sora
-in a kind of move on KH1's states; `shared::physics::kh2` (the wrappers' test) asks it. `Rule`
-(`set_rule`, not in the ini yet):
+The user (testing): "lets add a setting to have the physics either be kh1 or kh2, if its kh1 then
+all the animations (vanilla, and our kh2 animations were now adding as a custom animation with
+our rewrite) will run with kh1s physics (with exceptions to drive forms) if its kh2 then all the
+animations (including vanilla animations) will run with kh2s physics instead"; then, on s295:
+"BUG: In the config there's not a setting to switch between KH1 and KH2 physics".
 
-- `Style` (now): per move style, as before.
-- `Kh2` ("all the animations (including vanilla animations) will run with kh2s physics"): every
-  shared move on KH1's states gets KH2's numbers whatever its style (walk / run speed, jump arc,
-  glide, swing travel from KH2's swing over KH1's). Works through `source` as it is. Still to
-  decide: KH1-only air moves (its air attacks' lunge and hop, its air casts' fall) have no KH2
-  numbers; KH1's swing travel at Base Combo KH1 needs `pose::swing_motion` for KH1's swings (it
-  maps 98 / 99 / 101 already).
-- `Kh1` ("all the animations ... will run with kh1s physics (with exceptions to drive forms)"):
-  KH1's numbers on KH1's states whatever the style: works through `source`. KH2's own moves
-  (its borrows: Aerial Dodge, KH2's air combo, its roll, Quick Run, its spells, Reflect) still
-  run on KH2's controller with KH2's numbers. To give them KH1's physics: KH2's controller's
-  `MoveParams` set to KH1's while the rule is `Kh1` and no form is on (gravity 0.4847, fall cap
-  20, jump heights from the stats `+0x10` / High Jump's, air keep / drag from `stats[+0x14]` /
-  `[+0x18]`), and a choice for the moves KH1 has no numbers for (Aerial Dodge's height and
-  speed, Quick Run, the roll's root travel). Drive Forms keep KH2's (`source` returns `Kh2` in a
-  form).
+- **Where:** ini `physics = kh1 | kh2` (KH2's when the key is missing or is anything else, an
+  older ini's hair switch `physics = on / off` included); the Config menu's **Physics** row (KH1 /
+  KH2, right after Camera Style), switched live and saved to the ini as the other rows are; the
+  log says "physics: ..." at start and "Config menu: physics KH1 (was KH2): ..." on a change. The
+  hair's switch is `hair_physics` now (an older ini's `physics = on / off` is still read for it,
+  and is written out as `hair_physics` the first time the row is used, so it isn't lost).
+- **Code:** `kh1phys::Rule` (`parse`, `source(in_form)`), `shared::physics::rule` / `set_rule` /
+  `source()`. `source()` is the one switch point: the setting, and KH2's in a Drive Form. The
+  per-move styles choose the animations only (and whether KH2 borrows him for a KH2-only move);
+  the old per-style rule (`Rule::Style`) is gone.
+
+### Physics KH2: KH2's numbers on everything base Sora does
+
+On KH1's own states (`shared::physics`'s wrappers, whatever the styles):
+
+| Move | Numbers |
+|---|---|
+| walk, run | KH2's walk / run speed (KH1 still picks walk or run, and so the animation) |
+| jump, High Jump | KH2's arc: its height (KH2's jump, or High Jump's growth height at Sora's level), gravity 20/49, early-release hop, fall cap 16 |
+| falls (off a ledge, out of a ladder, after a KH1 move) | KH2's arc from KH1's fields (`Arc::to_kh2`) |
+| air drift | KH2's `air_keep` toward the stick at KH2's walk / run speed, `air_drag` without it, per KH2 tick (two 60 Hz frames; earlier builds applied them per 60 Hz frame, twice KH2's) |
+| ground combo swings (98..101), either Base Combo style, `kh2_slots` too | the root travel of KH2's swing for that slot (`pose::swing_motion`: 98 / 100 → 151, 99 → 152, 101 → 154), stretched over KH1's swing |
+| glide, Superglide | KH2's glide speed, fall and turn at Sora's Glide level (level 1 at least: KH1 glides him only with its Glide) |
+| KH2's borrowed moves | KH2's controller as it is; its air casts KH2's own (the cast motions' no-gravity frames), not KH1's fall (before: only with Aerial Magic at KH2) |
+
+**KH1-only moves with no KH2 numbers** (the choices):
+
+- **KH1's air attacks** (rows 0xF..0x12): their own lunge (8 / 12 / 4 along the target or the
+  stick, `+0x3C0`) and hop height (40 / 40 / 20 / 20) are the move's own, like a KH2 attack row's
+  hop and speed; they move on KH2's numbers: the hop as **KH2's hop of that height** (KH2's rise
+  time for it under KH2's gravity, as KH2's own attack hops: `kh1phys::kh1_arc_on_kh2`), KH2's
+  fall after, capped at 16, and **KH2's drift without the stick** (`air_drag` a tick, as KH2's own
+  air attacks outside an allow-movement range) in place of KH1's steering during the move. Out of
+  KH2's motion, `keep_momentum` still keeps the faster speed and the higher rise.
+- **KH1's air casts**: KH1's own start (half the sideways speed) is kept; the arc it leaves alone
+  goes on at KH2's gravity and fall; KH2's drift as above.
+- **A blow's launch in KH1's air state** (flag 4, its own hop): as an air attack's hop.
+- **KH1's hold in the air** (flag `0x1000`): KH1's (no move to put numbers on).
+- **KH1's other ground actions** (its roll, an item's use, a ground cast, its specials and
+  summons): their own travel, as KH1 has it. KH2 has no numbers for them (its own roll is root
+  motion; its items aren't moves).
+- **KH1's other states** (ladders, poles, swimming, flight, ledges, state 3's linear fall):
+  KH1's. Not "moves" with physics numbers of KH2's (KH2's ledge hang and climb are root motion).
+- **`shared = off`** (the old model): the wrappers run only while KH1's states have him in the
+  shared model (`shared::active`), so KH1's own jump and glide handed over by `stylejump` (Jump
+  / Glide at KH1) stay on KH1's numbers there. Not covered.
+
+### Physics KH1: KH1's numbers on everything base Sora does
+
+KH1's own states are KH1's (none of the wrappers run). KH2's controller, while it has base Sora
+out of a form, gets KH1's numbers each frame before its step (`shared::physics::kh2_controller`;
+`kh1phys::kh1_params`, `kh1_growth`; back to the moveset's own with physics KH2 or in a form):
+
+| KH2's number | KH1's | Source |
+|---|---|---|
+| `gravity` | 0.48469388 | `0x1403EAB54` [high] |
+| `fall_max` | 20 a 60 Hz frame | `0x1404308B8` [high] |
+| `jump_height`, every growth level's `high_jump_height` | stats `+0x10` (KH1 has one jump height; its High Jump raises it) | the takeoff `0x1402ADC10` [high] |
+| `walk_speed`, `run_speed` | stats `+4`, `+8` | [high] |
+| `run_threshold` | 0.8 | KH1's ground step's walk / run pick [med] |
+| `air_accel` (new in `character-core`), `air_drag` | stats `+0x14`, `+0x18` | `0x1402AD510` [high: the rule; values at runtime] |
+
+KH2's arcs are KH1's with these exactly: the same rise curve with `T = sqrt(2H / g)`, the same
+fall `g/2 (t - T)²` (tests below). `air_accel` is KH1's steering in `character-core`'s air control
+(0 = KH2's `air_keep`): the stick adds `direction × walk or run speed × air_accel` a 60 Hz frame
+(two a tick), the length kept to the larger of the old length and the run speed; with the stick let
+go, `air_drag` a tick (KH1's drag is per 30 Hz frame, a KH2 tick). A stat that isn't a sane number
+keeps KH2's (logged); the steering takes both `+0x14` and `+0x18` or neither.
+
+So **KH2's borrowed moves and the `kh2_slots` moves** run on KH1's physics: Aerial Dodge, KH2's
+air combo, its roll and guard, Quick Run, its spells and Reflect, its jump out of them, a fall
+handed to KH1 (`mirror` writes KH1's fields from KH1's numbers now). With `shared = off` (the old
+model) KH2's controller has him for idle / walk / run / jump too: those get KH1's numbers the same
+way.
+
+**KH2-only numbers kept** (the choices; each under KH1's gravity, fall cap and air steering):
+
+- **Aerial Dodge**: its height and speed (KH2's growth table; KH1 has no double jump). Its rise
+  is `Arc::new(height, KH1's g)`: the same height, a shorter rise.
+- **KH2's attack rows** (the air combo's hops and lunges, `jump`, `speed_min / max`, the target
+  height clamp): theirs; their arcs under KH1's gravity (their rise time to the target from it).
+- **Root motion** (the roll, KH2's swings' travel, Quick Run's start, the finishers): the
+  animation's own travel, unchanged.
+- **Quick Run**: its speed, time and brakes (KH2's growth table; no gravity in it).
+- **The glide** (only with `shared = off`; with it on the glide is KH1's glide state): KH2's glide
+  numbers (KH1's glide numbers are in its glide step's code, not read).
+- **The early-release hop** of KH2's jump (`release_hop`: `g × 12.5`, so KH1's g's): KH2's rule.
+  KH1's own early cut (flag `0x40000`) isn't read.
+- **Air casts**: KH1's fall (`air_magic_falls`, `air_cast_fall` of KH1's gravity, cap 20), as
+  KH1's spells sink.
+- **The turn rate, ledge grabs, blows, wall hops, ceilings, hit-back**: KH2's (KH1's not read).
+
+### Drive Forms
+
+Always KH2's: `source()` is KH2's in a form, so none of KH1's numbers go into a form's controller
+(its moveset's own `MoveParams`, swapped in by `form::swap`; `kh2_controller` puts the form's back
+if KH1's were in). Their air casts are as before (Final Form KH2's own; Valor / Wisdom KH1's fall,
+`air_cast_fall`: unchanged by this setting).
+
+### Tests (`kh1phys`)
+
+- `the_physics_setting_reads_kh1_or_else_kh2_and_forms_are_kh2s`
+- `kh1_params_are_kh1s_numbers_and_keep_kh2s_where_kh1_has_none`
+- `kh2s_controller_on_kh1s_numbers_jumps_kh1s_arc` (KH2's controller's jump with KH1's numbers:
+  KH1's height, rise time and curve)
+- `kh2s_controller_on_kh1s_numbers_falls_at_kh1s_cap` (20, and 16 with KH2's)
+- `kh2s_controller_on_kh1s_numbers_steers_as_kh1s_air_state` (added up to the run, faster kept,
+  KH1's drag)
+- `a_kh1_hop_on_kh2s_numbers_is_kh2s_hop_of_that_height`
 
 ## 8. Unverified
 
 - In game: all of it. The sim tests (`kh1phys` tests, `character-core`'s
   `air_arc_matches_where_he_is`) check the arithmetic: KH2's rise goes on exactly in KH1's fields
-  at 60 and 30 fps, a fall at its speed, the hand-over of an Aerial Dodge into KH1's air attack.
+  at 60 and 30 fps, a fall at its speed, the hand-over of an Aerial Dodge into KH1's air attack,
+  KH2's controller on KH1's numbers (§7).
 - That nothing of KH1's reads `+0x3C0` or the arc fields in state 0 while KH2 has him (the mirror
   writes them every step). Searched: the takeover, flight and ceiling code; KH1's ground step
   doesn't.
 - KH1's air attack keeping KH2's speed: whether the user wants KH1's lunge to win when it is the
   slower (a lock-on target in another direction). `keep_momentum` takes the faster vector.
-- `stats[+0x14]` / `[+0x18]` values (logged once per jump with Jump at KH2).
+- `stats[+0x14]` / `[+0x18]` values (logged by `kh2_controller` with physics KH1, and per jump with
+  physics KH2). If they read out of range, KH2's air steering stays (logged).
+- Physics KH2: that KH1's own air attacks look right on KH2's slower hop and drift; that KH1's
+  fields changed between our writes only by KH1's own moves (the "KH1's own air move set its arc"
+  log line says when).
+- Physics KH1: KH1's run tilt (0.8) [med]; KH2's walk / run animation pick in its controller
+  (half way between the two speeds) with KH1's speeds.
 - §3's [low] items.

@@ -526,12 +526,18 @@ unsafe fn kh1_glide_start(base: usize, actor: usize) -> Option<&'static str> {
         }
         return None;
     }
-    let kh2 = super::styles::kh2(super::styles::Kind::Glide);
-    Some(match (superglide, kh2) {
-        (true, false) => "KH1's Superglide (the Glide style is KH1's)",
-        (false, false) => "KH1's glide (the Glide style is KH1's)",
-        (true, true) => "KH1's Superglide state, KH2's glide motions and numbers (the Glide style is KH2's)",
-        (false, true) => "KH1's glide state, KH2's glide motions and numbers (the Glide style is KH2's)",
+    // (Its motions by the Glide style, its numbers by the physics setting.)
+    let looks = super::styles::kh2(super::styles::Kind::Glide);
+    let moves = super::shared::physics::source() == super::shared::physics::Rule::Kh2;
+    Some(match (superglide, looks, moves) {
+        (true, false, false) => "KH1's Superglide (Glide style KH1, physics KH1)",
+        (false, false, false) => "KH1's glide (Glide style KH1, physics KH1)",
+        (true, true, false) => "KH1's Superglide state, KH2's glide motions, KH1's numbers (Glide style KH2, physics KH1)",
+        (false, true, false) => "KH1's glide state, KH2's glide motions, KH1's numbers (Glide style KH2, physics KH1)",
+        (true, false, true) => "KH1's Superglide state, KH1's glide motions, KH2's numbers (Glide style KH1, physics KH2)",
+        (false, false, true) => "KH1's glide state, KH1's glide motions, KH2's numbers (Glide style KH1, physics KH2)",
+        (true, true, true) => "KH1's Superglide state, KH2's glide motions and numbers (Glide style KH2, physics KH2)",
+        (false, true, true) => "KH1's glide state, KH2's glide motions and numbers (Glide style KH2, physics KH2)",
     })
 }
 
@@ -1264,12 +1270,16 @@ unsafe fn refresh_kh2_numbers(base: usize) {
     let Ok(mut g) = DRIVER.try_lock() else { return };
     let d = g.get_or_insert_with(|| new_driver(kh2));
     d.growth.update(base, &mut d.character);
-    let p = &d.character.params;
-    let (jump, high_jump) = d.character.jump_heights();
+    // (KH2 Sora's own numbers, not the controller's now: with physics KH1 those are KH1's,
+    // `shared::physics::kh2_controller`.)
+    let own = &kh2.character;
+    let p = &own.params;
+    let high = d.character.abilities.high_jump;
+    let (jump, high_jump) = (p.jump_height, if high == 0 { p.jump_height } else { own.growth_level(high).map_or(p.jump_height, |g| g.high_jump_height) });
     // (KH2's glide level: its controller's own is kept aside while the glide is KH1's,
-    // `KH2_GLIDE_KEPT`.)
-    let glide_level = (d.character.abilities.glide as u32).max(KH2_GLIDE_KEPT.load(Ordering::Relaxed)).min(u8::MAX as u32) as u8;
-    let glide = d.character.growth_level(glide_level).map(|g| super::shared::physics::Glide {
+    // `KH2_GLIDE_KEPT`; level 1 at least, as KH1 glides him only with its Glide.)
+    let glide_level = (d.character.abilities.glide as u32).max(KH2_GLIDE_KEPT.load(Ordering::Relaxed)).clamp(1, u8::MAX as u32) as u8;
+    let glide = own.growth_level(glide_level).map(|g| super::shared::physics::Glide {
         speed: g.glide_speed,
         acceleration: g.glide_acceleration.clamp(0.0, 1.0),
         fall_ratio: g.glide_fall_ratio,
@@ -1547,7 +1557,7 @@ unsafe fn kh1_fall_speed(actor: usize, vel: Option<([f32; 2], f32)>) -> ([f32; 2
 unsafe fn shared_give_back(base: usize, actor: usize, d: &mut Driver, back: super::shared::Back, out: &Output) {
     if back == super::shared::Back::Air {
         // (KH1's air state from KH2's motion, which this step wrote into its fields: KH1's own fall,
-        // or KH2's arc on it with Jump at KH2, goes on at KH2's speed, `shared::physics`.)
+        // or KH2's arc on it with physics KH2, goes on at KH2's speed, `shared::physics`.)
         let set: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(base + SET_STATE_RVA);
         set(actor, 2);
         super::shared::physics::kh1_takes_air(actor);
@@ -2186,6 +2196,9 @@ unsafe fn takeover(actor: usize) -> bool {
     }
     d.growth.update(base, &mut d.character);
     super::form::abilities(&mut d.drive, &mut d.character);
+    // The physics setting: KH1's numbers in KH2's controller at physics KH1 (base Sora), the
+    // moveset's own otherwise (`shared::physics::kh2_controller`).
+    super::shared::physics::kh2_controller(actor, &mut d.character, super::form::character(&d.drive, kh2));
     // Glide at KH1 (`stylejump`): KH1's glide, none of KH2's.
     // (Its level kept aside and given back with the style at KH2: Sora's abilities are only set
     // again when KH1's menu changes, so a 0 left here took KH2's glide away for good, the user:
@@ -2223,9 +2236,11 @@ unsafe fn takeover(actor: usize) -> bool {
     d.character.air_magic_fall_max = Some(KH1_FALL_MAX);
     // Final Form: KH2's own (its cast motions' no-gravity frames, KH2's gravity), as KH2 has it
     // (the user: "aerial final form reflect is not 1:1 physics wise with kh2").
-    // Base Sora's Aerial Magic style at KH2 (`styles`): KH2's own air casts too (Reflect's with
-    // them), not KH1's fall.
-    if super::form::in_final() || super::formmagic::base_kh2(true) {
+    // Base Sora with physics KH2 (`shared::physics::source`, whatever the Aerial Magic style):
+    // KH2's own air casts too (Reflect's with them), not KH1's fall. With physics KH1, KH1's fall
+    // (the gravity above is KH1's then: `air_cast_fall` of it).
+    let base_kh2 = !super::form::in_form() && super::shared::physics::source() == super::shared::physics::Rule::Kh2;
+    if super::form::in_final() || base_kh2 {
         d.character.air_magic_falls = false;
         d.character.air_magic_gravity = 1.0;
         d.character.air_magic_fall_max = None;

@@ -428,7 +428,7 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     };
     let kh1_combo = kh1_combo && !matches!(next, Some(super::combomods::Next::Kh2));
     if actor != sora || kind == 0 || kind == 1 && !kh1_combo || NOT_SORAS.contains(&kind) || !super::settings::get().commands || !takeover::ON.load(Ordering::Relaxed) || !takeover::kh2_has() {
-        // KH1's own air attack out of KH2's jump arc on KH1's states (Jump at KH2): it keeps KH2's
+        // KH1's own air attack out of KH2's jump arc on KH1's states (physics KH2): it keeps KH2's
         // momentum as out of KH2's own moves (below; `shared::physics`).
         let on_kh2 = if actor == sora && kind == 1 { super::shared::physics::kh2_air_motion(actor) } else { None };
         f(actor, dir);

@@ -20,6 +20,7 @@
 //! actor.
 
 use character_core::Arc as Kh2Arc;
+use character_core::{GrowthLevel, MoveParams};
 
 /// KH1's gravity, units per 60 Hz frame squared (`0x1403EAB54`).
 pub const GRAVITY: f32 = 0.484_693_88;
@@ -224,6 +225,127 @@ pub fn keep_momentum(before: &Motion, kh1: &Motion) -> Motion {
     Motion { h, arc }
 }
 
+/// Whose physics numbers move base Sora (the ini's `physics`, the Config menu's Physics row; the
+/// user: "if its kh1 then all the animations (vanilla, and our kh2 animations ...) will run with
+/// kh1s physics (with exceptions to drive forms) if its kh2 then all the animations (including
+/// vanilla animations) will run with kh2s physics instead"). The move styles choose the
+/// animations only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rule {
+    /// KH1's numbers for every move of base Sora's: KH1's own states as unmodded, and KH2's
+    /// controller (its borrowed moves) given KH1's (`kh1_params`).
+    Kh1,
+    /// KH2's numbers for every move of base Sora's: KH2's controller as it is, and KH2's numbers
+    /// on KH1's own states (`shared::physics`), vanilla moves included.
+    Kh2,
+}
+
+impl Rule {
+    /// The ini's value: `kh1`, else KH2's (the default, and what an older ini's `physics = on /
+    /// off`, the hair's switch before `hair_physics`, reads as).
+    pub fn parse(v: Option<&str>) -> Rule {
+        match v.map(|v| v.trim().to_ascii_lowercase()) {
+            Some(v) if v == "kh1" => Rule::Kh1,
+            _ => Rule::Kh2,
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Rule::Kh1 => "kh1",
+            Rule::Kh2 => "kh2",
+        }
+    }
+
+    /// Whose numbers move him now: a Drive Form is always KH2's (its own moveset and numbers).
+    pub fn source(self, in_form: bool) -> Rule {
+        if in_form {
+            Rule::Kh2
+        } else {
+            self
+        }
+    }
+}
+
+/// KH1's own movement numbers for Sora, from his stats block (actor `+0x6C`): walk `+4`, run
+/// `+8`, jump height `+0x10` (KH1's takeoff `0x1402ADC10` reads only this one, so High Jump
+/// raises it: the s261 log's 290 at High Jump), air acceleration `+0x14` and air drag `+0x18`
+/// (read by its air state's step `0x1402AD510`; the drag per 30 Hz frame). `None`: not a number
+/// we can use (that one stays KH2's).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Stats {
+    pub walk: Option<f32>,
+    pub run: Option<f32>,
+    pub jump: Option<f32>,
+    pub air_accel: Option<f32>,
+    pub air_drag: Option<f32>,
+}
+
+impl Stats {
+    /// From the block's floats at `+4`, `+8`, `+0x10`, `+0x14`, `+0x18`, each kept only in a sane
+    /// range.
+    pub fn read(walk: f32, run: f32, jump: f32, air_accel: f32, air_drag: f32) -> Stats {
+        let ok = |v: f32, lo: f32, hi: f32| (v.is_finite() && v > lo && v <= hi).then_some(v);
+        Stats { walk: ok(walk, 0.0, 50.0), run: ok(run, 0.0, 100.0), jump: ok(jump, 0.0, 2000.0), air_accel: ok(air_accel, 0.0, 10.0), air_drag: ok(air_drag, 0.0, 1.0) }
+    }
+}
+
+/// KH1 runs past this stick tilt (walks below it) [med: `shared::physics::ground_step`'s reading
+/// of KH1's control step].
+pub const RUN_TILT: f32 = 0.8;
+
+/// KH2's controller's numbers with KH1's physics (`Rule::Kh1`, base Sora out of a form): KH1's
+/// gravity and fall cap (its fall is the same curve as KH2's, `g/2 (t - T)^2`, and its rise the
+/// same `sin(pi/2 sin(pi/2 t/T))` with `T = sqrt(2H / g)`, so KH2's arcs with these are KH1's),
+/// KH1's jump height, walk and run speeds and run tilt, KH1's air steering (`air_accel`: added,
+/// kept to the run speed) and drag (per 30 Hz frame: KH2's tick). What KH1 has no number for
+/// stays KH2's: the turn rate, ledge grabs, the blow and ceiling numbers, the ground inertia (none
+/// for Sora in either).
+pub fn kh1_params(kh2: &MoveParams, s: &Stats) -> MoveParams {
+    let mut p = kh2.clone();
+    p.gravity = GRAVITY;
+    p.fall_max = FALL_MAX;
+    if let Some(v) = s.walk {
+        p.walk_speed = v;
+    }
+    if let Some(v) = s.run {
+        p.run_speed = v;
+    }
+    if let Some(v) = s.jump {
+        p.jump_height = v;
+    }
+    // (Both or neither: KH1's steering with KH2's drag, or the other way, is neither game's.)
+    if let (Some(a), Some(d)) = (s.air_accel, s.air_drag) {
+        p.air_accel = a;
+        p.air_drag = d;
+    }
+    p.run_threshold = RUN_TILT;
+    p
+}
+
+/// KH2's growth levels with KH1's jump (`Rule::Kh1`): KH1 has one jump height, which its High
+/// Jump raises, so KH2's High Jump is KH1's jump too. The rest (Aerial Dodge's height and speed,
+/// Quick Run, the glide) has no KH1 number and stays KH2's (under KH1's gravity, `kh1_params`).
+pub fn kh1_growth(g: &mut [GrowthLevel], s: &Stats) {
+    if let Some(j) = s.jump {
+        for l in g {
+            l.high_jump_height = j;
+        }
+    }
+}
+
+/// One of KH1's own air moves on KH2's numbers (`Rule::Kh2`: an air attack, a cast, a launch):
+/// a hop KH1 just started (its launch `0x1402AD7D0`, air time 0) is KH2's hop of that height
+/// (KH2's rise time for it and KH2's gravity after, as KH2's own attack hops, `Arc::new`);
+/// anything else goes on as it is (`Arc::to_kh2`: its rise exactly, its fall at its speed).
+pub fn kh1_arc_on_kh2(a: &Arc, gravity: f32) -> Kh2Arc {
+    if a.rising() && a.t <= 0.0 && a.h < 0.0 {
+        Kh2Arc::new(-a.h, gravity)
+    } else {
+        a.to_kh2(gravity)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,5 +532,166 @@ mod tests {
             assert!(dy < -1.0, "still going up: {dy}");
             assert!(yy < y);
         }
+    }
+
+    #[test]
+    fn the_physics_setting_reads_kh1_or_else_kh2_and_forms_are_kh2s() {
+        assert_eq!(Rule::parse(None), Rule::Kh2);
+        assert_eq!(Rule::parse(Some("kh1")), Rule::Kh1);
+        assert_eq!(Rule::parse(Some(" KH1 ")), Rule::Kh1);
+        assert_eq!(Rule::parse(Some("kh2")), Rule::Kh2);
+        // (An older ini's hair switch, `physics = on / off`.)
+        assert_eq!(Rule::parse(Some("on")), Rule::Kh2);
+        assert_eq!(Rule::parse(Some("off")), Rule::Kh2);
+        for r in [Rule::Kh1, Rule::Kh2] {
+            assert_eq!(Rule::parse(Some(r.key())), r);
+            assert_eq!(r.source(true), Rule::Kh2);
+            assert_eq!(r.source(false), r);
+        }
+    }
+
+    /// KH1's stats as the s261 log has them at High Jump (290) and KH1's run / walk; the air
+    /// numbers are guesses (not read in play yet), the arithmetic is what's tested.
+    fn kh1_stats() -> Stats {
+        Stats::read(2.0, 8.0, 290.0, 0.1, 0.9)
+    }
+
+    fn sora_kh1() -> Character {
+        let mut ch = sora();
+        let s = kh1_stats();
+        ch.params = kh1_params(&ch.params, &s);
+        kh1_growth(&mut ch.growth, &s);
+        ch
+    }
+
+    fn step(ch: &mut Character, pos: &mut [f32; 3], prev_jump: &mut bool, jump: bool, stick: [f32; 2], floor: f32) -> character_core::Output {
+        let input = Input { stick, jump: Button::from_held(*prev_jump, jump), attack: Button::default(), action: Button::default(), lock: Button::default() };
+        *prev_jump = jump;
+        let env = Env { pos: *pos, grounded: pos[1] <= floor, height_above_ground: (pos[1] - floor).max(0.0), targets: &[], ledges: &[] };
+        let out = ch.step(&input, &env);
+        for i in 0..3 {
+            pos[i] += out.displacement[i];
+        }
+        pos[1] = pos[1].max(floor);
+        out
+    }
+
+    #[test]
+    fn kh1_params_are_kh1s_numbers_and_keep_kh2s_where_kh1_has_none() {
+        let kh2 = MoveParams::default();
+        let p = kh1_params(&kh2, &kh1_stats());
+        assert_eq!((p.gravity, p.fall_max, p.jump_height, p.walk_speed, p.run_speed), (GRAVITY, FALL_MAX, 290.0, 2.0, 8.0));
+        assert_eq!((p.air_accel, p.air_drag, p.run_threshold), (0.1, 0.9, RUN_TILT));
+        assert_eq!((p.turn_speed, p.air_keep, p.hang.clone()), (kh2.turn_speed, kh2.air_keep, kh2.hang.clone()));
+        // A stat that isn't a number keeps KH2's; air steering only with both of KH1's.
+        let p = kh1_params(&kh2, &Stats::read(f32::NAN, 0.0, -5.0, 0.1, 7.0));
+        assert_eq!((p.walk_speed, p.run_speed, p.jump_height), (kh2.walk_speed, kh2.run_speed, kh2.jump_height));
+        assert_eq!((p.air_accel, p.air_drag), (0.0, kh2.air_drag));
+        assert_eq!((p.gravity, p.fall_max), (GRAVITY, FALL_MAX));
+    }
+
+    /// `physics = kh1`: KH2's controller's jump (High Jump at MAX too) is KH1's: its height, its
+    /// rise time under KH1's gravity, KH1's fall after.
+    #[test]
+    fn kh2s_controller_on_kh1s_numbers_jumps_kh1s_arc() {
+        let mut ch = sora_kh1();
+        let (mut pos, mut held) = ([0.0f32; 3], false);
+        let mut top = 0.0f32;
+        let mut arc = None;
+        for i in 0..200 {
+            step(&mut ch, &mut pos, &mut held, i < 120, [0.0, 0.0], 0.0);
+            top = top.max(pos[1]);
+            if arc.is_none() {
+                arc = ch.air_arc().map(|a| a.0);
+            }
+        }
+        let a = arc.expect("he jumped");
+        let kh1 = Arc::hop(0.0, 290.0);
+        assert!((a.height - 290.0).abs() < 1e-3, "{}", a.height);
+        assert!((a.uptime - kh1.up_t).abs() < 1e-3, "KH2 {} KH1 {}", a.uptime, kh1.up_t);
+        assert!((top - 290.0).abs() < 1.0, "apex {top}");
+        // The same curve sampled anywhere (KH1 y-down).
+        for t in [3.0f32, 10.0, kh1.up_t, kh1.up_t + 7.5, kh1.up_t + 20.0] {
+            assert!((a.y(t, ch.params.gravity) + kh1.y_at(t)).abs() < 1e-2, "t {t}");
+        }
+        assert_eq!(pos[1], 0.0, "landed");
+    }
+
+    /// `physics = kh1`: a long fall reaches KH1's fall cap (20 a frame), past KH2's 16.
+    #[test]
+    fn kh2s_controller_on_kh1s_numbers_falls_at_kh1s_cap() {
+        for (mut ch, cap) in [(sora_kh1(), FALL_MAX), (sora(), KH2_FALL)] {
+            let (mut pos, mut held) = ([0.0, 5000.0, 0.0], false);
+            ch.carry_into_air([0.0; 2], 0.0);
+            let mut fastest = 0.0f32;
+            for _ in 0..120 {
+                let o = step(&mut ch, &mut pos, &mut held, false, [0.0, 0.0], 0.0);
+                fastest = fastest.max(-o.displacement[1]);
+            }
+            assert!((fastest - cap).abs() < 1e-3, "{fastest} vs {cap}");
+        }
+    }
+
+    /// `physics = kh1`: KH1's air steering in KH2's controller: the stick adds to his speed (its
+    /// acceleration x the run speed, two 60 Hz frames a tick), up to the run speed, and speed
+    /// above it is kept while steering, never gained; KH1's drag with the stick let go.
+    #[test]
+    fn kh2s_controller_on_kh1s_numbers_steers_as_kh1s_air_state() {
+        let mut ch = sora_kh1();
+        let (mut pos, mut held) = ([0.0, 5000.0, 0.0], false);
+        ch.carry_into_air([0.0; 2], 0.0);
+        let mut speeds = vec![];
+        for _ in 0..40 {
+            let o = step(&mut ch, &mut pos, &mut held, false, [0.0, 1.0], 0.0);
+            speeds.push(o.displacement[0].hypot(o.displacement[2]));
+        }
+        // (A tick's first frame moves him; its second keeps that speed.)
+        let first = speeds.iter().copied().find(|s| *s > 0.0).unwrap();
+        assert!((first - 0.1 * 8.0 * 2.0).abs() < 1e-3, "{first}");
+        assert!((speeds.last().unwrap() - 8.0).abs() < 1e-3);
+        assert!(speeds.windows(2).all(|w| w[1] >= w[0] - 1e-4));
+        // Faster than the run: kept, not lost (KH2's own eases it toward the run).
+        let mut fast = sora_kh1();
+        fast.carry_into_air([0.0, 12.0], 0.0);
+        let mut kh2 = sora();
+        kh2.carry_into_air([0.0, 12.0], 0.0);
+        let (mut p1, mut p2, mut h1, mut h2) = ([0.0, 5000.0, 0.0], [0.0, 5000.0, 0.0], false, false);
+        let (mut o1, mut o2) = (None, None);
+        for _ in 0..20 {
+            o1 = Some(step(&mut fast, &mut p1, &mut h1, false, [0.0, 1.0], 0.0));
+            o2 = Some(step(&mut kh2, &mut p2, &mut h2, false, [0.0, 1.0], 0.0));
+        }
+        let (v1, v2) = (o1.unwrap().displacement[2], o2.unwrap().displacement[2]);
+        assert!((v1 - 12.0).abs() < 1e-3, "KH1's keeps {v1}");
+        assert!(v2 < 11.0, "KH2's eases {v2}");
+        // Let go: KH1's drag a tick.
+        let o = step(&mut fast, &mut p1, &mut h1, false, [0.0, 0.0], 0.0);
+        let o = if (o.displacement[2] - 12.0).abs() < 1e-3 { step(&mut fast, &mut p1, &mut h1, false, [0.0, 0.0], 0.0) } else { o };
+        assert!((o.displacement[2] - 12.0 * 0.9).abs() < 1e-3, "{}", o.displacement[2]);
+    }
+
+    /// `physics = kh2`: KH1's own air attack's hop (40, `0x1402AD7D0`) on KH2's numbers: KH2's
+    /// hop of that height (its rise time under KH2's gravity, KH2's fall after); a move already
+    /// under way goes on as it is.
+    #[test]
+    fn a_kh1_hop_on_kh2s_numbers_is_kh2s_hop_of_that_height() {
+        let hop = Arc::hop(-100.0, 40.0);
+        let mut a = kh1_arc_on_kh2(&hop, KH2_G);
+        assert_eq!(a.height, 40.0);
+        assert!((a.uptime - character_core::uptime(40.0, KH2_G)).abs() < 1e-4);
+        assert!(a.uptime > hop.up_t, "KH2's gravity is the lighter: {} vs KH1's {}", a.uptime, hop.up_t);
+        let mut up = 0.0;
+        let mut top = 0.0f32;
+        for _ in 0..80 {
+            up += a.advance(1.0, KH2_G, KH2_FALL);
+            top = top.max(up);
+        }
+        assert!((top - 40.0).abs() < 0.5, "{top}");
+        // Mid-move (KH2's rise carried in, or a fall): as `to_kh2`.
+        let mut mid = hop;
+        mid.step(-100.0, 3.0);
+        assert_eq!(kh1_arc_on_kh2(&mid, KH2_G), mid.to_kh2(KH2_G));
+        let f = Arc::falling(0.0, 6.0, 20.0);
+        assert_eq!(kh1_arc_on_kh2(&f, KH2_G), f.to_kh2(KH2_G));
     }
 }

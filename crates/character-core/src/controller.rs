@@ -2414,8 +2414,18 @@ impl Character {
             }
         };
         let steer = |v: [f32; 2], target: [f32; 2]| [v[0] * p.air_keep + target[0] * (1.0 - p.air_keep), v[1] * p.air_keep + target[1] * (1.0 - p.air_keep)];
+        // KH1's way (`air_accel`): added to, its length kept to the larger of the old and the run
+        // speed (DT 60 Hz frames of it a tick).
+        let add = |v: [f32; 2]| -> [f32; 2] {
+            let a = p.air_accel * ground_speed * DT;
+            let w = [v[0] + stick_dir[0] * a, v[1] + stick_dir[1] * a];
+            let cap = len2(v).max(p.run_speed);
+            if len2(w) > cap { scale(norm(w), cap) } else { w }
+        };
         let air_control = |c: &Self, stick: bool| -> [f32; 2] {
-            if stick && moving {
+            if stick && moving && p.air_accel > 0.0 {
+                add(c.vel_h)
+            } else if stick && moving {
                 // (s183's momentum keeping under the stick was reverted in s193, the user.)
                 steer(c.vel_h, scale(stick_dir, ground_speed))
             } else {

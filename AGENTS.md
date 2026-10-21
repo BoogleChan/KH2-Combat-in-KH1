@@ -47,6 +47,15 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 
 ## Development log
 
+### 2026-10-20: Stage 298 (testing branch: the Physics KH1 / KH2 setting)
+- The user: "In the config there's not a setting to switch between KH1 and KH2 physics". Ini
+  `physics = kh1 | kh2` (default kh2) and a Config row after Camera Style, live. Styles now pick
+  only animations; `shared::physics::source()` picks the numbers (KH2 in a Drive Form). `kh2`: KH2's
+  numbers on every base Sora move, KH1's own moves included; `kh1`: KH1's own states unmodded and
+  KH2's controller given KH1's gravity / fall cap / jump / run / air steering (new
+  `character-core` `air_accel`). The old hair switch `physics = on/off` is now `hair_physics`
+  (an old ini's value carried over). KH2's air drift on KH1's states was applied twice as often
+  as KH2 does; fixed. Choices for one-sided moves: `docs/kh1-physics.md` 7.
 ### 2026-10-07: milestone 1
 - Surveyed existing work: OpenKH (format docs and C# readers), GovanifY/kh2 (PS2 decomp, early
   stage), KHPCPatchManager. Chose documented formats; no decompiling was needed.

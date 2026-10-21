@@ -16,12 +16,18 @@ The user (after s261): "currently don't share animations but should: sora base a
 attack 2 / kh1 base finisher, kh2 base finishers / glide". The ground combo and the glide are
 shared moves now, as idle, walk, run and jump are.
 
-| Move | Owner | At KH1 | At KH2 |
-|---|---|---|---|
-| idle, walk, run, item use (Misc Animations) | KH1's states | KH1 unmodded | KH1's slot drawn with KH2's motion; KH2's walk / run speed |
-| jump, high jump, fall, landing (Jump) | KH1's states | KH1 unmodded | KH1's slots drawn with KH2's jump / fall / landing; KH2's jump arc |
-| ground combo: swings and finisher (Base Combo) | KH1's states (its rows, hit objects, timing, damage, its menu's combo abilities; KH2 borrows him for its ability moves at either style, below) | KH1 unmodded | KH1's swings drawn with KH2's: its second swing (slot 99) with KH2's second (152), its finisher (101) with KH2's (154), its first and third (98) with KH2's first (151); KH2's swing travel |
-| Glide | KH1's glide state (Square with `glide = square`, its held jump with `glide = jump`) | KH1 unmodded | KH1's glide slots drawn with KH2's glide (75 / 76) and banked glides (77 / 78); KH2's glide speed, fall and turn rate |
+The move styles choose the **animations** (and, for the KH2-only moves, whether KH2 borrows him
+at all). Whose **physics numbers** move him is one setting for every move, `physics = kh1 | kh2`
+(below, and the Physics column).
+
+| Move | Owner | At KH1 | At KH2 | Physics KH2 | Physics KH1 |
+|---|---|---|---|---|---|
+| idle, walk, run, item use (Misc Animations) | KH1's states | KH1's slots | KH1's slot drawn with KH2's motion | KH2's walk / run speed | KH1's |
+| jump, high jump, fall, landing (Jump) | KH1's states | KH1's slots | KH1's slots drawn with KH2's jump / fall / landing | KH2's jump arc, gravity, fall cap, early release, air drift | KH1's |
+| ground combo: swings and finisher (Base Combo) | KH1's states (its rows, hit objects, timing, damage, its menu's combo abilities; KH2 borrows him for its ability moves at either style, below) | KH1's swings | KH1's swings drawn with KH2's: its second swing (slot 99) with KH2's second (152), its finisher (101) with KH2's (154), its first and third (98) with KH2's first (151) | KH2's swing travel (that swing's root motion), at either style | KH1's own travel |
+| Glide | KH1's glide state (Square with `glide = square`, its held jump with `glide = jump`) | KH1's slots | KH1's glide slots drawn with KH2's glide (75 / 76) and banked glides (77 / 78) | KH2's glide speed, fall and turn rate | KH1's |
+| KH1's own air attacks, air casts, launches | KH1's states | KH1's | (the Aerial Combo / Magic styles at KH1) | their own lunge / hop height / halved speed, on KH2's gravity, fall cap and drift | KH1's |
+| KH2's borrowed moves (below) | KH2 borrows him | | | KH2's | KH1's gravity, fall, jump, walk / run, air steering and drag in KH2's controller; their own heights, speeds and root motion |
 | Aerial Dodge | KH2 borrows him | double jump with Jump at KH1 too | the same |
 | Dodge Roll (Square on the ground) | KH1 at KH1; KH2 borrows at KH2 | KH1's roll and guard; Square held through it: KH2's Quick Run (Quick Run equipped); without KH1's Dodge Roll, Square while moving: KH2's Quick Run | KH2's roll, guard, Quick Run (with them equipped) |
 | Aerial Combo | KH1's rows at KH1; KH2 borrows at KH2 | KH1's combo, KH2 borrowing him for its ability moves (below) | KH2's combo |
@@ -80,18 +86,34 @@ shared moves now, as idle, walk, run and jump are.
   style is KH2's (`shared::slot_kind`), KH1's own otherwise. KH2's swings are stretched over
   KH1's swing so the blade comes round when KH1's hit lands (`Play::Swing`), with KH2's root
   travel taken out of the pose (KH1 moves him).
-- **KH2's physics** (`shared::physics`, KH1's state table `0x142DB4240` wrapped for Sora):
-  - ground step: KH2's walk / run speed (Misc Animations at KH2; KH1's walk and run only, not
-    its actions); in KH1's ground swings (slots 98..101, action flag 4) KH2's swing's root
-    travel along his facing, stretched over KH1's swing, in place of KH1's own (Base Combo at
-    KH2);
-  - jump: state 1's pre-step and state 2's step, KH2's arc (Jump at KH2);
+- **The physics setting** (the user: "if its kh1 then all the animations (vanilla, and our kh2
+  animations ...) will run with kh1s physics (with exceptions to drive forms) if its kh2 then all
+  the animations (including vanilla animations) will run with kh2s physics instead"; then "BUG: In
+  the config there's not a setting to switch between KH1 and KH2 physics"): ini `physics = kh1 |
+  kh2` (KH2's without it), the Config menu's **Physics** row (after Camera Style, live, saved to
+  the ini, logged "Config menu: physics ..."). `shared::physics::source()` is the one switch
+  point (`kh1phys::Rule`); a Drive Form is KH2's either way. (The hair's old `physics = on / off`
+  is `hair_physics` now; an older ini's line is still read for the hair and moved to
+  `hair_physics` the first time the row is used.) Details and every choice: `docs/kh1-physics.md`
+  §7.
+- **Physics KH2 on KH1's states** (`shared::physics`, KH1's state table `0x142DB4240` wrapped
+  for Sora), whatever the move styles:
+  - ground step: KH2's walk / run speed (KH1's walk and run only, not its actions); in KH1's
+    ground swings (slots 98..101, action flag 4; KH1's or KH2's animation, `kh2_slots` too) KH2's
+    swing's root travel along his facing, stretched over KH1's swing, in place of KH1's own;
+  - jump: state 1's pre-step and state 2's step, KH2's arc; KH1's own air moves in state 2
+    (flag 4: air attacks, casts, a launch) keep their lunge, speed and hop height on KH2's
+    gravity, fall and drift (`kh1phys::kh1_arc_on_kh2`); KH1's hold (flag `0x1000`) is KH1's;
   - glide (state 0x15, registered by `0x1402B0560`): its pre-step `0x1402B06F0` turns him at
     KH2's glide turn rate; its step `0x1402B0890` moves him at KH2's glide speed
     (`(1 - a) × top × tilt + a × last`) and fall (`(height - fall height) × ratio`, capped), from
-    KH2's growth numbers at Sora's Glide level (Glide at KH2).
-  - whose numbers: `shared::physics::source(kind)`, the one switch point (per move style now;
-    the later "physics = kh1 / kh2" setting goes there, `docs/kh1-physics.md` §7).
+    KH2's growth numbers at Sora's Glide level (1 at least);
+  - KH2's air casts in KH2's borrow: KH2's own (not KH1's fall).
+- **Physics KH1**: KH1's states are KH1's (nothing above runs), and KH2's controller gets KH1's
+  numbers each frame it has base Sora (`shared::physics::kh2_controller`: KH1's gravity 0.4847,
+  fall cap 20, jump height from his stats `+0x10` for the jump and High Jump, walk / run `+4` /
+  `+8` past 0.8 tilt, air steering `+0x14` added and drag `+0x18`), so its borrowed moves and its
+  air casts (KH1's fall, `air_cast_fall` of it) move on KH1's physics.
 - **Momentum lives in KH1's own fields** (`docs/kh1-physics.md`; the user: "if sora does a kh1
   air move from a kh2 air move then he gets no momentum during his kh1 move"):
   - KH2's jump arc on KH1's states is written into KH1's arc and air speed every frame (exactly:

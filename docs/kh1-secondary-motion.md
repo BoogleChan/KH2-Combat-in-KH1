@@ -99,7 +99,7 @@ This runs every frame KH2 poses him, after the retarget, the feet, KH1's wrist (
 
 ## Switches
 
-- `physics = off`: none of this, and no swing either. The parts turn with their parent as
+- `hair_physics = off` (an older ini's `physics = off`): none of this, and no swing either. The parts turn with their parent as
   before.
 - `kh2_hair = off`: the older physics swing (`jiggle.rs`) instead of KH2's animation.
 - The swing still runs for any chain KH2 didn't pose this frame. That is only the keychain

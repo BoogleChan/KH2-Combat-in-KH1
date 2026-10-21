@@ -1,6 +1,7 @@
 //! Our Config menu rows (the user: switch between KH1's and KH2's camera in the game's Config
-//! menu; then "toggle what sora uses for his ground and aerial moves"): Camera Style, Ground
-//! Combo, Aerial Combo, Magic, Aerial Magic, each KH1 / KH2. (A Gummi Routes row went with the
+//! menu; then "toggle what sora uses for his ground and aerial moves"): Camera Style, Physics
+//! (the user: "BUG: In the config there's not a setting to switch between KH1 and KH2 physics"),
+//! Ground Combo, Aerial Combo, Magic, Aerial Magic..., each KH1 / KH2. (A Gummi Routes row went with the
 //! Gummi skip: the user, keep the mod modular.)
 //! `docs/kh1-config-menu.md` has KH1's side.
 //!
@@ -17,8 +18,8 @@
 //! - The menu's text lookup (`0x1402CE7C0`, sysmsg ids) is replaced: ids from `OUR_IDS` are our
 //!   strings, the rest are looked up as KH1 does.
 //!
-//! The choices are kept in `kh1-kh2.ini` (`camera`, `ground_combo`, `air_combo`, `magic`,
-//! `air_magic` = kh1 / kh2), not the save.
+//! The choices are kept in `kh1-kh2.ini` (`camera`, `physics`, `ground_combo`, `air_combo`,
+//! `magic`, `air_magic`... = kh1 / kh2), not the save.
 
 use super::addr::Rva;
 use super::styles::Kind;
@@ -67,11 +68,12 @@ const PANEL_PROLOGUE: [u8; 6] = [0x40, 0x53, 0x48, 0x83, 0xEC, 0x50];
 const CURSOR_ROW_RVA: Rva = Rva(0x2ED030);
 const DECOR_RVA: Rva = Rva(0x2F0740);
 
-/// Our rows: 8 the camera, 9..16 the move styles (8 a page: rows 8..15, 16..) (`styles::Kind::EVERY` in order). Each:
-/// label, left value, right value, help.
+/// Our rows (8 a page: KH1's rows 8..15, scrolled for the rest): the camera, the physics, the
+/// move styles (`ROW_WHAT` says which is which). Each: label, left value, right value, help.
 const FIRST_ROW: i32 = 8;
-const ROWS: [[u32; 4]; 11] = [
+const ROWS: [[u32; 4]; 12] = [
     [0x7F00_0001, 0x7F00_0002, 0x7F00_0003, 0x7F00_0004],
+    [0x7F00_0119, 0x7F00_0002, 0x7F00_0003, 0x7F00_011A],
     [0x7F00_0101, 0x7F00_0002, 0x7F00_0003, 0x7F00_0102],
     [0x7F00_0103, 0x7F00_0002, 0x7F00_0003, 0x7F00_0104],
     [0x7F00_0105, 0x7F00_0002, 0x7F00_0003, 0x7F00_0106],
@@ -87,11 +89,13 @@ const ROWS: [[u32; 4]; 11] = [
 ];
 /// The camera row's help line (with the version under it).
 const HELP_ID: u32 = 0x7F00_0004;
-const STRINGS: [(u32, &str); 28] = [
+const STRINGS: [(u32, &str); 30] = [
     (0x7F00_0001, "Camera Style"),
     (0x7F00_0002, "KH1"),
     (0x7F00_0003, "KH2"),
     (0x7F00_0004, "Choose KH1's camera or KH2's field camera."),
+    (0x7F00_0119, "Physics"),
+    (0x7F00_011A, "Choose KH1's or KH2's physics for all of Sora's moves.\nDrive Forms keep their own."),
     (0x7F00_0101, "Base Combo"),
     (0x7F00_0102, "Choose KH1's or KH2's ground combo for Sora.\nDrive Forms keep their own."),
     (0x7F00_0103, "Aerial Base Combo"),
@@ -118,56 +122,62 @@ const STRINGS: [(u32, &str); 28] = [
     (0x7F00_0114, "Skip"),
 ];
 
-/// The move style a row switches (`None`: the camera row).
-/// The Gummi Routes row (our last; Vanilla | Skip).
-fn gummi_row(row: i32) -> bool {
-    index(row) == ROWS.len() - 1
+/// What one of our rows switches.
+#[derive(Clone, Copy)]
+enum Row {
+    Camera,
+    /// The physics setting (`shared::physics::rule`): KH1's or KH2's numbers for every move.
+    Physics,
+    Style(Kind),
+    /// Gummi Routes (Vanilla | Skip).
+    Gummi,
 }
 
-fn style(row: i32) -> Option<Kind> {
-    ROW_KINDS.get(index(row)).copied().flatten()
-}
-
-/// Each row's move style (`ROWS` in order; `None`: the camera and Gummi rows).
-const ROW_KINDS: [Option<Kind>; 11] = [
-    None,
-    Some(Kind::GroundCombo),
-    Some(Kind::AirCombo),
-    Some(Kind::Magic),
-    Some(Kind::AirMagic),
-    Some(Kind::Jump),
-    Some(Kind::Glide),
-    Some(Kind::DodgeRoll),
-    Some(Kind::MiscAnims),
-    // Some(Kind::PlayerModel),
-    Some(Kind::BattleQuotes),
-    None,
+/// Each row's switch (`ROWS` in order).
+const ROW_WHAT: [Row; 12] = [
+    Row::Camera,
+    Row::Physics,
+    Row::Style(Kind::GroundCombo),
+    Row::Style(Kind::AirCombo),
+    Row::Style(Kind::Magic),
+    Row::Style(Kind::AirMagic),
+    Row::Style(Kind::Jump),
+    Row::Style(Kind::Glide),
+    Row::Style(Kind::DodgeRoll),
+    Row::Style(Kind::MiscAnims),
+    // Row::Style(Kind::PlayerModel),
+    Row::Style(Kind::BattleQuotes),
+    Row::Gummi,
 ];
+
+fn what(row: i32) -> Row {
+    ROW_WHAT.get(index(row)).copied().unwrap_or(Row::Camera)
+}
 
 /// A row's value: right (KH2, true) or left (KH1).
 fn value(row: i32) -> bool {
-    if gummi_row(row) {
-        return super::gummi::SKIP.load(Ordering::Relaxed);
-    }
-    match style(row) {
-        Some(k) => styles::kh2(k),
-        None => camera::KH2.load(Ordering::Relaxed),
+    use super::shared::physics;
+    match what(row) {
+        Row::Camera => camera::KH2.load(Ordering::Relaxed),
+        Row::Physics => physics::rule() == physics::Rule::Kh2,
+        Row::Style(k) => styles::kh2(k),
+        Row::Gummi => super::gummi::SKIP.load(Ordering::Relaxed),
     }
 }
 
 fn toggle(row: i32) {
+    use super::shared::physics;
     let v = !value(row);
-    if gummi_row(row) {
-        super::gummi::set(v);
-        return;
-    }
-    match style(row) {
-        Some(k) => styles::set(k, v),
-        None => {
+    match what(row) {
+        Row::Camera => {
             camera::KH2.store(v, Ordering::Relaxed);
             super::settings::save("camera", if v { "kh2" } else { "kh1" });
             log(&format!("Config menu: camera style {}", if v { "KH2" } else { "KH1" }));
         }
+        // (Live: the next physics step reads it; saved and logged by `set_rule`.)
+        Row::Physics => physics::set_rule(if v { physics::Rule::Kh2 } else { physics::Rule::Kh1 }),
+        Row::Style(k) => styles::set(k, v),
+        Row::Gummi => super::gummi::set(v),
     }
 }
 
@@ -249,7 +259,7 @@ pub unsafe fn install() {
     let n = 8 + (ROWS.len() as i32).min(SLOTS) as u16;
     wr(base + ROWS_RVA, n);
     wr(base + VISIBLE_RVA, n);
-    log("Config menu: our rows added (Camera Style and the move styles, on pages of 8 after KH1's)");
+    log("Config menu: our rows added (Camera Style, Physics and the move styles, on pages of 8 after KH1's)");
 }
 
 /// KH1's sysmsg lookup (its own instructions, re-done here: its first one is RIP-relative, so

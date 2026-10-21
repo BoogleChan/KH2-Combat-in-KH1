@@ -25,6 +25,12 @@ pub struct MoveParams {
     /// Fraction of the air velocity kept per tick with no stick input
     /// (KH2: 0.95).
     pub air_drag: f32,
+    /// Air steering that adds to the velocity instead of easing it (0: KH2's `air_keep`). KH1's
+    /// air state (`0x1402AD510`): with the stick, each 60 Hz frame adds `stick direction x the
+    /// walk or run speed x air_accel` (its stats' `+0x14`), the length kept to the larger of the
+    /// old length and `run_speed` (so speed above the run is kept, never gained). For a host
+    /// that gives the controller KH1's physics.
+    pub air_accel: f32,
     /// Stick magnitude at or above which the character runs.
     pub run_threshold: f32,
     /// Ledge grab. `margin == 0` turns it off (as in the game).
@@ -73,6 +79,7 @@ impl Default for MoveParams {
             gravity: KH2_GRAVITY,
             air_keep: 0.9,
             air_drag: 0.95,
+            air_accel: 0.0,
             run_threshold: 0.5,
             hang: HangParams::default(),
             hit_back_to_jump: 0.048,

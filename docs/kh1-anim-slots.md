@@ -272,9 +272,9 @@ Not built yet: phase 4.
   A KH1 state that wants another KH1 motion simply plays it.
 - **The physics stays with the state that owns the move.** KH1's ground step for the combo
   (`shared::physics::swing_travel` is unchanged: `pose::sora_slot` gives the *KH1 slot the
-  request stands for*, 99, and `slot_frames(99)` the length that actually plays). The KH1 / KH2
-  physics setting can then be one switch per move, on top of the same slot. That belongs to the
-  other helper.
+  request stands for*, 99, and `slot_frames(99)` the length that actually plays). The physics
+  setting (`physics = kh1 | kh2`, `docs/kh1-physics.md` §7) sits on top of the same slot: KH2's
+  swing travel with it at KH2, KH1's own travel at KH1.
 - **`pose.rs`:**
   - `slot_of` knows our motions by pointer;
   - `sora_slot` gives the stand-in KH1 slot;
@@ -302,8 +302,8 @@ Not built yet: phase 4.
 ## 6. Risks
 
 - **The template's root.** The root (bone 0) and the IK helpers stretch with the template. Where
-  KH1 moves him by the motion's root, the stretched KH1 travel is what moves him. Base Combo KH2
-  keeps KH2's travel through `shared::physics`, which sees slot 99.
+  KH1 moves him by the motion's root, the stretched KH1 travel is what moves him. Physics KH2
+  gives it KH2's travel through `shared::physics`, which sees slot 99; physics KH1 leaves KH1's.
 - **The `+0x164` checks.** Our redirect keeps KH1's request ids, so `+0x164` checks stay right.
   New ids (`0x200+`) are unknown to KH1's own code: any `switch` on `+0x164` treats them as
   "other".

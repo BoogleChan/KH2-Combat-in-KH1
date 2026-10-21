@@ -40,7 +40,8 @@ magic_scale = 1.0\r\n\
 ; glide: square = Square in the air glides (as KH1's Superglide); jump = hold jump in the air\r\n\
 glide = square\r\n\
 ; air_cast_fall: how fast Sora falls while Reflect plays in the air, a share of KH1's own\r\n\
-;   gravity (0 = he hangs, 1 = KH1's); his fall is stopped as the cast starts\r\n\
+;   gravity (0 = he hangs, 1 = KH1's); his fall is stopped as the cast starts (physics = kh1,\r\n\
+;   and Valor / Wisdom; with physics = kh2 base Sora's air casts are KH2's own)\r\n\
 air_cast_fall = 1.0\r\n\
 ; kh2_voice: on = Sora's KH2 battle voice on those moves instead of KH1's; off = KH1's voice\r\n\
 ; (battle_quotes, below, takes its place once set)\r\n\
@@ -59,8 +60,9 @@ camera = kh2\r\n\
 ; KH2 Sora's (hips 78.9 / 88.5), so he is framed exactly as in KH2\r\n\
 camera_scale = 0.89\r\n\
 ; shared: on = KH1's own states run base Sora (idle, walk, run, jump, fall, landing), with\r\n\
-;   KH2's animations and physics where a move style is KH2; KH2 borrows him only for its own\r\n\
-;   moves; off = KH2's controller has him whenever he stands, walks or runs (older builds)\r\n\
+;   KH2's animations where a move style is KH2 (and KH2's physics with physics = kh2); KH2\r\n\
+;   borrows him only for its own moves; off = KH2's controller has him whenever he stands,\r\n\
+;   walks or runs (older builds)\r\n\
 shared = on\r\n\
 ; kh2_slots: on = KH2's moves that have one play as new slots in KH1's own motion table (KH1's\r\n\
 ;   clock, events, hit windows and blends; for now KH2's ground combo, 151 / 152 / 154, at Base\r\n\
@@ -93,9 +95,9 @@ reflect = on\r\n\
 ; keyblade_turn: on = every Keyblade held with its teeth up, as KH2 holds it (KH1's grip held\r\n\
 ; them to the ground under KH2's moves); off = as before\r\n\
 keyblade_turn = on\r\n\
-; physics: on = Sora's hair, hood and keychain move during KH2's moves; off = rigid\r\n\
-physics = on\r\n\
-; kh2_hair: on = (physics = on) they move as KH2 animates its own hair, hood and keychain in\r\n\
+; hair_physics: on = Sora's hair, hood and keychain move during KH2's moves; off = rigid\r\n\
+hair_physics = on\r\n\
+; kh2_hair: on = (hair_physics = on) they move as KH2 animates its own hair, hood and keychain in\r\n\
 ; each move; off = the older swing and sway (a breeze and gravity) instead\r\n\
 kh2_hair = on\r\n\
 ; drive: on = D-pad left at the battle menu's top flips to a second page (Attack, Magic, Items,\r\n\
@@ -104,6 +106,10 @@ drive = on\r\n\
 ; valor_left_blade: on = in Valor Form, its Keyblade in Sora's left hand (KH1's own model of it);\r\n\
 ; off = nothing of it is installed (turn it off if it misbehaves)\r\n\
 valor_left_blade = on\r\n\
+; physics: kh1 or kh2, whose physics move base Sora in every move (run speeds, jump arc,\r\n\
+;   gravity, air drift, attack travel), whatever the move styles below (they choose the\r\n\
+;   animations); Drive Forms always KH2's. The Config menu's Physics row switches it in game\r\n\
+physics = kh2\r\n\
 ; ground_combo / air_combo / magic / air_magic: kh1 or kh2, which game's moves base Sora uses\r\n\
 ; for each (Drive Forms keep their own); the Config menu switches them in game too\r\n\
 ground_combo = kh2\r\n\
@@ -171,9 +177,12 @@ pub struct Settings {
     pub reflect: bool,
     /// Keyblades turned teeth up in his hand (`keyblade_turn = on`, `pose::keyblade_teeth_up`).
     pub keyblade_turn: bool,
-    /// Hair, hood and keychain move under KH2's moves (`physics = on`); off, they keep KH1's rest
-    /// pose.
+    /// Hair, hood and keychain move under KH2's moves (`hair_physics = on`; an older ini's
+    /// `physics = on / off`); off, they keep KH1's rest pose.
     pub physics: bool,
+    /// Whose physics move base Sora (`physics = kh1 | kh2`, KH2's by default;
+    /// `shared::physics::rule`).
+    pub physics_rule: crate::kh1phys::Rule,
     /// They follow KH2's own animation of them (`kh2_hair = on`, `kh1_data::secondary`) rather
     /// than the swing (`kh1_data::jiggle`).
     pub kh2_hair: bool,
@@ -185,8 +194,9 @@ pub struct Settings {
     pub styles: [bool; 10],
     /// Skip the Gummi Ship's flights (`gummi = skip`, `gummi.rs`).
     pub gummi_skip: bool,
-    /// KH1's own states own base Sora (`shared = on`, `shared.rs`): KH2's animations and physics
-    /// on KH1's states per move style, KH2's controller only for KH2's own moves. Off: the old
+    /// KH1's own states own base Sora (`shared = on`, `shared.rs`): KH2's animations on KH1's
+    /// states per move style (its physics by `physics_rule`), KH2's controller only for KH2's own
+    /// moves. Off: the old
     /// way (KH2's controller has him whenever KH1 shows him standing, walking or running).
     pub shared: bool,
     /// KH2's moves as new slots in KH1 Sora's motion table (`kh2slots.rs`): `None` off (the
@@ -264,7 +274,8 @@ pub fn get() -> &'static Settings {
             },
             reflect: on(&text, "reflect", "on", true),
             keyblade_turn: on(&text, "keyblade_turn", "on", true),
-            physics: on(&text, "physics", "on", true),
+            physics: hair_physics(&text),
+            physics_rule: crate::kh1phys::Rule::parse(setting(&text, "physics").as_deref()),
             kh2_hair: on(&text, "kh2_hair", "on", true),
             drive: on(&text, "drive", "on", true),
             valor_left_blade: on(&text, "valor_left_blade", "on", true),
@@ -280,6 +291,26 @@ pub fn get() -> &'static Settings {
         log(&format!("settings ({path}): {s:?}"));
         s
     })
+}
+
+/// The hair's switch: `hair_physics`, or an older ini's `physics = on / off` (before `physics`
+/// became the physics setting, `kh1 | kh2`, which leaves the hair on).
+fn hair_physics(text: &str) -> bool {
+    match setting(text, "hair_physics") {
+        Some(_) => on(text, "hair_physics", "on", true),
+        None => !matches!(setting(text, "physics").as_deref(), Some("off" | "0" | "no" | "false")),
+    }
+}
+
+/// Keeps the physics setting in the ini (the Config menu's Physics row). An older ini whose
+/// `physics` line is the hair's switch gets that as `hair_physics` first, so it isn't lost.
+pub fn save_physics(r: crate::kh1phys::Rule) {
+    let path = format!("{}\\{INI}", super::exe_dir());
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    if setting(&text, "hair_physics").is_none() {
+        save("hair_physics", if hair_physics(&text) { "on" } else { "off" });
+    }
+    save("physics", r.key());
 }
 
 /// Keeps a Config menu choice in the ini (`key = value`): that line changed, or added, the rest
