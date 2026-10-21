@@ -3,10 +3,14 @@
 //! (`form::unlocked`), "V: <Keyblade>" (`equip::valor_keyblade`, kept at `save + equip::
 //! VALOR_OFF`) then "F: <Keyblade>" (`equip::final_keyblade`, kept at `save + equip::
 //! FINAL_OFF`; the user: "add a section in the equipment menu for the second keyblade in final
-//! form"). Picking one opens KH1's own weapon list, narrowed to the Keyblades the forms may take
-//! (owned, a copy not equipped); the pick is stored in that form's slot and Sora's own weapon is
-//! left as it was.
+//! form"). Picking one opens KH1's own weapon list, narrowed to the Keyblades the form may take
+//! (owned, a copy not equipped and not the other slot's); the pick is stored in that form's slot
+//! and Sora's own weapon is left as it was.
 //!
+//! - A slot's Keyblade is in use like an equipped one (the user: "When you put a keyblade in any
+//!   of the drive equipment slots ... it doesn't remove the keyblade from the list"): it leaves
+//!   the other slot's list and Sora's own weapon list (`fill_sora`) until the slot changes, and
+//!   KH1's free count (`0x1402E6330`, hooked: `free_count`) takes it off for the shops.
 //! - The slots window's update (its definition's first qword, `0x1405491A0`) is ours: it gives
 //!   Sora's window one more row per form row (KH1 makes it accessories + 1) and runs KH1's.
 //! - KH1 reads the item of slot row `n >= 1` as `[r12 + n + 0x1C]` (`r12` = Sora's record):
@@ -86,10 +90,15 @@ const FILL_FN: Rva = Rva(0x304E50);
 const FILL_PROLOGUE: [u8; 15] = [0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x48, 0x89, 0x7C, 0x24, 0x18];
 /// The pause menu's party stats refresh.
 const REFRESH_FN: Rva = Rva(0x2E5A80);
+/// KH1's free count of an item (`0x1402E6330 (id)`, a leaf) and its first bytes (`mov
+/// [rsp+8], rbx; mov [rsp+0x10], rdi`; the same in the Steam exe at `0x1402E8770`).
+const FREE_FN: Rva = Rva(0x2E6330);
+const FREE_PROLOGUE: [u8; 10] = [0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x7C, 0x24, 0x10];
 
 // The Equipment page's state.
 const STATE: Rva = Rva(0x2E9AA40); // 0 members, 1 slots, 2 a list open, 3 changed
 const SLOT: Rva = Rva(0x2E9AA44); // the party slot chosen
+const MEMBER: Rva = Rva(0x2E9AA48); // its member (0 Sora; the weapon list's kind)
 const RECORD: Rva = Rva(0x2E9AA50); // its record + 4 (u64)
 const ACC_INDEX: Rva = Rva(0x2E9AA4C); // the accessory slot being set
 const ROW_PICKED: Rva = Rva(0x2E9AA58);
@@ -125,6 +134,7 @@ static ORIG_BOX: AtomicUsize = AtomicUsize::new(0);
 /// While KH1's compare box update runs during a pick (its stats call is the what-if).
 static COMPARING: AtomicBool = AtomicBool::new(false);
 static ORIG_FILL: AtomicUsize = AtomicUsize::new(0);
+static ORIG_FREE: AtomicUsize = AtomicUsize::new(0);
 /// Our memory near the game: the stubs, their cells and the shadow record.
 static MEM: AtomicUsize = AtomicUsize::new(0);
 /// While our wrappers run: label the forms' Keyblades' names (`LABEL_SLOTS`: the slots, by the
@@ -295,6 +305,9 @@ pub(crate) fn stub_name(rbx_at: Option<u8>, to: usize) -> Vec<u8> {
 pub unsafe fn install() {
     let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
     BASE.store(base, Ordering::Relaxed);
+    // KH1's free count takes the form slots' copies off (on its own: the slots hold their copies
+    // with or without the rows).
+    hook::install(base + FREE_FN, &FREE_PROLOGUE, free_count as *const () as usize, &ORIG_FREE, "KH1 free item count");
     // Everything checked before anything changes.
     let defs = [(SLOTS_DEF, SLOTS_UPDATE), (MEMBERS_DEF, MEMBERS_UPDATE), (HELP_DEF, HELP_UPDATE), (LIST_DEF, LIST_UPDATE), (PAGE_DEF, PAGE_UPDATE), (BOX_DEF, BOX_UPDATE)];
     for (def, f) in defs {
@@ -526,8 +539,6 @@ unsafe fn prepare(save: usize, win: usize) -> bool {
     if win != 0 {
         fix_rows(win, acc as u16, forms.len() as u16);
     }
-    // (A Keyblade to choose from: owned, a copy not equipped, counted with his own weapon.)
-    let free = with_real_weapon(save, || !equip::valor_candidates(base()).is_empty());
     let sh = m + SHADOW;
     std::ptr::write_bytes(sh as *mut u8, 0, 0x40);
     let mut key = 0u32;
@@ -538,7 +549,13 @@ unsafe fn prepare(save: usize, win: usize) -> bool {
         };
         ROW_FORM[i].store(form, Ordering::Relaxed);
         // Valor's row holds a Keyblade only when one is free; Final's holds the Kingdom Key at
-        // least, but offers a choice only when one is free.
+        // least, but offers a choice only when one is free. (A Keyblade to choose from: owned,
+        // not equipped, not the other slot's copy, counted with his own weapon; the row's own
+        // one counts.)
+        let free = match Form::from(form) {
+            Some(f) => with_real_weapon(save, || !candidates(f).is_empty()),
+            None => false,
+        };
         let cell: u8 = match form {
             0 => 0,
             _ if id != 0 && free => 1,
@@ -553,8 +570,9 @@ unsafe fn prepare(save: usize, win: usize) -> bool {
     }
     wr(m + CELL_SHADOW, sh as u64);
     if LOGGED_ID.swap(key, Ordering::Relaxed) != key {
-        let rows: Vec<String> = forms.iter().enumerate().map(|(i, f)| format!("{} {:#04x}", f.name(), row_id(i + 1))).collect();
-        log(&format!("Equipment: form rows [{}] (candidates {:02x?})", rows.join(", "), with_real_weapon(save, || equip::valor_candidates(base()))));
+        let rows: Vec<String> =
+            forms.iter().enumerate().map(|(i, &f)| format!("{} {:#04x} (candidates {:02x?})", f.name(), row_id(i + 1), with_real_weapon(save, || candidates(f)))).collect();
+        log(&format!("Equipment: form rows [{}]", rows.join(", ")));
     }
     true
 }
@@ -666,14 +684,96 @@ unsafe extern "system" fn help_update(win: usize) {
     s(CURSOR, cursor);
 }
 
-/// KH1's weapon list fill; during a pick only the Keyblades the forms may take stay, the cursor
-/// on the form's current one.
+/// KH1's free count (`0x1402E6330 (id)`: owned less the copies the ten members have equipped),
+/// less the copies Valor's and Final's slots hold (`equip::form_held`), so KH1 counts them as in
+/// use too. Its callers (Epic exe, read statically): the shop's sell list and its counts
+/// (`0x1402FF380`: items with a free copy and a sell price, `0x1402FF472` / `0x1402FF4D8`), the
+/// shop windows' "free" figures and the sell quantity's limit (`0x1402FD20C`, `0x1402FD353`,
+/// `0x1402FDC31`, `0x1402FFB12`), and the accessory list's fill (`0x140304D9F` / `0x140304E08`,
+/// accessories only, so no change there). KH1's weapon list doesn't use it (`fill` does that).
+unsafe extern "system" fn free_count(id: i32) -> i32 {
+    let f: unsafe extern "system" fn(i32) -> i32 = std::mem::transmute(ORIG_FREE.load(Ordering::Acquire));
+    let n = f(id);
+    if n <= 0 || !(1..=255).contains(&id) {
+        return n;
+    }
+    let held = equip::form_held(base(), id as u8) as i32;
+    if held == 0 {
+        return n;
+    }
+    static LOGS: AtomicU32 = AtomicU32::new(0);
+    static LAST: AtomicU32 = AtomicU32::new(u32::MAX);
+    let key = (id as u32) << 16 | (n as u32 & 0xFF) << 8 | held as u32;
+    if LAST.swap(key, Ordering::Relaxed) != key && LOGS.fetch_add(1, Ordering::Relaxed) < 20 {
+        log(&format!("Equipment: KH1's free count of {id:#04x}: {n} less {held} held by the form slots = {}", (n - held).max(0)));
+    }
+    (n - held).max(0)
+}
+
+/// The Keyblades a form's slot may take (`equip::valor_candidates` / `final_candidates`: not
+/// equipped, not the other slot's copy; its own current one included).
+unsafe fn candidates(form: Form) -> Vec<u8> {
+    match form {
+        Form::Valor => equip::valor_candidates(base()),
+        Form::Final => equip::final_candidates(base()),
+    }
+}
+
+/// The copies of `id` a list shows as Sora's to take: owned less those the form slots hold, his
+/// own slot's (`form`, during its pick) left in.
+unsafe fn shown_count(id: u8, form: Option<Form>) -> u32 {
+    let held = match form {
+        None => equip::form_held(base(), id),
+        Some(Form::Valor) => (equip::final_held(base()) == id) as u32,
+        Some(Form::Final) => (equip::valor_held(base()) == id) as u32,
+    };
+    (equip::owned(base(), id) as u32).saturating_sub(held)
+}
+
+/// Sora's own weapon list (row 0): his Keyblades whose every copy the form slots hold are taken
+/// out (his own weapon always has a copy left: a slot holds one only beside the equipped ones),
+/// and the counts are the copies left.
+unsafe fn fill_sora() {
+    let n = g::<i32>(LIST_LEN).clamp(0, 256) as usize;
+    let (list, counts) = (base() + LIST, base() + LIST_COUNTS);
+    let mut k = 0;
+    let mut gone = Vec::new();
+    for i in 0..n {
+        let id = rd::<i32>(list + i * 4);
+        let c = rd::<i32>(counts + i * 4);
+        let (keep, c) = match u8::try_from(id) {
+            Ok(b) if b != 0 && equip::is_keyblade(base(), b) => {
+                let left = shown_count(b, None) as i32;
+                (left > 0, left)
+            }
+            _ => (true, c),
+        };
+        if !keep {
+            gone.push(id);
+            continue;
+        }
+        wr(list + k * 4, id);
+        wr(counts + k * 4, c);
+        k += 1;
+    }
+    if k == n {
+        return;
+    }
+    s(LIST_LEN, k as i32);
+    log(&format!("Equipment: Sora's weapon list: {gone:02x?} held by the form slots, taken out ({k} left)"));
+}
+
+/// KH1's weapon list fill; during a pick only the Keyblades the form may take stay, the cursor
+/// on the form's current one; for Sora's own weapon, without the copies the form slots hold.
 unsafe extern "system" fn fill() {
     let f: unsafe extern "system" fn() = std::mem::transmute(ORIG_FILL.load(Ordering::Acquire));
     f();
     let m = mem();
     let pick = if m == 0 { 0 } else { rd::<u8>(m + CELL_PICK) };
     if !(1..=2).contains(&pick) {
+        if g::<i32>(MEMBER) == 0 {
+            fill_sora();
+        }
         return;
     }
     // (Sora's own weapon noted as the list opens, before any preview; a rebuild of the open
@@ -685,9 +785,16 @@ unsafe extern "system" fn fill() {
             LOGGED_HOVER.store(u32::MAX, Ordering::Relaxed);
         }
     }
-    let keep = match save() {
-        Some(save) => with_real_weapon(save, || equip::valor_candidates(base())),
-        None => equip::valor_candidates(base()),
+    let Some(form) = pick_form() else { return };
+    // (The copies counted with his own weapon in his byte, not the preview's.)
+    let count = || {
+        let keep = candidates(form);
+        let shown: Vec<i32> = keep.iter().map(|&id| shown_count(id, Some(form)) as i32).collect();
+        (keep, shown)
+    };
+    let (keep, shown) = match save() {
+        Some(save) => with_real_weapon(save, count),
+        None => count(),
     };
     let current = row_id(pick as usize) as i32;
     let n = g::<i32>(LIST_LEN).clamp(0, 256) as usize;
@@ -696,10 +803,9 @@ unsafe extern "system" fn fill() {
     let mut k = 0;
     for i in 0..n {
         let id = rd::<i32>(list + i * 4);
-        if (1..=255).contains(&id) && keep.contains(&(id as u8)) {
-            let c = rd::<i32>(counts + i * 4);
+        if let Some(j) = keep.iter().position(|&c| c as i32 == id) {
             wr(list + k * 4, id);
-            wr(counts + k * 4, c);
+            wr(counts + k * 4, shown[j]);
             k += 1;
         }
     }
@@ -708,8 +814,7 @@ unsafe extern "system" fn fill() {
     let (top, cur) = if (k as i32) < 7 { (0, at) } else { let t = at.min(k as i32 - 7); (t, at - t) };
     s(LIST_SCROLL, top);
     s(LIST_CURSOR, cur);
-    let name = pick_form().map_or("?", |f| f.name());
-    log(&format!("Equipment: weapon list for {name}: {before:02x?} -> {:02x?}", (0..k).map(|i| rd::<i32>(list + i * 4)).collect::<Vec<_>>()));
+    log(&format!("Equipment: weapon list for {}: {before:02x?} -> {:02x?}", form.name(), (0..k).map(|i| rd::<i32>(list + i * 4)).collect::<Vec<_>>()));
 }
 
 /// The weapon list during a pick: KH1's live preview shows the hovered Keyblade in Sora's hand
@@ -750,11 +855,12 @@ unsafe extern "system" fn list_update(win: usize) {
         wr(save + WEAPON, weapon);
         wr(m + CELL_PICK, 0u8);
         match form {
-            Some(form) if (1..=255).contains(&picked) && equip::valor_candidates(base()).contains(&(picked as u8)) => {
+            Some(form) if (1..=255).contains(&picked) && candidates(form).contains(&(picked as u8)) => {
+                let was = rd::<u8>(save + form.off());
                 wr(save + form.off(), picked as u8);
                 let item = equip::item_name(base(), picked as u8).unwrap_or_default();
                 log(&format!(
-                    "Equipment: {name}'s Keyblade stored: {picked:#04x} {item} (Sora keeps {weapon:#04x}; model loaded {:#04x}, put back by KH1)",
+                    "Equipment: {name}'s Keyblade stored: {picked:#04x} {item}, its copy held ({was:#04x} given back; Sora keeps {weapon:#04x}; model loaded {:#04x}, put back by KH1)",
                     rd::<i32>(loaded_at)
                 ));
             }

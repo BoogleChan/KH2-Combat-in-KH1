@@ -125,9 +125,19 @@ KH1's item table is in `btltbl.bin` (loaded by `0x14028D840`): the pointer at `0
   equipped.
 - So: **Sora owns Keyblade `k` when `save[0x499 + k] > 0`; it is free for Valor when that count
   is more than the copies equipped** (in practice: owned and not `save[0x36]`).
-  (`equip::owned_keyblades`, `equip::valor_candidates`.)
+  (`equip::owned_keyblades`, `equip::valor_candidates`.) The form slots now hold a copy
+  each, as equipping does (section 4, "The form slots hold their copies").
 - KH1's weapon list for a member (`0x140304E50`) is every id with a count and the member's weapon
-  kind, sorted (`0x14030C130`), the equipped one included; its counts are shown when above 1.
+  kind, sorted (`0x14030C130`), the equipped one included; its counts (the inventory's, not the
+  free count) are shown when above 1. **It doesn't call the free count**, so a hook there alone
+  wouldn't change it (high).
+- The free count's callers (high for the calls, medium for what the windows are): the shop's
+  sell list `0x1402FF380` (every id with a free copy and a sell price, the item record's `+0x0A`
+  through `0x1402E65E0`; the counts from it, `0x1402FF472` / `0x1402FF4D8`), the shop windows'
+  figures and the sell quantity's limit (`0x1402FD20C`, `0x1402FD353`, `0x1402FDC31`,
+  `0x1402FFB12`), and the accessory list's fill `0x140304D40` (`0x140304D9F` / `0x140304E08`:
+  accessories only). No other caller, no pointer to it in the exe, nothing jumps into its first
+  10 bytes. `0x1402E63C0` (the equipped count) has no direct caller.
 
 ## 3. Changing the weapon (high)
 
@@ -324,7 +334,9 @@ The plan above, with these changes once the code was read closer:
   (section 5): the same Keyblades to choose from as Valor (owned, a copy not equipped), and the
   Kingdom Key (`0x51`, what Final always used before) when the slot holds none of them, so Final
   is never refused; its row then shows the Kingdom Key and confirm buzzes only when no Keyblade
-  is free. The two slots may hold the same Keyblade (the forms are never on at once).
+  is free. The two slots could hold the same copy at first (the forms are never on at once); now
+  each holds its own copy (below, "The form slots hold their copies"), so the two rows show the
+  same Keyblade only with two copies, or Final's Kingdom Key fallback beside Valor's.
   - The row stub reads one status byte per row (rows 1 and 2: none / a choice / refused) and
     stores the confirmed row in the pick byte, so the list, the stored slot, the compare box
     and the header follow the row picked.
@@ -337,9 +349,56 @@ The plan above, with these changes once the code was read closer:
   - The compare box needs nothing new: the second Keyblade adds alike in both forms, and the
     box's "now" is worked out from the row's Keyblade (`0x142E9AA5C`, set from the row picked).
 
-Log lines (`kh1-kh2.log`, all start with "Equipment:"): the install, "form rows [Valor ..,
-Final ..] (candidates ..)" on change, "Sora's slots N rows", "Valor row picked", "weapon list for Valor:
-[..] -> [..]", "Valor's Keyblade stored: .." or "not stored", "Sora's row N is accessory slot K".
+### The form slots hold their copies
+
+The user: "When you put a keyblade in any of the drive equipment slots (for example, selecting the
+valor form second keyblade,) it doesn't remove the keyblade from the list, which makes you able to
+have the same secondary keyblade for multiple forms". Until then the slots counted as nothing: a
+Keyblade in Valor's slot was still offered for Final's and for Sora's own weapon. Now a slot's
+Keyblade is in use like an equipped one (`equip::form_held`):
+
+- **Which copies are held**: Valor's slot holds its Keyblade when Valor is unlocked
+  (`form::unlocked`) and a copy is left after the members' equipped ones (`valor_may_hold`; Final's
+  slot doesn't count against it). Final's slot holds its Keyblade when Final is unlocked and a copy
+  is left after the members' and Valor's slot's (`final_may_hold`). So one copy fills one slot;
+  two copies may fill two slots (or a slot and Sora's hand). A slot whose row isn't shown (form
+  not unlocked) holds nothing, so an old save's leftover byte can't take a Keyblade away unseen.
+- **Old saves with both slots on one copy**: Valor keeps it; Final falls back to the Kingdom Key,
+  its slot is emptied and the log says so ("Final's Keyblade: .. its copy is Valor's").
+- **Final's Kingdom Key fallback holds no copy**: `valor::final_keyblade` now empties the slot
+  (0) instead of writing `0x51` there, so a fallback can't be mistaken for a Kingdom Key picked
+  in the menu (which is stored, and holds a copy). A save from before this change with `0x51` in
+  Final's slot reads as a picked Kingdom Key when a copy is free.
+- **Lists**: the Valor pick's list (`valor_candidates`) leaves out Final's copy, the Final pick's
+  (`final_candidates`) Valor's; each keeps its own slot's current Keyblade, so it can be picked
+  again. Sora's own weapon list (row 0; `equipmenu::fill_sora`, in the fill hook when the member
+  `0x142E9AA48` is 0 and no form pick is under way) leaves out a Keyblade whose every copy the
+  slots hold. His equipped one always stays (a slot only holds a copy beside the equipped ones).
+  The counts these lists show are the inventory's less the copies the slots hold (the picked
+  slot's own left in), as KH1 shows the inventory's with the equipped one in.
+- **Sora equips a slot's Keyblade** (possible only with a second copy, the list): the slot keeps
+  its copy (a copy is still left after the equipped one).
+- **KH1's free count** `0x1402E6330 (id)` is hooked (prologue `48 89 5C 24 08 48 89 7C 24 10`,
+  the same at Steam `0x1402E8770`; `equipmenu::free_count`): KH1's figure less the slots' copies,
+  at least 0. So the shops count them as in use (not on the sell list, not in the sell quantity).
+  Installed on its own, first in `equipmenu::install`.
+- **Valor's automatic pick** (an empty or no longer valid slot) takes the strongest Keyblade with
+  a copy free of the members and Final's slot. Because a slot's Keyblade now leaves Sora's list,
+  a Keyblade Valor took on its own is no longer offered as his weapon until Valor's slot is
+  changed.
+- While a form row's pick is under way (`equipmenu::pick_own`), `valor::final_keyblade` reads the
+  slot as stored and writes nothing, as the Valor row already did: KH1's preview puts the
+  hovered Keyblade in Sora's weapon byte and the copies can't be counted then.
+- The compare box and the stats are unchanged: they read the slots and Sora's own weapon, not
+  the free copies.
+
+Log lines (`kh1-kh2.log`, all start with "Equipment:"): the install, "form rows [Valor ..
+(candidates ..), Final .. (candidates ..)]" on change, "Sora's slots N rows", "Valor row picked",
+"weapon list for Valor: [..] -> [..]", "Valor's Keyblade stored: .., its copy held (.. given
+back ..)" or "not stored", "Sora's row N is accessory slot K", "Sora's weapon list: [..] held by
+the form slots, taken out", "KH1's free count of ..: N less M held by the form slots"; and
+"hooked KH1 free item count at ..", "Final's Keyblade: .. Final falls back to the Kingdom Key,
+slot emptied".
 
 To test in the game:
 
@@ -350,19 +409,30 @@ To test in the game:
    Confirm one: the row shows it, Sora's weapon (row 0 and in his hand) is unchanged, Strength
    unchanged. Cancel instead: nothing changes.
 3. Confirm on an accessory row: the right accessory slot is replaced (first, last).
-4. Equip the V row's Keyblade as Sora's weapon: the V row moves to another Keyblade.
+4. The V row's Keyblade isn't in Sora's own weapon list (row 0) unless he owns a second copy
+   (step 10); with a second copy, equipping it leaves the V row as it is.
 5. With only the Kingdom Key (or in Dive to the Heart): the V row is empty and confirm on it
    buzzes.
 6. Sora with 7 or 8 accessory slots (9 / 10 rows): scrolling, the last accessory, its help.
 7. Steam build: the same, and the install line without "some patches failed".
 8. Final unlocked: an "F: <Keyblade>" row under the V row (the Kingdom Key on a save that never
    set it); picking works as on the V row and stores Final's own Keyblade; both rows may show
-   the same Keyblade, each with its own label. The compare box: the row's own Keyblade shows no
-   change, the others the change from it. Enter Final: that Keyblade in his left hand, its
-   Strength and MP in the Status page. Equip the F row's Keyblade as Sora's weapon: the F row
-   goes back to the Kingdom Key.
+   the same Keyblade (two copies, or the Kingdom Key in both), each with its own label. The
+   compare box: the row's own Keyblade shows no change, the others the change from it. Enter
+   Final: that Keyblade in his left hand, its Strength and MP in the Status page. (Equipping
+   the F row's Keyblade as Sora's weapon needs a second copy now, step 11.)
 9. Before Valor is unlocked (or a new game): no V or F row, the accessories right under the
    weapon; Valor unlocked but not Final: only the V row.
+10. The slots hold their copies. With one copy of each Keyblade: put X in the V row; the
+    F row's list and Sora's own weapon list (row 0) no longer offer X. Put Y in the F row: the V
+    row's list and row 0's no longer offer Y. Change the V row to Z: X is offered again in the F
+    row's list and row 0's. Confirm on a row's own Keyblade again: allowed, nothing changes.
+11. With two copies of X: X may be in both rows, or in one row and Sora's hand; row 0's list
+    shows X (count 1) while one row holds it. Equip it as Sora's weapon: the row keeps its X.
+12. A shop's sell list: a Keyblade in a slot isn't offered (if Keyblades sell at all), or its
+    count is one lower.
+13. An old save with the same single copy in both slots: the V row keeps it, the F row shows the
+    Kingdom Key, and the log has "Final's Keyblade: .. its copy is Valor's".
 
 ## 5. Spare save bytes for the Valor and Final Keyblades
 
@@ -391,8 +461,9 @@ same spare four:
   dwords at `+0x484` (`0x1400B8xxx`) end at `0x487`. `movswl 0x486(..)` reads `0x486..0x487`.
 - New game writes nothing at `0x488..0x48B` (above), and `+0x48C` (the Dive's choice, read by
   `form::unlocked`) is the next byte KH1 uses. (medium-high, as for `+0x488`.)
-- Checked on every read: a Keyblade Sora owns with a copy free, else the Kingdom Key
-  (`equip::final_keyblade`), written back by `valor::final_keyblade`.
+- Checked on every read: a Keyblade Sora owns with a copy no member and not Valor's slot holds,
+  else the Kingdom Key (`equip::final_keyblade`); `valor::final_keyblade` empties the slot (0)
+  for the fallback (section 4, "The form slots hold their copies").
 - `+0x48A / +0x48B` stay free.
 
 Not usable: `+0x840..0x843` (a u32 KH1 sets to 1), `+0x848..` (a u16 array of counters indexed

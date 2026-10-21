@@ -1,5 +1,8 @@
 //! Read-only views of Sora's equipment and KH1's inventory, for Valor's and Final Form's second
 //! Keyblades (`docs/kh1-equipment.md` has KH1's side). Nothing here writes to the game.
+//! (The user: "When you put a keyblade in any of the drive equipment slots ... it doesn't remove
+//! the keyblade from the list, which makes you able to have the same secondary keyblade for
+//! multiple forms".)
 //!
 //! - KH1's party records are `0x74` bytes from the save block's start (member 0 is Sora); a
 //!   record's weapon is its byte `+0x36` (a KH1 item id, 0 for none), its accessory count
@@ -7,6 +10,10 @@
 //! - The inventory is one count per item id at `save + 0x499 + id` (ids 1..=255). It counts
 //!   every copy Sora owns: equipping a weapon or an accessory leaves it unchanged (KH1's "free"
 //!   count, `0x1402E6330`, takes the copies equipped across the ten members off it).
+//! - Valor's and Final's slots (`VALOR_OFF`, `FINAL_OFF`) hold a copy each, as equipping does
+//!   (`form_held`): the copy is taken off the free count, ours (`free`) and KH1's (hooked,
+//!   `equipmenu::free_count`), off Sora's weapon list and off the other slot's list. Valor's slot
+//!   keeps its copy before Final's.
 //! - KH1's item table (`btltbl.bin`'s, at `*0x142D23738`): 255 records of `0x14` bytes, by
 //!   id - 1; `+0` the name's word number, `+2` the kind (0 an item, 1 an accessory, 2 + member a
 //!   weapon of that member: 2 is Sora's), `+6` the weapon's row in its member's weapon table
@@ -111,9 +118,63 @@ pub unsafe fn equipped_count(base: usize, id: u8) -> u32 {
     n
 }
 
-/// Copies of `id` owned and not equipped (KH1's `0x1402E6330`).
+/// Copies of `id` owned and not in use: not equipped by a member (KH1's own count,
+/// `0x1402E6330`) and not held by Valor's or Final's slot (`form_held`; KH1's count is hooked
+/// to take those off too, `equipmenu::free_count`).
 pub unsafe fn free(base: usize, id: u8) -> u32 {
-    (owned(base, id) as u32).saturating_sub(equipped_count(base, id))
+    (owned(base, id) as u32).saturating_sub(equipped_count(base, id) + form_held(base, id))
+}
+
+/// The raw byte of a form's slot (`VALOR_OFF`, `FINAL_OFF`), 0 if the save doesn't read.
+unsafe fn slot_byte(base: usize, off: usize) -> u8 {
+    save(base).map(|s| rd::<u8>(s + off)).unwrap_or(0)
+}
+
+/// `id` may be Valor's: a Keyblade with a copy no member has equipped. Valor's slot comes first:
+/// Final's doesn't count against it (an old save with both slots on one copy: Valor keeps it).
+pub unsafe fn valor_may_hold(base: usize, id: u8) -> bool {
+    is_keyblade(base, id) && owned(base, id) as u32 > equipped_count(base, id)
+}
+
+/// `id` may be Final's: a Keyblade with a copy that neither a member nor Valor's slot holds.
+pub unsafe fn final_may_hold(base: usize, id: u8) -> bool {
+    let valor = (valor_held(base) == id) as u32;
+    is_keyblade(base, id) && owned(base, id) as u32 > equipped_count(base, id) + valor
+}
+
+/// The Keyblade a copy of which Valor's slot holds (0: none): the slot's, while Valor is unlocked
+/// (`form::unlocked`; a slot whose row isn't shown takes nothing from Sora) and it may be Valor's.
+pub unsafe fn valor_held(base: usize) -> u8 {
+    let id = slot_byte(base, VALOR_OFF);
+    if id != 0 && super::form::unlocked(super::form::Kind::Valor) && valor_may_hold(base, id) {
+        id
+    } else {
+        0
+    }
+}
+
+/// The Keyblade a copy of which Final's slot holds (0: none), as Valor's. Its Kingdom Key
+/// fallback (an empty slot, `final_keyblade`) holds no copy.
+pub unsafe fn final_held(base: usize) -> u8 {
+    let id = slot_byte(base, FINAL_OFF);
+    if id != 0 && super::form::unlocked(super::form::Kind::Final) && final_may_hold(base, id) {
+        id
+    } else {
+        0
+    }
+}
+
+/// How many copies of `id` the form slots hold (0..=2; one each at most).
+pub unsafe fn form_held(base: usize, id: u8) -> u32 {
+    if id == 0 {
+        return 0;
+    }
+    // (Cheap first: only an id in a slot byte can be held.)
+    let (v, f) = (slot_byte(base, VALOR_OFF), slot_byte(base, FINAL_OFF));
+    if v != id && f != id {
+        return 0;
+    }
+    (v == id && valor_held(base) == id) as u32 + (f == id && final_held(base) == id) as u32
 }
 
 /// Every Keyblade Sora owns (equipped one included), by id.
@@ -121,10 +182,19 @@ pub unsafe fn owned_keyblades(base: usize) -> Vec<u8> {
     (1..=ITEMS as u8).filter(|&id| owned(base, id) > 0 && is_keyblade(base, id)).collect()
 }
 
-/// The Keyblades Valor could take: owned, and a copy not equipped (so never Sora's own
-/// weapon unless he owns two).
+/// The Keyblades Valor's slot may take: owned, with a copy that no member has equipped and
+/// Final's slot doesn't hold (so never Sora's own weapon or Final's unless he owns another
+/// copy); Valor's own current one included.
 pub unsafe fn valor_candidates(base: usize) -> Vec<u8> {
-    owned_keyblades(base).into_iter().filter(|&id| free(base, id) > 0).collect()
+    let fin = final_held(base);
+    owned_keyblades(base).into_iter().filter(|&id| owned(base, id) as u32 > equipped_count(base, id) + (fin == id) as u32).collect()
+}
+
+/// The Keyblades Final's slot may take: as Valor's, with Valor's slot's copy taken off instead
+/// of Final's; Final's own current one included.
+pub unsafe fn final_candidates(base: usize) -> Vec<u8> {
+    let valor = valor_held(base);
+    owned_keyblades(base).into_iter().filter(|&id| owned(base, id) as u32 > equipped_count(base, id) + (valor == id) as u32).collect()
 }
 
 /// The Strength a Sora weapon adds (its weapon-table row's `+0x30`; KH1's `0x1402A2FA0`).
@@ -152,23 +222,24 @@ unsafe fn weapon_row(base: usize, id: u8) -> Option<usize> {
     super::crash::readable(at + WEAPON_ROW_SIZE - 1).then_some(at)
 }
 
-/// The id stored for Valor (`VALOR_OFF`), if it is still a Keyblade Valor may take; else the
-/// candidate with the most Strength (the lowest id on a tie); `None`: Valor can't be entered.
+/// The id stored for Valor (`VALOR_OFF`), if it is still a Keyblade Valor may take
+/// (`valor_may_hold`: it keeps its copy before Final's slot); else the candidate with the most
+/// Strength (the lowest id on a tie; never Final's copy); `None`: Valor can't be entered.
 pub unsafe fn valor_keyblade(base: usize) -> Option<u8> {
-    let cands = valor_candidates(base);
-    let stored = save(base).map(|s| rd::<u8>(s + VALOR_OFF)).unwrap_or(0);
-    if cands.contains(&stored) {
+    let stored = slot_byte(base, VALOR_OFF);
+    if stored != 0 && valor_may_hold(base, stored) {
         return Some(stored);
     }
-    cands.into_iter().max_by_key(|&id| (weapon_strength(base, id).unwrap_or(0), std::cmp::Reverse(id)))
+    valor_candidates(base).into_iter().max_by_key(|&id| (weapon_strength(base, id).unwrap_or(0), std::cmp::Reverse(id)))
 }
 
-/// The id stored for Final (`FINAL_OFF`), if it is a Keyblade Sora owns with a copy not
-/// equipped (Valor's rule, `valor_candidates`); else the Kingdom Key (`FINAL_DEFAULT`), which
-/// Final may always use, equipped or not. Final is never refused for want of a Keyblade.
+/// The id stored for Final (`FINAL_OFF`), if it is a Keyblade Sora owns with a copy that no
+/// member and not Valor's slot holds (`final_may_hold`); else the Kingdom Key (`FINAL_DEFAULT`),
+/// which Final may always use, equipped or not, without holding a copy (`valor::final_keyblade`
+/// then empties the slot). Final is never refused for want of a Keyblade.
 pub unsafe fn final_keyblade(base: usize) -> u8 {
-    let stored = save(base).map(|s| rd::<u8>(s + FINAL_OFF)).unwrap_or(0);
-    if stored != 0 && valor_candidates(base).contains(&stored) {
+    let stored = slot_byte(base, FINAL_OFF);
+    if stored != 0 && final_may_hold(base, stored) {
         stored
     } else {
         FINAL_DEFAULT

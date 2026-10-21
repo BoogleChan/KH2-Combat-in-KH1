@@ -3348,3 +3348,12 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   should cost 3 MP to cast. Antiform should take half of your MP". Valor and Wisdom 1, Final 3
   (as s264); Anti now pays half the MP he has, rounded down (`form::cost_mp(kind, have)`), and
   still starts at any MP.
+
+### 2026-10-20: Stage 286 (a form slot's Keyblade is in use)
+- The user: a Keyblade in a Drive slot "doesn't remove the keyblade from the list, which makes
+  you able to have the same secondary keyblade for multiple forms". Valor's and Final's slots
+  each hold a copy (Valor first, then Final, after the members' equipped copies; a form not
+  unlocked holds none): `equip::free` takes them off, each form's list leaves out the other's,
+  Sora's weapon list drops a Keyblade whose every copy is slotted, and KH1's free count
+  (`0x1402E6330`, Steam mapped; the shop's sell list) is hooked to take them off too. Final's
+  Kingdom Key fallback now empties its slot (no copy held). `docs/kh1-equipment.md`.

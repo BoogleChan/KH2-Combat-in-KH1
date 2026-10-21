@@ -12,6 +12,9 @@
 //! - Final Form has a slot of its own (the user: "add a section in the equipment menu for the
 //!   second keyblade in final form"): `equip::FINAL_OFF`, the same Keyblades to choose from, but
 //!   the Kingdom Key when it holds none of them (`final_keyblade`), so Final is never refused.
+//! - Each slot holds its copy as equipping does (`equip::form_held`): one copy can't be in both
+//!   slots, nor in a slot and Sora's hand. Valor's slot keeps its copy first; Final's Kingdom Key
+//!   fallback holds none (its slot is emptied).
 
 use super::log;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -52,15 +55,29 @@ pub unsafe fn keyblade() -> Option<u8> {
 /// The Keyblade in Final's slot, as last decided (0 not yet), for the log.
 static FINAL_CHOSEN: AtomicU32 = AtomicU32::new(0);
 
-/// The Keyblade Final uses now (its item id): the slot's if Sora may take it (Valor's rule),
-/// else the Kingdom Key (`equip::final_keyblade`), written back to the slot when it differs.
+/// The Keyblade Final uses now (its item id): the slot's if Sora may give it (a copy no member
+/// and not Valor's slot holds), else the Kingdom Key (`equip::final_keyblade`). The slot is
+/// emptied for the Kingdom Key fallback, so the fallback holds no copy (`equip::final_held`);
+/// a Kingdom Key picked in the menu stays and holds one.
 pub unsafe fn final_keyblade() -> u8 {
     let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
-    let k = super::equip::final_keyblade(base);
-    if let Some(save) = super::menu::save_block(base) {
+    // (While a form row's pick may have the hovered Keyblade in Sora's weapon byte, the copies
+    // can't be counted: the slot as stored, nothing written.)
+    let picking = super::equipmenu::pick_own().is_some();
+    let k = if picking { super::equip::final_stored(base) } else { super::equip::final_keyblade(base) };
+    if let (Some(save), false) = (super::menu::save_block(base), picking) {
         let slot = (save + super::equip::FINAL_OFF) as *mut u8;
-        if std::ptr::read_unaligned(slot) != k {
-            std::ptr::write_unaligned(slot, k);
+        let stored = std::ptr::read_unaligned(slot);
+        if stored != 0 && !super::equip::final_may_hold(base, stored) {
+            // (An old save with both slots on Sora's one free copy: Valor keeps it.)
+            let why = if super::equip::valor_held(base) == stored {
+                "its copy is Valor's (Valor's slot keeps it)"
+            } else {
+                "no copy of it is free"
+            };
+            let name = super::equip::item_name(base, stored).unwrap_or_else(|| format!("{stored:#x}"));
+            log(&format!("Final's Keyblade: {name} ({stored:#x}) {why}: Final falls back to the Kingdom Key, slot emptied"));
+            std::ptr::write_unaligned(slot, 0);
         }
     }
     // (In Final, a change made in the menu reaches his left hand, as Valor's.)
