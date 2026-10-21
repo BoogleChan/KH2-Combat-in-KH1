@@ -26,7 +26,9 @@ use std::sync::OnceLock;
 /// word; Valor takes the next free ones, record 0x7F and word 0x1FD; Final record 0x80 and word
 /// 0x1FC (the user: "put it into the drive menu"; btltbl's records 0x7E.. are empty and none of
 /// its records names a word above 0x173).)
-pub const FORMS: [(u8, u16, &str); 3] = [(0x7F, 0x1FD, "Valor Form"), (0x7E, 0x1FE, "Wisdom Form"), (0x80, 0x1FC, "Final Form")];
+/// (Limit after Wisdom, KH2's order: record 0x81 and word 0x1FB, the next free ones. The records'
+/// arguments follow the list's order, so Final's is 0x13 now.)
+pub const FORMS: [(u8, u16, &str); 4] = [(0x7F, 0x1FD, "Valor Form"), (0x7E, 0x1FE, "Wisdom Form"), (0x81, 0x1FB, "Limit Form"), (0x80, 0x1FC, "Final Form")];
 /// The record argument of form `k` (KH1's spells are 0..6, Reflect 7).
 pub const FORM_ARG: u8 = 0x10;
 /// Summon's command (its record opens the summon list) and the summon-is-out one.
@@ -189,7 +191,9 @@ pub unsafe fn fill(actor: usize, _flags: usize) {
     // valor form magic command menu should be unselectable"). KH1 keeps the same bit (1) set
     // when Sora has no spell, so the list doesn't open; page 2's Drive row is drawn from the
     // magic list's own bit (`fill` below), so Revert stays usable.
-    if super::form::in_valor() {
+    // (Limit Form too: KH2's Limit can't cast either; its Limit commands, which take Magic's place
+    // there, are not in yet.)
+    if super::form::in_valor() || super::form::in_limit() {
         let top = base + MENU_RVA;
         if rd::<u8>(top + 0x14 + 1) == 2 {
             for off in [4usize, 8] {
@@ -353,7 +357,9 @@ unsafe fn drive_list_shown(base: usize, menu: usize) -> bool {
     PAGE2.load(Ordering::Relaxed)
         && menu == base + SUMMON_MENU_RVA
         && rd::<u32>(base + SUMMON_OUT_RVA) & 8 == 0
-        && rd::<u8>(menu + 0x14) == FORMS[0].0
+        // (Its first row is any form's: only the unlocked ones are listed, so it isn't always
+        // Valor's.)
+        && FORMS.iter().any(|f| f.0 == rd::<u8>(menu + 0x14))
 }
 
 /// A sprite record's colour without its hue: each vertex's red, green and blue as their

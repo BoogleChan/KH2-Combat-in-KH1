@@ -230,7 +230,9 @@ pub fn attack_params(p: &Pref) -> AttackParams {
 }
 
 pub fn attack_params_for(p: &Pref, moveset: usize) -> AttackParams {
-    let plyr = rec(&p.plyr, moveset);
+    // (Limit Form's moveset, 0x42, is past the end of `plyr`'s 59 pointers: ours, Sora's record
+    // then. Which record KH2 itself reads for it isn't traced.)
+    let plyr = Some(rec(&p.plyr, moveset)).filter(|r| !r.is_empty()).unwrap_or_else(|| rec(&p.plyr, SORA_MOVESET));
     let sstm = rec(&p.sstm, 0);
     let g = |n: &str| f(plyr, PLYR_FIELDS, n);
     AttackParams {

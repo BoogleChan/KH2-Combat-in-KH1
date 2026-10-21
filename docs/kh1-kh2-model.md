@@ -12,6 +12,7 @@ repository.
 | base | `obj/P_EX100.mdlx` | KH2's model of the same Keyblade, else KH1's |
 | Valor Form | `obj/P_EX100_BTLF.mdlx` | both hands: KH2's where KH2 has that Keyblade |
 | Wisdom Form | `obj/P_EX100_MAGF.mdlx` | as base |
+| Limit Form | `obj/P_EX100_KH1F.mdlx` | as base |
 | Final Form | `obj/P_EX100_ULTF.mdlx` | right: his Keyblade; left: the Kingdom Key (`W_EX010`) |
 
 A form whose model doesn't load falls back to base Sora's. Files come from the same source as

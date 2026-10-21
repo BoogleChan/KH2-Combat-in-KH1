@@ -209,7 +209,8 @@ pub fn start() {
         // sure also that valor form has its proper sound FX").
         // (And Final Form's, and Anti Form's: its claws' swings and its voice, the user: "I want
         // 1:1 combat parity".)
-        for v in [kh2.valor.as_ref(), kh2.final_form.as_ref(), kh2.anti.as_ref()].into_iter().flatten() {
+        // (And Limit Form's: its Keyblade's swings and its voice.)
+        for v in [kh2.valor.as_ref(), kh2.final_form.as_ref(), kh2.anti.as_ref(), kh2.limit.as_ref()].into_iter().flatten() {
             events.extend(v.character.moveset.clips.values().flat_map(|c| c.events.iter().map(|e| e.kind)).filter(|k| matches!(k, character_core::EventKind::Sound(_) | character_core::EventKind::Voice(_))));
         }
         // Reflect (the user: its sounds): its cast voices (MAGC, played by KH2's cast code, not a
@@ -377,7 +378,7 @@ pub fn covers(motion: u16) -> bool {
 pub unsafe fn event(motion: u16, kind: character_core::EventKind) {
     use character_core::EventKind;
     // (Valor's swings and voices are its own, whatever `kh2_sounds` lists: `start`.)
-    let valor = (super::form::in_valor() || super::form::in_final() || super::form::in_anti()) && matches!(kind, EventKind::Sound(_) | EventKind::Voice(_));
+    let valor = (super::form::in_valor() || super::form::in_limit() || super::form::in_final() || super::form::in_anti()) && matches!(kind, EventKind::Sound(_) | EventKind::Voice(_));
     // (Battle quotes on every move, `kh2_voice`.)
     let quote = matches!(kind, EventKind::Voice(_)) && kh2_voice();
     if !(allowed(motion) || super::form::own_motion(motion) || valor || quote) {

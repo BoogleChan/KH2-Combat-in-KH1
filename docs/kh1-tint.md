@@ -163,6 +163,8 @@ look, KH1's own texture back out of the form:
 - **Wisdom** (blue): the reds of `-1c0` / `-1c1` (hue shift to 225°), the shoes' yellow of `-1c3`,
   and the jacket's sleeves.
 - **Valor** (red): the sleeves, the belt, the hood's lining, the shoes' yellow.
+- **Limit**: none. KH2's Limit Form (`P_EX100_KH1F`) is KH2's model of KH1 Sora, and the model
+  drawn here is KH1's own, so his textures stay KH1's (`form::after_step` passes no look).
 
 Where the parts are, from plotting the remastered mesh 1 (and 3)'s vertices on the texture by
 the bone each follows (`-c0.cvbl`: tag 0x11 chunks give matrix slot → bone at `+8` / `+0xC`, a

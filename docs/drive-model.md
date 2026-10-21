@@ -268,9 +268,140 @@ starts at any MP.
   - what reaches row 12 (motion 161) in KH2;
   - whether `+8` in KH1's hit record is the final damage.
 
+## Limit Form in the KH1 port (Data; the rules ours where marked)
+
+The user: "lets begin working on limit form". Its cost and unlock are the user's: 1 MP to enter,
+as Valor and Wisdom (`form::LIMIT_COST_MP`), and open from level 97 (`form::LIMIT_LEVEL`, the same
+level check as Final's 99 and the second form's 98). It is the Drive list's third entry, after
+Wisdom.
+
+Read from the extracted `00battle.bin`, `03system.bin`, `00objentry.bin`, `msg/us/sys.bar`,
+`obj/P_EX100_KH1F.mdlx` / `.mset` and `obj/W_EX010_KH1F.mset`, and from the install's file
+lists (`.hed` names). Nothing of it is in the repository.
+
+### Its data
+
+- **Object.** `P_EX100_KH1F` (objentry 0x95D; the `_NM` / `_XM` / `_TR` / `_WI` variants
+  0x95E..0x961 share its motion set), weapon joint 1 (right hand bone 178, as Sora's).
+- **Moveset 0x42.** `wmst` row 0x42 × 2 gives `W_EX010_KH1F`, right hand only (rows 0x43..0x45
+  name it too). One Keyblade: Sora's own, as in base form.
+- **Skeleton.** 256 bones, the same as Sora's, so the pose's retarget is unchanged.
+- **Movement (`prty` 0x42).** Walk 2, run 8 (Sora's), jump 285 (Sora's 185), turn 0.26, no
+  acceleration / brake. `plyr` has only 59 pointers, so there is no record for 0x42. **Ours:**
+  `kh2_data::sora::attack_params_for` takes Sora's (auto lock-on 300). Which record KH2 reads
+  isn't traced.
+- **Model.** BAR entries `p_ex` (model), `tim_` (textures), `limi` (type 3, an object script of
+  12148 bytes: its Limit commands, below), and a type-23 entry. It looks like KH1 Sora.
+- **Effects and sounds.** `obj/P_EX100_KH1F.a.us` is on the install (in `kh2_sixth`'s list). It
+  isn't extracted here, so whether it has a "p_ex" PAX isn't checked; `kh2fx::form_library` falls
+  back to the archive's first. The motions' sounds are the Keyblade bank's (500 0xx), plus
+  footsteps and voices.
+- **Motions.** Body clips 0..19, 40..43, 53, 137, 139, 151..155, 162, 164, 173, 181..183, 191,
+  209, 211..213, 221..227, 231..234, 241..248. The tags of the form's own motions start with K
+  (K303 = 154, K304 = 155, K322 = 173, K332 = 183, K400.. = 211.., K410.. = 221.., K420.. =
+  231.., K430.. = 241..). There is no motion 52 (the Drive change is Sora's), but there is 53
+  (its arrival: elements 1..12 and 100..102 from its archive). Motion 42 (the guard's repel, a
+  guard window, ATKP 162) and 209 (Dodge Roll) are there. `kh2_data`'s moveset reads motions up
+  to 230 only, so 231 and up (Strike Raid's and Infinity's) have no controller clips yet. The rig
+  has them (posing reads to 255).
+- **Combo rows (PTYA set 0x42, 21 rows).** No row needs an ability.
+
+  | Row | Kind | Flags | Motion | ATKP (power) | What it is |
+  |---|---|---|---|---|---|
+  | 0 | 1 | 0xA | 191 | 909 (65, 25) | jumping slash into the air (target 0..260), then the fall |
+  | 28, 43 | 1, 2 | | 164 | 968, 975 (100, 25) | the far dash (180 / 300..650) |
+  | 6 | 1 | | 153 | 128, 147 | 180..300 |
+  | 4 | 2 | | 152 | 127 | 0..180 |
+  | 35 | 1 | | 162 | 890 (125) | 0..120 |
+  | 5 | 3 | | 151 | 126 | the ground default |
+  | 2 | 2 | finisher | 155 | 1870 (200, Magic, element 5, body group 20) | **Ripple Drive** ("when surrounded", "relative to magic"): any target within 500 |
+  | 3 | 3 | finisher | 154 | 1877 (600) | **Zantetsuken** ("on a single target ... instantly eliminate weaker enemies"): the default finisher |
+  | 10 | 1 | air | 182 | 132 | |
+  | 9 | 3 | air | 181 | 131 | the air default |
+  | 8 | 3 | air, finisher | 183 | 1871 ×3 (100, 25, 25; re-hit 10), 1872 (100) | **Hurricane Period** ("an aerial barrage") |
+  | 11, 12 | 0 | | 173 | guard window 161 | the guard's press (Square standing) |
+  | 39 | 0 | | 154 | 1877 | the **Zantetsu Counter** ("Unleashes Zantetsuken by selecting Attack while guarding"): KH2's counterguard row |
+  | 1 | 0 | | 181 | | |
+  | 52..56 | 0 | air | 242..246 | | Infinity's (by id only) |
+
+  The finisher names come from the ability items 573 Zantetsuken, 574 Ripple Drive and 575
+  Hurricane Period, matched to the rows by their help text and ATKP. KH2 gates none of them by
+  ability.
+- **Growth: Dodge Roll (Data).** Items 564..567 (Dodge Roll LV1..MAX, ability numbers 181..184).
+  00battle `fmlv` form 3 (Limit) gives the growth level 1, 1, 2, 2, 3, 3, 4 at form levels 1..7.
+  Its other level-up abilities are Lv2 Auto Limit (568), Lv4 Draw (405) and Lv6 Lucky Lucky (407).
+  Its level EXP column reads 3, 6, 12, 19, 23, 27. Its experience rule (sys.bar): "For each limit
+  command finishing move unleashed in Limit Form, 1 point of experience is gained". Dodge Roll's
+  invulnerable frames by level (`fmab`): 10, 16, 24, 32.
+- **Drive cost in KH2 (for reference).** 4 bars: 03system `cmd` 0x2A1 "Limit Form" (execute 4,
+  argument 3, the form id), and 0x2A2 "Limit" (Auto Limit's reaction command), both cost 4.
+
+### Its commands in KH2 (Data; not in the port yet)
+
+- **Magic is replaced by "Limit"** (`cmd` 0x2C3, execute 707, submenu 12, icon 7). Its list:
+
+  | Limit | `cmd` | MP | Follow-ups (`cmd`, no cost) | Help (sys.bar) | Motions (from `limi`'s motion calls; inferred) |
+  |---|---|---|---|---|---|
+  | Sonic Rave | 0x2BA | 60 | Rave 0x2BB, Finish 0x2BC | "attack on an enemy as you pass by. Press [it] at the right tempo for a combo" | 211..213 (K400..K402) |
+  | Last Arcanum | 0x2BD | 75 | Bash 0x2BE, The End 0x2BF | "a powerful combo attack. Press [it] for a consecutive combo" | 221..227 (K410..K416) |
+  | Strike Raid | 0x2C0 | 65 | Raid 0x2C1, Judgment 0x2C2 | "throw the Keyblade at the target. Press [it] for a combo" | 231..235 (K420.., next to `trap_strike_raid_calc_xyzrot`) |
+  | Infinity | 0x2AB | 80 | Shoot 0x2AC, Impact 0x2AD, Giga Impact 0x2AE | "can be unleashed by pressing [it] after an aerial combo" | 241..248 (K430..K437; rows 52..56) |
+
+  The follow-ups are reaction commands that the script puts on Triangle
+  (`trap_command_override`). `00battle` `limt` rows 27..30 name these limits' files
+  (`sonic_rave.bar`, `last_alcanam.bar`, `strike_raid.bar`, `ragnarok.bar`). On the install those
+  are `limit/us/*.bar`, all four 72480 bytes. That is likely their menu banners: they aren't
+  extracted, so this isn't checked. Infinity's file is Ragnarok's, and its `cmd` 0x2AB is KH2FM's
+  Ragnarok under its PC name.
+  The commands' flags (0x10112) differ from Arcana's (0x10111). What 0x10000 does to a cost
+  above his MP isn't traced.
+- **Its script.** `limi` (BAR entry type 3 of the model, as Wisdom's `wisd`) runs the limits:
+  `trap_limit_start_thread`, `trap_limit_start_command`, `trap_command_override`,
+  `trap_limit_time`, `trap_limit_light`, `trap_obj_party_attack`,
+  `trap_strike_raid_calc_xyzrot`, `trap_teamwork_alloc`, and motion pushes / starts / trigger
+  checks. `kh2-magic`'s host has none of the limit traps.
+- **Square.** Standing, it is the guard (row 11, motion 173; KH2's Limit Form keeps the guard).
+  Moving, it is Dodge Roll (motion 209). Attack during the guard's repel (motion 42) is the
+  Zantetsu Counter (row 39). All three are the controller's own rules (`character_core`), which
+  apply to this data as they are.
+- **Triangle** is the limits' follow-ups (above) and Auto Limit's reaction command.
+
+### The port (ours, on the rules every form has here)
+
+- `form::Kind::Limit`, `pose::Kh2::limit` (`P_EX100_KH1F` through `load_form`), `drive::FORMS`
+  third entry: record 0x81, word 0x1FB. The Drive records' arguments follow the list's order, so
+  Final's is now 0x13.
+- The change, the revert, the MP drain and its two extra bars (`valorstats::DRIVE_MP`), the
+  revert out of MP, on a KO and in a new world, and full HP on entering are all as for every form.
+- **Moveset.** KH2's controller runs its moves and combo rows, its movement numbers, its guard,
+  Aerial Recovery (motion 40), the Zantetsu Counter and its finishers, as above.
+- **Growth.** Dodge Roll at base Sora's level + 1, MAX at most (`form::growth_up`), the others
+  none. It follows KH1's menu changes mid-form (`form::abilities`).
+- **Effects and sounds.** Its archive is `kh2fx::LIMIT` (frame trigger 1 → `kh2fx::form_event`,
+  weapon anchors on its one Keyblade, `form_bone`). Its elements' sounds are in
+  `formmagic::element_sounds`, and its swings' sounds and voices in `kh2sound`, as Valor's.
+- **Look.** No tint (`tint::refresh(None)`): Sora's drawn model is KH1's, which Limit Form is
+  modelled on. With KH2's player model (off since s259) its own body `P_EX100_KH1F.mdlx` is
+  drawn (`model.rs`).
+- **No magic, no KH1 limits.** Magic is greyed and refused as in Valor (`drive::fill`,
+  `combat::run_entry`): KH2's Limit Form can't cast, and its Limit commands aren't in. KH1's
+  specials stay refused as in every form (s278).
+- **Next steps.**
+  - The Limit menu in Magic's place, with Sonic Rave, Last Arcanum, Strike Raid and Infinity.
+    That means running `limi` in `kh2-magic` with the limit traps, the Triangle follow-ups
+    (`command_override`) and their MP costs (KH2's 60..80 against KH1's bars, the user's call).
+    Another way, the user's call: KH1's own Strike Raid / Ars Arcanum / Ragnarok / Sonic Blade in
+    their place, which s278's rule refuses now.
+  - Motions 231..248 in the controller's moveset (`kh2_data::sora::moves` stops at 230).
+- **Unchecked in game:** all of it. In particular:
+  - whether the KH1F archive loads as a PAX;
+  - Ripple Drive's body group 20 shapes on KH1's contact code;
+  - Zantetsuken's power 600 against KH1's enemies;
+  - Sora's `plyr` stand-in.
+
 ## Not modelled
 
 - Form keyblade stats (forms deal Sora's base damage).
-- Limit Form's limit commands, summons, party members.
+- Limit Form's limit commands (its `limi` script, above), summons, party members.
 - The form change's full-screen effect.
 - Drive Recovery items.

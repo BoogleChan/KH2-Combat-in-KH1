@@ -69,8 +69,8 @@ enum Weapon {
 struct Library {
     install: kh2_data::Install,
     source: kh2_data::Source,
-    /// Base Sora, then Valor, Wisdom, Final, Anti.
-    bodies: [Option<Arc<Loaded>>; 5],
+    /// Base Sora, then Valor, Wisdom, Final, Anti, Limit.
+    bodies: [Option<Arc<Loaded>>; 6],
     /// KH2's Keyblades: name (lower case) → model name.
     keyblades: Vec<(String, String)>,
     /// By model name.
@@ -222,8 +222,8 @@ pub fn load() {
             let install = kh2_data::Install::locate(&exe).map_err(|e| format!("KH2 install: {e}"))?;
             let source = if install.has_backup() { kh2_data::Source::Backup } else { kh2_data::Source::Live };
             let read = |name: &str| install.read_any(source, name).map_err(|e| format!("{name}: {e}"));
-            let mut bodies: [Option<Arc<Loaded>>; 5] = [None, None, None, None, None];
-            for (i, name) in ["P_EX100", "P_EX100_BTLF", "P_EX100_MAGF", "P_EX100_ULTF", "P_EX100_HTLF"].iter().enumerate() {
+            let mut bodies: [Option<Arc<Loaded>>; 6] = [None, None, None, None, None, None];
+            for (i, name) in ["P_EX100", "P_EX100_BTLF", "P_EX100_MAGF", "P_EX100_ULTF", "P_EX100_HTLF", "P_EX100_KH1F"].iter().enumerate() {
                 match read(&format!("obj/{name}.mdlx")).and_then(|b| Loaded::new(name, &b)) {
                     Ok(l) => {
                         log(&format!(
@@ -285,6 +285,7 @@ fn body(lib: &Library) -> Option<Arc<Loaded>> {
         Some(Kind::Wisdom) => 2,
         Some(Kind::Final) => 3,
         Some(Kind::Anti) => 4,
+        Some(Kind::Limit) => 5,
         None => 0,
     };
     lib.bodies[i].clone().or_else(|| lib.bodies[0].clone())
@@ -347,7 +348,7 @@ unsafe fn left_weapon(base: usize) -> Option<u8> {
     match super::form::current()? {
         Kind::Final => Some(super::equip::final_stored(base)),
         Kind::Valor => super::equip::valor_keyblade(base),
-        Kind::Wisdom | Kind::Anti => None,
+        Kind::Wisdom | Kind::Limit | Kind::Anti => None,
     }
 }
 

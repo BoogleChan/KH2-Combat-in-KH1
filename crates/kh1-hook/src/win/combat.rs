@@ -2331,10 +2331,11 @@ unsafe fn spell_not_yet(menu: usize, entry: i32) -> bool {
         return false;
     }
     // No magic in Valor Form (KH2's Valor can't cast): the "can't" sound, the menu stays.
-    if kind == 2 && arg < super::drive::FORM_ARG && super::form::in_valor() {
+    // (Nor in Limit Form: KH2's has its Limit commands there instead, not in yet.)
+    if kind == 2 && arg < super::drive::FORM_ARG && (super::form::in_valor() || super::form::in_limit()) {
         let sound: unsafe extern "system" fn(i32) = std::mem::transmute(base + SOUND_RVA);
         sound(4);
-        cmd_log(format!("spell {arg} refused: no magic in Valor Form"));
+        cmd_log(format!("spell {arg} refused: no magic in {}", if super::form::in_limit() { "Limit Form" } else { "Valor Form" }));
         return true;
     }
     // A form from the Drive list: only on a frame Sora can change (`form::accept_now`: KH2's,

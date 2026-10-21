@@ -180,6 +180,8 @@ pub struct Kh2 {
     pub wisdom: Option<Form>,
     /// Valor Form (`form`, stage 211): its moveset (two Keyblades' swings) and motions.
     pub valor: Option<Form>,
+    /// Limit Form (`form`: `P_EX100_KH1F`, moveset 0x42, one Keyblade).
+    pub limit: Option<Form>,
     /// Final Form (`form`, stage 231: `P_EX100_ULTF`, its floating Keyblades).
     pub final_form: Option<Form>,
     /// Anti Form (`form`, the secret code's: `P_EX100_HTLF`, no Keyblade).
@@ -611,6 +613,35 @@ pub fn load_kh2() {
             } else {
                 None
             };
+            // Limit Form (the user: "lets begin working on limit form"): its own moveset (0x42),
+            // motions, combo rows, movement numbers and effect archive, the same skeleton as
+            // Sora's, his Keyblade (`W_EX010_KH1F`'s motions).
+            let limit = if super::settings::get().drive {
+                let t = Instant::now();
+                match load_form(&install, source, kh2_data::sora::FORMS[2], rig.skeleton.len()) {
+                    Ok(f) => {
+                        log(&format!(
+                            "KH2 Limit Form loaded: {} motions, {} combo rows, {} weapons, run {}, guard motion {}, dodge roll motion {}, script {}, effects {}, in {:.1}s",
+                            f.rig.motions.len(),
+                            f.character.moveset.combo_rows.len(),
+                            f.rig.weapons.len(),
+                            f.character.params.run_speed,
+                            if f.character.moveset.clips.contains_key(&character_core::motion::GUARD) { "yes" } else { "none" },
+                            if f.character.moveset.clips.contains_key(&character_core::motion::DODGE_ROLL) { "yes" } else { "none" },
+                            f.script.as_ref().map_or("missing".into(), |s| format!("{} bytes", s.len())),
+                            if f.archive.is_some() { "read" } else { "missing" },
+                            t.elapsed().as_secs_f32()
+                        ));
+                        Some(f)
+                    }
+                    Err(e) => {
+                        log(&format!("KH2 Limit Form did not load: {e}"));
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             let final_form = if super::settings::get().drive {
                 let t = Instant::now();
                 match load_form(&install, source, kh2_data::sora::FORMS[4], rig.skeleton.len()) {
@@ -661,7 +692,7 @@ pub fn load_kh2() {
             } else {
                 None
             };
-            Ok(Kh2 { rig, character: sora.character.clone(), battle: Arc::new(sora.combat.battle.clone()), magi: sora.magi.clone(), wisdom, valor, final_form, anti, roots, ground })
+            Ok(Kh2 { rig, character: sora.character.clone(), battle: Arc::new(sora.combat.battle.clone()), magi: sora.magi.clone(), wisdom, valor, limit, final_form, anti, roots, ground })
         })();
         if let Err(e) = &r {
             log(&format!("KH2 Sora did not load: {e}"));

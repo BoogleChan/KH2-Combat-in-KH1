@@ -3357,3 +3357,16 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   Sora's weapon list drops a Keyblade whose every copy is slotted, and KH1's free count
   (`0x1402E6330`, Steam mapped; the shop's sell list) is hooked to take them off too. Final's
   Kingdom Key fallback now empties its slot (no copy held). `docs/kh1-equipment.md`.
+
+### 2026-10-20: Stage 287 (Limit Form, first pass)
+- The user: "lets begin working on limit form"; 1 MP to enter, unlocked at level 97 (the user's
+  picks). `form::Kind::Limit` (`P_EX100_KH1F`, moveset 0x42), third in the Drive list after
+  Wisdom: KH2's own Limit Form moves, combos (Zantetsuken, Ripple Drive, Hurricane Period), guard
+  and Zantetsu Counter, Dodge Roll on Square while moving, its effects and sounds; no tint (KH1
+  Sora's outfit and his Keyblade); Dodge Roll one level above Sora's (`growth_up`); MP drain, the
+  2 bars, revert at 0 MP / a KO / a new world as every form. `LIMIT_COST_MP`, `LIMIT_LEVEL`.
+- Not yet: the Limit menu in Magic's place (Sonic Rave, Last Arcanum, Strike Raid, Infinity, their
+  Triangle follow-ups; KH2's `limi` script), so Magic is greyed in the form; motions 231..248.
+- The Drive list's "DRIVES" title now for any first row (it was Valor's only).
+- s286's test was on s285: OpenKH's Mods Manager builds the game's mod from the GitHub install
+  (`mods/kh1/PM2CRAZY/KH2-Combat-in-KH1`), so the lead's install now updates that folder too.
