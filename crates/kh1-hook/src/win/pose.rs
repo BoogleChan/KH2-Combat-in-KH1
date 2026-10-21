@@ -99,7 +99,8 @@ pub fn swing_motion(slot: usize) -> Option<u16> {
 }
 
 /// KH1 Sora's slots, from the user's play logs (2026-10-13): 0 / 2 / 5 field idle, walk, run;
-/// 1 / 3 / 6 the battle ones; 12 → 13 → 10 → 11 jump, rise, fall, land; 98 → 99 → 98 → 101 the
+/// 1 / 3 / 6 the battle ones; 12 → 13 → 10 → 11 High Jump, rise, fall, land (the plain jump's
+/// takeoff and rise are 8 / 9, the t314 traces); 98 → 99 → 98 → 101 the
 /// ground combo (100 assumed a third swing); 102 / 103 / 104 the air combo (the user: air
 /// combos showed the glide they were first taken for); 75..78 KH1's glide (`shared::slot_kind`:
 /// gliding slow / fast, banking one way / the other: KH2's glide, and its two banked glides).
@@ -114,7 +115,9 @@ fn play_for(slot: usize) -> Option<Play> {
         3 | 4 => mo(m::WALK, false, true, 0),
         5 => mo(m::RUN, true, true, 0),
         6 | 7 => mo(m::RUN, false, true, 0),
-        12 | 13 => mo(m::JUMP, false, false, 1),
+        // (KH1's High Jump plays requests 0x9 / 0xa, slots 12 / 13; its plain jump 0x4 / 0x5, slots
+        // 8 / 9: the t314 traces. KH2's High Jump clip is motion 201.)
+        12 | 13 => mo(m::HIGH_JUMP, false, false, 1),
         8 | 9 => mo(m::JUMP, false, false, 1),
         10 => mo(m::FALL, false, true, 0),
         11 => mo(m::LAND, false, false, 0),
@@ -1031,8 +1034,14 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
     // release (the user: "letting go of jump still doesn't transition kh2 soras jump into his
     // falling animation"; trace t304: released at f5680, KH1's fall slot only at f5699).
     let play = match play {
-        Some(Play::Motion { motion, .. }) if forced.is_none() && motion == m2::JUMP && super::shared::physics::kh2_arc_falling() => {
+        Some(Play::Motion { motion, .. }) if forced.is_none() && (motion == m2::JUMP || motion == m2::HIGH_JUMP) && super::shared::physics::kh2_arc_falling() => {
             Some(Play::Motion { motion: m2::FALL, field: false, looping: true, group: 0 })
+        }
+        // (No High Jump clip in KH2's files: its plain jump.)
+        Some(Play::Motion { motion, field, looping, group })
+            if motion == m2::HIGH_JUMP && KH2.get().and_then(|k| k.as_ref().ok()).map_or(true, |k| !k.rig.motions.contains_key(&motion)) =>
+        {
+            Some(Play::Motion { motion: m2::JUMP, field, looping, group })
         }
         p => p,
     };

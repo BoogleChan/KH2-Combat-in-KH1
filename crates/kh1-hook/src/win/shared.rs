@@ -38,7 +38,7 @@ pub fn on() -> bool {
 }
 
 /// The move style a KH1 motion slot of Sora's shows (`pose`'s slot numbers: the user's play
-/// logs): 0..7 field and battle idle / walk / run; 8 / 9 high jump, 12 / 13 jump and rise, 10
+/// logs): 0..7 field and battle idle / walk / run; 8 / 9 jump and rise, 12 / 13 high jump and rise, 10
 /// fall, 11 landing; 98..101 the ground combo's swings (98 the first and third, 99 the second,
 /// 101 the finisher), 102..104 the air combo's; 75..78 KH1's glide (its pre-step `0x1402B06F0`
 /// asks for requests 0x71 / 0x72 gliding slow / fast, 0x73 / 0x74 banking into a turn, Superglide

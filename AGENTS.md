@@ -1,3 +1,11 @@
+### 2026-10-21: Stage 314 (testing branch: KH2's High Jump clip on KH1's High Jump)
+- The user: "kh2 high jump is not using kh2s high jump animation". The traces (KH1 High Jump,
+  height ~235: requests 0x9 / 0xa / 0xb / 0xc, slots 12 / 13 / 10 / 11; KH1 plain jump, height
+  ~185: requests 0x4 / 0x5 / 0x6 / 0x7, slots 8 / 9 up) show the old comments had the pairs
+  backwards (8 / 9 "high jump", 12 / 13 "jump"). `pose::play_for` now draws KH2's High Jump
+  (motion 201) over slots 12 / 13 and the plain jump over 8 / 9; the fall loop takes over from
+  either when KH2's arc falls, and a missing High Jump clip falls back to the plain jump.
+
 ### 2026-10-21: Stage 313 (testing branch: a KH1 air swing out of KH2's jump hops, it doesn't keep the jump's rise)
 - The user's traces (physics KH2, KH1 air combo): a swing started just after KH2's jump took off
   kept the jump's remaining rise (`kh1phys::keep_momentum` takes KH2's arc when it rises more than
