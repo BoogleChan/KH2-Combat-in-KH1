@@ -415,12 +415,18 @@ unsafe fn heal(actor: usize, power: u16) -> Option<(i32, i32)> {
 }
 
 /// After KH2's step and the swings: the form's scripts' frame (casts, shots, effects, hits).
-pub unsafe fn shots_step(actor: usize, out: &Output, airborne: bool, strikes: &mut combat::Strikes, battle: &Battle, lock: Option<u32>) {
-    let Ok(mut g) = RT.try_lock() else { return };
-    let Some(rt) = g.as_mut() else { return };
+/// Returns whether one of the form's shots (its model script's attacks, not a spell's) landed on
+/// an enemy this frame; the caller tells the controller, as a swing's own hit does
+/// (`Character::register_hit`). Wisdom's swings have no hit windows: their shots are their hits
+/// (s304, the user: without Combo Master "it just does the first hit over and over", as no
+/// shot's hit reached the controller and every swing counted as a miss).
+pub unsafe fn shots_step(actor: usize, out: &Output, airborne: bool, strikes: &mut combat::Strikes, battle: &Battle, lock: Option<u32>) -> bool {
+    let Ok(mut g) = RT.try_lock() else { return false };
+    let Some(rt) = g.as_mut() else { return false };
     if rt.queued.is_empty() && rt.fresh.is_none() && rt.casting.is_none() && rt.magic.casts.is_empty() && rt.magic.effects.is_empty() && rt.fx.is_empty() {
-        return;
+        return false;
     }
+    let mut shot_hit = false;
     let mut world = world_now(actor, out, airborne, strikes, lock, 0x51A7_0000 ^ rt.fired.wrapping_mul(2_654_435_761));
     if world.target.is_none() {
         world.target = auto_target(&world, out.facing);
@@ -561,6 +567,9 @@ pub unsafe fn shots_step(actor: usize, out: &Output, airborne: bool, strikes: &m
             rt.hits += 1;
             if let Some(a) = rt.magic.attacks.iter_mut().find(|a| a.id | KEY == key) {
                 a.hit = true;
+                // (A shot of the form's own script: the swing connected. A spell's hit isn't
+                // needed: a cast already takes its combo step as a connected one.)
+                shot_hit |= Some(a.spell) == rt.wisd;
             }
             if rt.hits <= 60 {
                 log(&format!("{}: ATKP {atk} hit {foe:#x} -> damage {dealt:?}", who()));
@@ -570,4 +579,5 @@ pub unsafe fn shots_step(actor: usize, out: &Output, airborne: bool, strikes: &m
     for a in rt.magic.freed().filter(|a| a.owns_id) {
         strikes.spell_forget(a.id | KEY);
     }
+    shot_hit
 }

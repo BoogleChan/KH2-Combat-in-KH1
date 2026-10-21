@@ -2533,7 +2533,11 @@ unsafe fn takeover(actor: usize) -> bool {
     }
     super::prof::add(super::prof::EVENTS, tp);
     let tp = Instant::now();
-    super::form::shots_step(actor, &out, d.character.airborne(), &mut d.strikes, &battle_rows, lock);
+    // (A Wisdom shot landing is its swing connecting: without Combo Master the combo goes on from
+    // it, as from a swing's own hit in `combat::Strikes::strike`.)
+    if super::form::shots_step(actor, &out, d.character.airborne(), &mut d.strikes, &battle_rows, lock) {
+        d.character.register_hit();
+    }
     super::limits::after_step(actor, &out, d.character.airborne(), &mut d.strikes, &battle_rows, lock);
     super::form::after_step(&mut d.drive, actor, rd::<u32>(base + BATTLE_RVA) & 1 != 0);
     super::prof::add(super::prof::FORM, tp);

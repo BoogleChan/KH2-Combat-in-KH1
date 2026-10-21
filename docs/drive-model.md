@@ -107,6 +107,32 @@ Wisdom's attacks have no hitbox windows. Their motions fire frame trigger 1 with
   - stops on a hit or a wall
 - **How we run it.** `kh2-magic` runs this script like a spell (`Magic::object_effect`). One
   trap was added for it: `obj_effect_start`.
+- **A shot's hit is the swing's (s304; the rule ours, KH2's not traced).** The user, on a
+  level-14 save without Combo Master: "in wisdom form, if a hit connects, it doesn't go into the
+  full combo, it just does the first hit over and over".
+  - The combo rows (Data): ground 151 (row 5) repeats until the count reaches the combo's
+    length, then the finisher 154 (row 3); air 181 (row 9). Rows 5, 3 and 9 name themselves as
+    their `sub`, so 151 may follow 151. 151 shoots at frames 10, 20 and 30 (triggers 25..27)
+    and its combo window opens at 36; 181 shoots at 10, 20 and 30 (41..43) and has no combo
+    window, so it always plays out.
+  - The cause: without Combo Master, `Abilities::one_swing_on_miss` (ours, the KH1 port) lets a
+    swing chain only once it has connected (`register_hit`). Melee swings report their hits from
+    `combat::Strikes::strike`. Wisdom's swings have no hit windows, and their shots' hits
+    (`formmagic::shots_step`, through `Strikes::spell_strike`) never reached the controller. So
+    every 151 counted as a miss, refused each press, played out its three shots and went back to
+    151. The s304 log shows it: the shots land ("Wisdom: ATKP 859 hit ... damage Some(2)") and
+    the next presses come in 151's window, but 151 runs to its end and the next swing is 151
+    again, never 154. With Combo Master (the user's earlier level-100 save) every swing counts,
+    which hid it.
+  - Now `shots_step` returns whether a shot of the form's model script (not a spell's) landed
+    this frame, and `takeover` calls `register_hit`. A shot hit counts for the swing playing
+    when it lands; a 151 cut at frame 36 may still have shots in flight, which then count for
+    the next one.
+  - Wisdom's spells already count: a cast takes its combo slot as a connected step. Limit
+    Form's limits (Strike Raid, Infinity) play their motions by script, outside the combo, and
+    are unchanged. Master and Final hit with their Keyblades' windows, as base Sora does.
+  - Sim test: `wisdom_shots_landing_carry_the_combo` (151, 151, 154 with the shots landing 12
+    or 30 frames after they are fired; each 151 alone, played out, when none lands).
 
 ## Final Form's floating Keyblades (Checked, Data)
 

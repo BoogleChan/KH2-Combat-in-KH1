@@ -3531,3 +3531,11 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   row's name goes (+0x10, +2), running into the first row (y+20). Now centred on the word's rect
   (KH1's string width `0x1402CEC60`, font height `0x14054603C`), middle at y + 10; white at the
   rows' own brightness (it was 0x80 grey). `docs/kh1-drive.md`.
+
+### 2026-10-21: Stage 305 (Wisdom's combo chains when its shots land)
+- The user: "in wisdom form, if a hit connects, it doesn't go into the full combo, it just does
+  the first hit over and over". Without Combo Master (`one_swing_on_miss`) a swing chains only
+  after `Character::register_hit`; Wisdom's hits are its script's shots (`formmagic::shots_step`),
+  which never reported. Now a landed shot of the form's script counts for the swing playing
+  (151 -> 151 -> 154). Hidden on level-100 saves by Combo Master. (Commits stay under the user's
+  name: the user, "under my name".)

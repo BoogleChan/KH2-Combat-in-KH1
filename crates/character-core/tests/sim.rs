@@ -1797,3 +1797,57 @@ fn quick_run_ends_only_on_release() {
     let outs = w.run(30, Pad { stick: [1.0, 0.0], ..IDLE });
     assert!(outs.iter().any(|o| o.state != StateName::QuickRun), "never left the Quick Run");
 }
+
+/// Wisdom Form's ground combo (s304, the user: in Wisdom "if a hit connects, it doesn't go into
+/// the full combo, it just does the first hit over and over"). Its swings have no hit windows:
+/// each fires shots (frame trigger 1 at frames 10, 20, 30 of motion 151) that land some frames
+/// later, and the host tells the controller when one does (`register_hit`, as for a swing's own
+/// hit). Without Combo Master (`one_swing_on_miss`): shots landing chain 151, 151 and the
+/// finisher 154; none landing, each 151 plays out alone.
+#[test]
+fn wisdom_shots_landing_carry_the_combo() {
+    let wisdom = || {
+        let mut ms = Moveset::default();
+        let mut swing = Clip::plain(151, 62);
+        swing.windows.push(Window { start: 36, end: None, kind: WindowKind::Combo });
+        for (frame, n) in [(10, 25), (20, 26), (30, 27)] {
+            swing.events.push(Event { frame, kind: EventKind::Effect(n) });
+        }
+        ms.clips.insert(151, swing);
+        let mut finisher = Clip::plain(154, 140);
+        finisher.windows.push(Window { start: 92, end: Some(124), kind: WindowKind::Finisher });
+        finisher.events.push(Event { frame: 16, kind: EventKind::Effect(28) });
+        ms.clips.insert(154, finisher);
+        // (Wisdom's PTYA rows 3 and 5 name themselves as their `sub`: 151 may follow 151.)
+        ms.combo_rows = vec![ComboRow { sub: 3, ..row(3, 154, true, false) }, ComboRow { sub: 5, ..row(5, 151, false, false) }];
+        let mut ch = Character::new(ms, MoveParams::default(), growth(), AttackParams::default());
+        ch.abilities = Abilities { one_swing_on_miss: true, combo_master: false, ..Abilities::default() };
+        ch
+    };
+    // Each shot lands `flight` frames after its trigger (or never).
+    let run = |flight: Option<usize>| {
+        let mut w = World::new(wisdom());
+        let (mut seq, mut starts, mut landing) = (Vec::new(), Vec::new(), Vec::new());
+        for f in 0..400 {
+            let o = w.step(Pad { attack: true, ..IDLE }.with_attack(f));
+            if o.state == StateName::Attack && o.clip_frame == 0 {
+                seq.push(o.motion);
+                starts.push(f);            }
+            if let Some(t) = flight {
+                landing.extend(o.events.iter().filter(|e| matches!(e, EventKind::Effect(_))).map(|_| f + t));
+            }
+            if landing.contains(&f) {
+                w.ch.register_hit();
+            }        }
+        (seq, starts)
+    };
+    // Shots landing before the combo window opens (frame 36), and some landing after it (the
+    // press that follows the hit chains: no buffer, so a mash).
+    for t in [12, 30] {
+        let (seq, _) = run(Some(t));
+        assert_eq!(seq[..3], [151, 151, 154], "shots landing after {t} frames: {seq:?}");
+    }
+    let (seq, starts) = run(None);
+    assert!(seq.len() >= 3 && seq.iter().all(|&m| m == 151), "{seq:?}");
+    assert!(starts.windows(2).all(|p| p[1] - p[0] >= 62), "a missed swing was cut short: {starts:?}");
+}
