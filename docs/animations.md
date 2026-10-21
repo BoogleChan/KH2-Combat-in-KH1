@@ -21,8 +21,10 @@ Related docs: `shared-states.md` (who owns base Sora), `kh1-move-styles.md`, `an
   `pose::slot_of`). This is the number in the log's "KH1 slot N" lines.
 - **KH1 motion request** (hex): the id KH1 itself asks for (`0x14029D7F0`, read back at actor
   `+0x164`). The code names only a few: `0x71..0x74` glide, `0xDC` roll, `0x75` flight,
-  `0x6E` clash recoil. The code treats the glide's requests `0x71..0x74` as slots 113..116.
-  Whether other request ids equal slot numbers is **unconfirmed**.
+  `0x6E` clash recoil. Request ids are not slot numbers: KH1's request table (the mset's
+  section 1) maps them, e.g. the glide's `0x71..0x74` (and Superglide's `0x76..0x79`) to slots
+  75..78, `0xC8..0xCB` to 98..101 (`kh1-anim-slots.md` §1.5). The log's "set motion slot N" lines
+  print the request id.
 - **KH2 motion**: a `character_core::motion` id, the motion number in `obj/P_EX100.mset`. Each
   number has four slots, `id × 4 + variant`: battle with weapon, battle without, field without,
   field with (`Mset::slot_for`). `pose` uses the battle slot, plus the field slot where Sora has
@@ -54,6 +56,7 @@ Other ini keys that change what is drawn or who moves him:
 | Key | Default | Effect on animation |
 |---|---|---|
 | `shared` | on | KH1's states own base Sora (this doc). Off: the old model, where KH2's controller has him whenever KH1 shows slots 0..7. |
+| `kh2_slots` | off | On (or a list of KH2 motions): KH2's moves that have one (now the ground combo: 151, 152, 154) play as new slots in KH1's own motion table (`kh1-anim-slots.md`): KH1 plays the slot (its clock, hit / combo / trail windows, blends, sounds), KH2's motion is drawn at KH1's time. KH1's slots then report the KH1 slot they stand in for. |
 | `glide` | square | KH1's glide starts on Square while falling, or on the held jump (`jump`). |
 | `hurt` | kh2 | Hits taken while KH2's controller has him play KH2's reactions. kh1: always KH1's. |
 | `grabs` | on | KH1's ledge, vine and rope grabs and swimming take him out of KH2's falls. |
@@ -112,8 +115,8 @@ KH1's ability menu (`growth.rs`; `abilities = kh1`) holds both games' abilities:
 | 101 | ground finisher | Base Combo | 154 | n/a |
 | 102 / 103 | air combo swings | Aerial Base Combo | 183 / 184 by swing count | n/a |
 | 104 | air finisher | Aerial Base Combo | 181 | n/a |
-| 113 / 114 | glide slow / fast (requests 0x71 / 0x72) | Glide | 205 | 5 |
-| 115 / 116 | glide banking either way (0x73 / 0x74) | Glide | 206 / 207, else 205 | 5 |
+| 75 / 76 | glide slow / fast (requests 0x71 / 0x72, Superglide 0x76 / 0x77) | Glide | 205 | 5 |
+| 77 / 78 | glide banking either way (0x73 / 0x74, 0x78 / 0x79) | Glide | 206 / 207, else 205 | 5 |
 | anything else | magic, items, reactions, ledges, specials, cutscenes ... | none | none: KH1's own animation | n/a |
 
 Slots in the same non-zero group carry the same clip on instead of restarting it. KH1's jump
@@ -134,9 +137,9 @@ item's use (drawn with KH2's motion 9, below); 72, 75 and 77 while KH1 held him 
 
 | Move | Owner | At KH1 | At KH2 | Animation ID(s) | Setting | Notes |
 |---|---|---|---|---|---|---|
-| Jump (takeoff, rise) | KH1 states | KH1's jump, unmodded | KH2's jump drawn on KH1's slots | 12, 13 → 3 (one clip, group 1) | `jump_style` / Jump | **Physics at KH2:** KH2's arc on KH1's jump (state 1's pre-step `0x1402ADC10`, state 2's step `0x1402AD510`): KH2's height and gravity, the early-release hop (after 6 frames, more than 5 before the apex), terminal fall, air steering. KH1's own arc fields (`+0x3B8`, `+0x3BC`) are kept in step, so KH1's apex change of slot and its air-move gating line up. KH1's early cut is kept off. Ceilings: the arc turns into a fall. **30 fps:** the arc advances by the frame step. |
+| Jump (takeoff, rise) | KH1 states | KH1's jump, unmodded | KH2's jump drawn on KH1's slots | 12, 13 → 3 (one clip, group 1) | `jump_style` / Jump | **Physics at KH2:** KH2's arc on KH1's jump (state 1's pre-step `0x1402ADC10`, state 2's step `0x1402AD510`): KH2's height and gravity, the early-release hop (after 6 frames, more than 5 before the apex), terminal fall, air steering. KH1's own arc fields and air speed are written from KH2's every frame (`docs/kh1-physics.md`), so KH1's apex change of slot, its air-move gating and its own air moves go on from KH2's motion. KH1's early cut is kept off. Ceilings: the arc turns into a fall. **30 fps:** the arc advances by the frame step. |
 | High Jump | KH1 states | KH1's high jump | KH2's plain jump motion on KH1's high-jump slots | 8, 9 → 3 | `jump_style` / Jump; KH1 ability High Jump (1) gives KH2's High Jump level | The High Jump is detected by KH1's landing-motion base `+0x3D0 == 5`. KH2's High Jump height is used at KH2. KH2's own High Jump motion 201 (its flip) plays only while KH2's controller jumps him. |
-| Fall | KH1 states | KH1's fall | KH2's fall loop | 10 → 4 | `jump_style` / Jump | **Physics at KH2:** KH2's arc. A fall KH1 starts itself (off a ledge, out of a move) is KH2's plain fall arc. After a give-back the fall goes on at KH2's speed (`physics::fall_from`): KH2's arc at KH2, KH1's fall picked up at that speed at KH1. An air action (flag 4: an air attack, a cast) moves him KH1's way. |
+| Fall | KH1 states | KH1's fall | KH2's fall loop | 10 → 4 | `jump_style` / Jump | **Physics at KH2:** KH2's arc. A fall KH1 starts itself (off a ledge) or KH1's own air move just over: KH2's arc goes on from KH1's fields (`kh1phys::Arc::to_kh2`), not from rest. After a give-back the fall goes on at KH2's speed (`physics::kh1_takes_air`): KH2's arc at KH2, KH1's fall picked up at that speed at KH1. An air action (flag 4: an air attack, a cast) moves him KH1's way, from KH2's motion. |
 | Landing | KH1 states | KH1's landing | KH2's landing | 11 → 5 | `jump_style` / Jump | Landing and its collision stay KH1's at both styles. |
 | Jump out of a KH2 move | KH1 states | KH1's jump | as Jump | as Jump | none | `takeover::JUMP_OUT`: a fresh jump on the ground, where KH2's move can be left, goes to KH1's control step. KH1 jumps him and its states have him from then. |
 | Aerial Dodge | KH2 borrow (at both Jump styles) | KH2's | KH2's | KH2 202 | Aerial Dodge (ours 67, from beating Genie Jafar). No style. | Borrowed on a fresh jump in the air, once per air time (`shared::AIR_JUMP`). **Physics, hits:** KH2's. Invulnerable for 8 frames + 2 per level (`AIR_DODGE_STAR`). A guard window (ATKP 406) all round. **Give-back:** after two frames of KH2's plain fall, into KH1's fall state. **Sound:** 999019 (`kh2_sounds`). Can grab ladders and vines from it (`grabs`). |
@@ -224,8 +227,8 @@ all call it Finishing Leap; Upper Slash is ability 18, row 12, motion 161.
 
 | Move | Owner | At KH1 | At KH2 | Animation ID(s) | Setting | Notes |
 |---|---|---|---|---|---|---|
-| Glide (slow, fast) | KH1 states (glide state 0x15) | KH1's glide or Superglide, unmodded | KH2's glide motion on KH1's glide state | 113 (0x71), 114 (0x72) → 205 | `glide_style` / Glide; ini `glide`; KH1's Glide (3) / Superglide (4) | **Start:** `glide = square`, Square while KH1 falls (`takeover::kh1_glide_start`, Superglide when he has it). `glide = jump`, KH1's own held jump. Once per hold of Square. **Physics at KH2:** the pre-step `0x1402B06F0` turns him at KH2's glide turn rate. The step `0x1402B0890` moves him at KH2's speed, `(1 - a) × top × tilt + a × last`, and fall, `(height - fall height) × ratio`, capped. These come from KH2's growth numbers at Sora's Glide level. KH1 keeps the start, end, slots and collision. **Blend:** 16/60 s into the glide. Slots 113..116 share group 5, so a change between them keeps the clip. |
-| Glide banking | KH1 states | KH1's | KH2's banked glides | 115 (0x73) → 206, 116 (0x74) → 207 | as above | Banked glides missing from a rig: 205. **Unverified:** slots 114 and 116 (only 113 and 115 seen in the s261 log), and which way each bank faces. |
+| Glide (slow, fast) | KH1 states (glide state 0x15) | KH1's glide or Superglide, unmodded | KH2's glide motion on KH1's glide state | 75 (0x71), 76 (0x72) → 205 | `glide_style` / Glide; ini `glide`; KH1's Glide (3) / Superglide (4) | **Start:** `glide = square`, Square while KH1 falls (`takeover::kh1_glide_start`, Superglide when he has it). `glide = jump`, KH1's own held jump. Once per hold of Square. **Physics at KH2:** the pre-step `0x1402B06F0` turns him at KH2's glide turn rate. The step `0x1402B0890` moves him at KH2's speed, `(1 - a) × top × tilt + a × last`, and fall, `(height - fall height) × ratio`, capped. These come from KH2's growth numbers at Sora's Glide level. KH1 keeps the start, end, slots and collision. **Blend:** 16/60 s into the glide. Slots 75..78 share group 5, so a change between them keeps the clip. |
+| Glide banking | KH1 states | KH1's | KH2's banked glides | 77 (0x73) → 206, 78 (0x74) → 207 | as above | Banked glides missing from a rig: 205. **Unverified:** slots 76 and 78 (75 and 77 seen in the s261 log), and which way each bank faces. Before the s284 fix the code took 113..116 (attack motions) for the glide. |
 | Glide hover | KH2 always (Final Form only) | n/a | n/a | 208 | none | No KH1 slot maps to it. Base Sora's KH2 glide is off under shared states (its level kept in `KH2_GLIDE_KEPT`). Final Form glides with KH2's own glide, 205..208. |
 
 ## Magic
@@ -373,7 +376,7 @@ KH1's skeleton pass is hooked (`pose::pose`, `pose::pose_ik`).
    - In Wisdom Form, or a base KH1 spell drawn KH2's way: 62 / 64 / 65 / 67.
    - Otherwise the style lookup: `shared::kh2_look(slot)` is true in a Drive Form. Else it is
      `styles::kh2(slot_kind(slot))`: idle / walk / run → Misc Animations; 8..13 → Jump; 98..101 →
-     Base Combo; 102..104 → Aerial Base Combo; 113..116 → Glide; anything else → no style
+     Base Combo; 102..104 → Aerial Base Combo; 75..78 → Glide; anything else → no style
      (KH1's own).
    - At KH1, or with no style: KH1's own animation.
    - At KH2: `follow_play(play_for(slot))`.
@@ -453,7 +456,7 @@ retarget.
   vines, ladders and poles, swimming, specials, summons, the combo modifiers. The code doesn't
   name them.
 - Slot 100 (assumed a third ground swing), slots 4 and 7 (assumed battle walk / run), glide slots
-  114 and 116, and which way each banked glide faces. None of them seen in a log.
+  76 and 78, and which way each banked glide faces. None of them seen in a log.
 - Slot 80 as the air cast comes from a comment quoting one log, not from the code. Slot 58 for
   the item's use and slots 72, 75 and 77 come from the s261 log.
 - Which of KH1's states 24, 25, 29, 30 and 31 is the carpet, the Jungle Slider or the water.

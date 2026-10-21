@@ -1,3 +1,18 @@
+### 2026-10-20: Stage 295 (testing branch: KH2's physics in KH1's fields; KH2 animations as KH1 motion slots)
+- The user: "kh2s physics gets written into kh1s internal physics system instead" (a KH1 air move
+  out of a KH2 air move had no momentum). KH2's every 60 Hz step is mirrored into KH1's own
+  velocity (`+0x3C0`) and arc (`+0x3B0..+0x3BC`) (`shared::physics::mirror`, `kh1phys.rs`); KH1
+  taking him in the air starts from them; KH1's air attack out of KH2's motion keeps the faster
+  sideways and the higher rise; KH2 taking him from KH1's air starts at KH1's speed. One switch
+  point for the later setting (`shared::physics::source`, `Rule`). `docs/kh1-physics.md`.
+- The user: "our kh2 animations can run entirely through kh1s animation system as new animation
+  slots". KH1 resolves request -> slot (`+0x1D8`, 321) -> motion (`+0x1D4`, 118 handles); Sora gets
+  longer copies (`docs/kh1-anim-slots.md`). KH2's ground combo (151 / 152 / 151 / 154) as KH1 slots
+  118+ with KH2's windows as KH1 motion events, KH1's requests redirected at Base Combo KH2
+  (`kh2_slots = on | <motions>`, default off; `kh2slots.rs`, `kh1_data::slot`). The pose is still
+  drawn by us at KH1's clock.
+- KH1's glide is slots 75..78 (requests 0x71..0x74 / 0x76..0x79), not 113..116 (attacks): the
+  KH2 glide never showed at Glide KH2. Fixed.
 # AGENTS.md
 
 Notes for anyone (human or AI agent) working on this repo.

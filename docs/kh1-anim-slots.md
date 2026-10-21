@@ -1,0 +1,318 @@
+# KH2 animations as KH1 motion slots (design, testing branch)
+
+The user (testing): "currently, if there's an exclusive kh2 animation kh1 sora is pulled and kh2
+sora is called ... instead lets have it so that our kh2 animations can run entirely through kh1s
+animation system as new animation slots, that way kh2 animations can have access to everything
+kh1s animation engine can do."
+
+The problems listed:
+- custom magic can't spawn an effect on a hit enemy;
+- KH1 and KH2 trading places draws badly;
+- switching animations between the two engines breaks the look and the timing;
+- a KH2 animation that wants KH1's physics can't have it.
+
+This doc covers how KH1 plays Sora's motions (static RE of the Epic exe, checked against the
+user's `xa_ex_0010.mset`), how new slots get in, and how KH2 motions are turned into them. The
+`kh2_slots` ini key switches the prototype on (default off). Related docs: `animations.md` (every
+slot and motion), `shared-states.md`, `animation.md`, `kh1-kh2-model.md`. The other helper's
+physics work (KH2's physics inside KH1's system) is not covered here.
+
+No game data or decompiled code is in the repo. Everything below is our own description of what
+the code does.
+
+## 1. KH1's motion system for Sora
+
+### 1.1 The file: `xa_ex_0010.mset`
+
+The file has three sections: `count u32 = 3`, then the section offsets.
+
+| Section | What it is |
+|---|---|
+| 0, `MMTN` (`+0x80`) | The **slot table**. At `+0x40`, one offset per slot (from `+0x40`), ending at `0xFFFFFFFF`. Sora has **118 slots** (0..117). |
+| 1 (`+0x252480`) | The **request table**: one `u32` per *request id*, 321 ids (0..0x140). Bits 0..11 hold the slot (`0xFFF` = none), bits 12..14 a kind, bit 15 a flag. The high half is an extra id, used by `0x14029DDAA` → `0x1402ABFD0`. |
+| 2 (`+0x252A00`) | 0x80 bytes, its use unknown (it is the actor's `+0x1DC`). |
+
+**A motion** is all offsets from its own start. When the file is loaded, these offsets are
+turned into 32-bit handles (`0x1401D5CE0`).
+
+| Offset | Field |
+|---|---|
+| `+0x04` | frames (60 fps) |
+| `+0x08` | fps (60.0) |
+| `+0x10` | bones (293) |
+| `+0x14` | the per-bone joint words: an IK, constraint and skip mask. Bits 0..9 and 11..19 are indices, bits 21..22 a mode. With bit 26 set, that bone's world matrix isn't written (`0x14039256D`). |
+| `+0x18` / `+0x1C` | the channels: 6 bytes each, `bone u16, kind u8, count u8, first key u16` |
+| `+0x20` / `+0x24` | the helper channels, which animate the IK helpers |
+| `+0x28` | the keys: 16 bytes each, `time<<8 \| interpolation`, value, out tangent, in tangent |
+| `+0x2C` / `+0x30` | the IK helpers, 40 bytes each: scale, parent, rotation, translation. 11 on Sora. |
+| `+0x34` / `+0x38` | the constant channels, 8 bytes each: `bone u16, kind u16, value f32` |
+| `+0x3C` | **the event table** (§1.4) |
+
+The load turns `+0x14`, `+0x1C`, `+0x24`, `+0x28`, `+0x30`, `+0x38`, `+0x3C` and each event
+group's `+8` into handles. A table entry becomes the handle of `table + offset`. The table's
+`0xFFFFFFFF` becomes handle 0. `kh1_data::mset` reads the file layout.
+
+**Handles.** A handle is `0x80000000 | block << 25 | (p & 0x1FFFFFF)`, where `block` indexes a
+64-entry table of 32 MB bases (`0x142EE4730`). `0x14038B080` / `0x14038B0C0` turn **any**
+pointer into a handle, registering its 32 MB block if it is new. So motion data we allocate on
+our own heap can be handed to KH1 as long as it goes through that call.
+
+Sora's motion files are the model's mset only. Nothing for him comes from ANB files: ANB is
+KH2's format. The actor has a second, pending motion set at `+0x1E0..+0x1EC`. When a request
+resolves to `0xFFF`, it is swapped in (`0x14029DC24`, `+0x160` bit `0x20`). That is how a
+world's extra motions come in: Neverland's flight, request `0x75`, has no entry in Sora's own
+table.
+
+### 1.2 Actor fields (`0x140285CC0` binds an actor to its model and motion set)
+
+| Field | Meaning |
+|---|---|
+| `+0x15C` | the animation instance (pose: `pose.rs`) |
+| `+0x160` | motion flags: bit 0 a new request, bit 1 playing, bit 2 blending allowed, bit 3 hold at the end (else loop), bit 6 a custom loop range |
+| `+0x164` | **the request id playing** (`request & 0xFFFF`). KH1's own code tests this: attack objects (`+0x58`), event scripts (opcode 322), combo windows and our hooks. |
+| `+0x168` | **the slot playing** |
+| `+0x16C` | time (frames) |
+| `+0x170` / `+0x174` | blend length / blend clock |
+| `+0x178` | the request queue: a count, then 16-byte entries from `+0x17C` (request, start time, blend, a handle) |
+| `+0x1CC` | the motion's level flags this frame (§1.4) |
+| `+0x1D0` | handle of the mset file |
+| `+0x1D4` | **handle of the slot table** (from `MMTN + 0x30`, `0x1401D40D0`) |
+| `+0x1D8` | **handle of the request table** (section 1) |
+| `+0x280` | length |
+| `+0x284` | speed |
+| `+0x288` / `+0x28C` / `+0x290` | the loop range (`0x14029D880` sets a custom one) |
+
+### 1.3 How a state asks for a motion
+
+**Asking.** KH1's states call `0x14029D7F0 (actor, request, blend)`, which starts a fresh queue.
+`0x14029D8A0` / `0x14029E150` append to the queue, and `0x14029D630` is the blended form. Two
+request bits change the actor's flags:
+- bit 24: action flag 4 (`combat.rs` sends attacks as `motion | 0x1000000`);
+- bit 23: flag `0x1000`.
+
+**The animation step** (`0x14029CF10 (actor, dt)`, once a frame):
+1. On a new request, `0x14029DAB0`:
+   - `+0x164 = request & 0xFFFF`.
+   - **Resolving.** `0x14029E050` looks the request up in `+0x1D8`. With request bit 29
+     (`0x20000000`) the low bits are taken as a raw slot. Otherwise it reads the table entry and
+     goes by its kind:
+     - 0: put the weapon away (bit 27 → `0x1402A10F0`);
+     - 1: draw it (bit 28 → `0x1402A0CA0`);
+     - 3: field / battle / no-combat variant: slot + 0, 1 or 2 by the battle flag `+0x374`
+       bit 18 and `0x142867CD8` bit `0x1000`;
+     - 4: slot + 1 in battle;
+     - 2: as is.
+   - **Starting.** `0x14029E1C0` takes `motion = ptr(ptr(+0x1D4)[slot])`. It poses it, blending
+     (`0x140393CE0` / `0x140394230`, then `0x14029E490` → the ground-IK pass each frame) when a
+     blend longer than a frame was asked for. It sets `+0x280` from the motion's frames and the
+     loop range, and `+0x168 = slot`.
+2. `time += dt × +0x284`. The frame scale `0x1423405DC` is in `dt`.
+3. The edge events between the old and the new time fire (`0x14029D9A0`, §1.4).
+4. At the end, the queue's next request plays, or the motion holds or loops.
+5. The pose (`0x14029DDF0` → `0x140391E20`, the plain pass) or the blend pass
+   (→ `0x140392710`, the ground-IK pass). Both are hooked by `pose.rs`.
+6. `+0x1CC` = the instance's level flags (`+0x14`), which the pass computed.
+
+**The log's "set motion slot N" is the request id, not the slot.** `probe::setm_note` prints
+`req & 0xFFFF`. Proof: line 658 of the s261 log "sets slot 113" (request `0x71`), then
+`pose::slot_of` reads **75** while KH1 holds him (line 670).
+
+### 1.4 Motion events (the `+0x3C` table)
+
+The table is a list of 12-byte groups `(id u16, type u16, count u32, keys)`, ending at
+`0xFFFFFFFF`. Each key is 16 bytes: `time f32, a u16, b u16, c u32, d u32`. There are two ways
+to read them:
+- **Levels** (`0x140394920`: the last key at or before the time). The plain pass ORs them into
+  the instance's `+0x14`, which ends up in the actor's `+0x1CC`.
+- **Edges** (`0x140394840`: every key in `[from, to)`). These fire through `0x14029D9A0`.
+
+| Type.id | Kind | Effect | Seen on |
+|---|---|---|---|
+| 1.0 .. 1.3 | level | **hit window** of attack group 0..3: `+0x1CC` bit `0x10000 << group`. An attack object tied to a motion is live only while this is set **and** its `+0x58` request equals the owner's `+0x164` (`0x1402B2610`, `combat::shots`). | every swing, 98..116 |
+| 5.0 | level | **combo window**, bit 22 (`combomods::KH1_COMBO_WINDOW`) | the swings |
+| 7.0 | level | **weapon trail**, bit 23 (`0x1402BFD70`) | the swings |
+| 0.0 | level | bit 20: from here the action can be left (`0x14029D399` clears action flags `0x1004`) | item 58 at 74/82, Fire 55 at 68/86, roll 117 at 30/38 |
+| 2.x | edge | `0x1401D9A40 (instance, 0, a)`: a face or texture change, **unconfirmed** | |
+| 4.0 .. 4.3 | edge | **foot effect**: `0x1402C04B0 (actor, kind a, bone b)` puts a dust or splash effect (`0x1402C0230`) at bone `b` (22 / 48 are the feet) when near the floor | idle, walk, run, landing, swings |
+| 6.0 .. 6.3 | edge | **sound**: `0x140293290 (actor, a, b, c)`. `a = 0`: sound `b` by id; `a = 0x19`: his voice `b` from his voice set (combat info `+0x20`'s `+0x34` + `b`); otherwise a material or footstep sound (table `0x140529788[a-1]` → `0x1402939B0`) | everywhere |
+
+**Not in the events:**
+- **Attack objects.** They come from the state. KH1's Attack command picks a row of the attack
+  table (`0x142D5D4B0[object] + row × 0x14`: motion request, attack data, sound / effect bytes).
+  `0x1402A17F0` sets the motion and makes the attack object (`0x1402B10E0`). The object follows
+  KH1's bones (`+0x1B4`, which our pose hook writes) while the motion's hit window is open.
+- **The hit effect and hit sound** are played by the contact code (`0x1402B1ED0`) from the attack
+  data.
+- **Invulnerability.** The roll's has no event type in this table; it comes from KH1's roll
+  state. **Unconfirmed.**
+
+### 1.5 Sora's slot map, by request (from the request table)
+
+| Requests | Slots | What |
+|---|---|---|
+| 0 / 1 / 2 | 0..1 / 2..4 / 5..7 | idle, walk, run. Kinds 4 and 3 pick field or battle. |
+| 4..7, 9..0xC | 8..11, 12, 13, 10, 11 | high jump, jump, fall, land |
+| 0x3E | 58 | the item's use |
+| 0x6E | 72 | clash recoil |
+| **0x71..0x74, 0x76..0x79** | **75..78** | **the glide**: slow, fast, banking either way. Superglide asks for 0x76..0x79. |
+| 0xC8..0xCB | 98..101 | the ground combo |
+| 0xCC..0xCE | 102..104 | the air combo |
+| 0xCF..0xDA | 105..116 | KH1's other attack motions (combo modifiers and specials; which is which is **unconfirmed**) |
+| 0xDC | 117 | the dodge roll |
+
+**Bug found (fixed in phase 1b, `shared.rs` / `pose.rs`):** `shared::slot_kind` and
+`pose::play_for` took **113..116** as the glide. They are attacks (requests `0xD7..0xDA`, with hit
+windows). The glide is 75..78. At Glide = KH2, KH2's glide was never drawn on KH1's glide, and
+four of KH1's attack motions were drawn with KH2's glide instead.
+
+## 2. Adding slots
+
+| Way | Verdict |
+|---|---|
+| **Grow the slot table.** A copy of the 118 handles plus ours, null-ended, its handle written to the actor's `+0x1D4` (and to `MMTN + 0x30`, so a re-bound actor gets it too). | **Yes.** Nothing bounds the slot by a count (`0x1401D40E0` counts but is never called). Each new zone makes a new Sora actor: it is re-applied when `+0x1D4` / `+0x1D8` aren't ours, only while the table is still Sora's own (118 entries, the request table as in the file). |
+| **Grow or redirect the request table.** A copy of section 1 at `+0x1D8`. | **Yes**, and it is what makes this work (below). |
+| A slot-lookup hook (`0x14029E050`). | Not needed: the tables do it with no code patch. |
+| Motion data made in memory | **Yes**: a KH1-format motion on our heap, its offsets turned into handles with `0x14038B080` (§1.1). |
+
+**Two ways a KH2 motion gets played:**
+1. **Redirect** (a KH2 look on a KH1 move). A request KH1's state already makes (`0xC9`, the 2nd
+   ground swing) is pointed at our slot, keeping its kind bits, while the move's style is KH2's.
+   KH1's state, its attack row, its attack object (`+0x58 = 0xC9`), combomods, event scripts and
+   the camera see the same request id. Only the motion is KH2's. With the style at KH1, the
+   original slot.
+2. **New request ids**, `0x200 + n`, past KH1's 321. These are for KH2-only moves (Aerial Dodge
+   202, the ability moves). The table copy is long enough for them, so `+0x164` is a distinct id
+   that matches none of KH1's: a raw-slot request (bit 29) would make `+0x164` the slot number,
+   and 118+ are already request ids (`0x76` is a glide). Something has to ask for them: our
+   decision layer calling `0x14029D7F0 (actor, 0x200 + n | flags, blend)` from a KH1 state,
+   §4.
+
+## 3. Turning a KH2 motion into a KH1 slot
+
+### 3.1 The pose
+
+KH2's rig has 228 animated bones of 256 (`P_EX100`). KH1 Sora has 293. Today
+`kh1_data::retarget::Retarget::pose` measures KH2's body parts each frame and turns KH1's bones
+by them:
+- the limbs, aimed with their roll;
+- the torso parts;
+- the hands;
+- the grip;
+- the bones nothing turns, which hang as in KH1's battle idle.
+
+`pose.rs` writes the result over KH1's pass output.
+
+There are two tiers.
+
+**Tier A, in the prototype: KH1 plays the slot, we draw it.**
+- The slot's motion is a **KH1 template motion** (the KH1 motion KH2's replaces, e.g. slot 99
+  for 152). Its key times are rescaled to KH2's length, so KH1's IK helpers, constants and joint
+  words stay valid, and its length is KH2's.
+- KH1 owns the slot: its clock, speed, queue, loop or hold, blend clock and events.
+- `pose.rs` draws KH2's motion retargeted **at KH1's own time** (`actor + 0x16C` while
+  `+0x168` is our slot), not by the wall clock. While KH1 blends into it (`+0x170` / `+0x174`),
+  ours blends in from the last drawn pose by KH1's blend weight.
+- The draw follows KH1's motion engine frame for frame, so the timing can't drift. KH1's attack
+  objects ride on the bones we drew, so its hitboxes follow KH2's Keyblade.
+
+**Tier B, later: a full bake.**
+- At load, each KH2 frame (60 Hz) is retargeted (`Retarget::pose`). KH1's locals are worked out
+  (`parent⁻¹ × bone`, then Euler X→Y→Z, as `kh2_anim` poses KH1's bind) and written as linear
+  keys per channel, reduced where a line fits within a tolerance.
+- The root, bone 0, carries KH2's root travel × the hip ratio. So "KH1's physics" (KH1 moving
+  him by the motion's root) applies to the KH2 motion.
+- The joint words and IK helpers come from the template. The helper channels are worked out
+  from the baked feet and hands, or the IK is turned off per bone. That needs the joint-word
+  bits read (`0x140390260`): **open**.
+- Then `pose.rs` draws nothing for these slots, beyond the hair, hood and keychain and the
+  Keyblade's turn. KH1's own pass shows KH2's motion, KH1's blends mix it like any of its own,
+  and Player Model KH2 takes it through `kh1_data::inverse` as it does any KH1 pose.
+
+Both tiers build in memory at load, from the user's install: KH2's `P_EX100.mset` and KH1's
+`xa_ex_0010.mset`. Nothing is shipped.
+
+### 3.2 Events
+
+Every KH2 clip window or event (`character_core::Clip`) has a home:
+
+| KH2 | KH1 event | Note |
+|---|---|---|
+| `Hitbox` window | 1.0 (hit window, attack group 0) | KH1's attack object for the request is live inside it. Its damage, reaction and hit effect stay KH1's (the row's data). |
+| `Combo` window | 5.0 | KH1's next Attack chains in it. |
+| `WeaponTrail` window | 7.0 | Else the hit window, from 4 frames before it. |
+| `AllowMovement` | 0.0 | For KH2 moves KH1 must let go of early. |
+| `Invulnerable` | none in KH1's events | Our hook, from the slot's own track (below). |
+| `Sound`, `Voice`, `Effect` | **our track**, kept Rust side next to the slot (it could also be an event type KH1 never reads, as its readers ask only for types 0..7) | `kh2slots::tick` reads it between the last and the current KH1 time, like `0x14029D9A0`, and fires `kh2sound::event` / `kh2fx::event` for that motion. KH2's sounds and effects then fire from KH1's playing slot, on KH1's clock. |
+| KH1's own sounds and voices (type 6) | kept from the template, times rescaled | The KH1 swing voice and swish. Dropped where KH2's own play (`kh2_sounds` covers the motion). |
+| KH1's foot effects (type 4) | kept from the template, rescaled | |
+
+### 3.3 Hits and effects on a hit enemy
+
+The KH2 move's hits are now KH1's attack objects. The contact code `0x1402B1ED0 (attack entry,
+body entry)` runs for every hit, with the enemy's body part. A hook there can tell:
+- the attack object's owner is Sora;
+- `+0x58` is a request whose slot is ours.
+
+With that, it spawns the KH2 move's hit effect (ATKP's `effect`, or a spell's element) **at the
+enemy's body part**, with `kh2fx` placed by world position rather than Sora's bone. That is what
+custom magic lacks today: KH2's own hit test lands through a made-up attack object, and `kh2fx`
+can only start elements on Sora's bones.
+
+Not built yet: phase 4.
+
+## 4. What changes in `takeover.rs` / `pose.rs`
+
+- **No more taking KH1's Sora away to draw KH2's** for moves that have slots. KH2's controller
+  stops being the owner and becomes a **decision layer**: at a press, it asks for a KH1 request
+  (a redirected KH1 request, or a `0x200 + n` id) on the KH1 state that should own the move:
+  - its ground or air action state;
+  - the combo for swings;
+  - the fall state for Aerial Dodge.
+
+  A KH1 state that wants another KH1 motion simply plays it.
+- **The physics stays with the state that owns the move.** KH1's ground step for the combo
+  (`shared::physics::swing_travel` is unchanged: `pose::sora_slot` gives the *KH1 slot the
+  request stands for*, 99, and `slot_frames(99)` the length that actually plays). The KH1 / KH2
+  physics setting can then be one switch per move, on top of the same slot. That belongs to the
+  other helper.
+- **`pose.rs`:**
+  - `slot_of` knows our motions by pointer;
+  - `sora_slot` gives the stand-in KH1 slot;
+  - our slots are drawn by `Play::Slot` at KH1's time;
+  - in tier B, not drawn at all.
+- **The borrow path stays** (`kh2_slots = off`, Drive Forms, moves with no slot yet) until every
+  KH2 move has one.
+
+## 5. Phases
+
+1. This doc. The glide slot fix (75..78).
+2. **Prototype (built, `kh2slots.rs`; untested in game):** KH2's 2nd ground swing (152) as KH1
+   slot 118, on request `0xC9` at Base Combo KH2, `kh2_slots = on`. Tier A: KH2's hit window,
+   combo window and trail as KH1 events. KH2's sounds and effects are kept Rust side, not in
+   the motion: `kh2slots::tick` reads them against KH1's time.
+3. **Built (untested in game):** the rest of the ground combo, 151 on `0xC8` / `0xCA` and 154 on
+   `0xCB`. With `kh2_slots = on` the slots are 118..121, in the order 152, 151 (for 98), 151 (for
+   100), 154. `kh2_slots = 152` (a list of KH2 motions) builds only those, for testing one at a
+   time.
+   - **Next:** the glide (205..207 on `0x71..0x74` / `0x76..0x79`). It needs `Play::Slot` to
+     loop with KH1's loop range (`+0x288..+0x28C`), and the template's length kept or the loop
+     range set.
+4. The contact hook (effects on the hit enemy). KH2-only moves through `0x200 + n`. Tier B.
+
+## 6. Risks
+
+- **The template's root.** The root (bone 0) and the IK helpers stretch with the template. Where
+  KH1 moves him by the motion's root, the stretched KH1 travel is what moves him. Base Combo KH2
+  keeps KH2's travel through `shared::physics`, which sees slot 99.
+- **The `+0x164` checks.** Our redirect keeps KH1's request ids, so `+0x164` checks stay right.
+  New ids (`0x200+`) are unknown to KH1's own code: any `switch` on `+0x164` treats them as
+  "other".
+- **The handle table.** It has 64 blocks of 32 MB. Our motions are one allocation (a few hundred
+  KB): one block at most.
+- **A world's own motion set** (`+0x1E0`) replaces `+0x1D4` / `+0x1D8` while it is used. Our
+  tables go back on only when the actor shows Sora's own table again.
+- **Tier B** needs the joint words and IK helpers understood. Until then, tier A's draw is still
+  ours, so KH1's own blends of our slot (when KH1, not us, blends out of it) blend the template's
+  pose.
+- **Unverified in game:** everything in §1 is static reading of the code plus the user's files,
+  except the request → slot proof from the s261 log (§1.3).

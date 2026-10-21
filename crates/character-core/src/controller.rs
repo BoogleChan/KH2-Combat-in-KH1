@@ -972,6 +972,14 @@ impl Character {
         self.airborne
     }
 
+    /// The jump arc in the air now (none on the ground), and whether the last step was the first
+    /// frame of a physics tick. The arc moves a 2-frame tick at a time and he moves half of it
+    /// each frame, so after a tick's first frame the arc's time is one frame ahead of him. A host
+    /// that keeps his momentum in its own physics state continues the arc from here.
+    pub fn air_arc(&self) -> Option<(Arc, bool)> {
+        self.arc.filter(|_| self.airborne).map(|a| (a, self.tick % 2 == 1))
+    }
+
     /// The map stopped a rise: less than 49% of the desired climb happened
     /// (exe). A jump or launch more than 6 frames in drops from rest at the
     /// current height, loses its hold, and air commands are refused for

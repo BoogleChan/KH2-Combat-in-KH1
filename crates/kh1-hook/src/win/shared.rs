@@ -39,9 +39,11 @@ pub fn on() -> bool {
 /// The move style a KH1 motion slot of Sora's shows (`pose`'s slot numbers: the user's play
 /// logs): 0..7 field and battle idle / walk / run; 8 / 9 high jump, 12 / 13 jump and rise, 10
 /// fall, 11 landing; 98..101 the ground combo's swings (98 the first and third, 99 the second,
-/// 101 the finisher), 102..104 the air combo's; 113..116 KH1's glide (its pre-step
-/// `0x1402B06F0` picks 0x71 / 0x72 gliding slow / fast, 0x73 / 0x74 banking into a turn; 113 and
-/// 115 seen in the s261 log).
+/// 101 the finisher), 102..104 the air combo's; 75..78 KH1's glide (its pre-step `0x1402B06F0`
+/// asks for requests 0x71 / 0x72 gliding slow / fast, 0x73 / 0x74 banking into a turn, Superglide
+/// 0x76..0x79; KH1's request table maps both sets to slots 75..78, `docs/kh1-anim-slots.md`. The
+/// s261 log's "set motion slot 113 / 115" are those request ids, and `pose::slot_of` read 75 / 77
+/// meanwhile. 113..116 are attack motions, requests 0xD7..0xDA).
 pub fn slot_kind(slot: usize) -> Option<Kind> {
     Some(match slot {
         0..=7 => Kind::MiscAnims,
@@ -54,8 +56,8 @@ pub fn slot_kind(slot: usize) -> Option<Kind> {
 }
 
 /// KH1's glide slots (`slot_kind`).
-pub const GLIDE_SLOTS_START: usize = 113;
-pub const GLIDE_SLOTS_END: usize = 116;
+pub const GLIDE_SLOTS_START: usize = 75;
+pub const GLIDE_SLOTS_END: usize = 78;
 
 /// The Attack command runs KH1's own row where he is (KH1's command step, `combat::exec`): the
 /// ground combo is a shared move (KH1's states at either style, KH2's swings and lunges drawn on
@@ -318,10 +320,11 @@ pub fn give_back(state: StateName, grounded: bool, falling: bool, combo: (bool, 
 /// - Jump at KH2: KH1's jump (its takeoff, state 1's pre-step `0x1402ADC10`, then its rise and
 ///   fall in state 2's step `0x1402AD510`) follows KH2's arc: KH2's jump or High Jump height and
 ///   gravity, its early-release hop (after 6 frames of the rise, more than 5 before the apex), its
-///   terminal fall speed, its air steering. KH1's own arc fields (`+0x3B8` time to the apex,
-///   `+0x3BC` the height) are kept in step with it, so KH1's apex animation and its air-move
-///   gating line up; KH1's own early cut (flag `0x40000`) is kept off. Landing stays KH1's (its
-///   collision).
+///   terminal fall speed, its air steering. KH1's own arc fields (`+0x3B0` air time, `+0x3B4`
+///   start height, `+0x3B8` time to the apex, `+0x3BC` the height) and air speed `+0x3C0` are
+///   written from it every frame, so KH1's apex animation, its air-move gating and its own air
+///   moves go on from KH2's motion; KH1's own early cut (flag `0x40000`) is kept off. Landing
+///   stays KH1's (its collision).
 /// - Base Combo at KH2: KH1's ground swings (slots 98..101, its action flag 4 up) move him by the
 ///   root travel of KH2's swing drawn on them (`pose::swing_motion`), stretched over KH1's swing,
 ///   along his facing, in place of KH1's own travel. KH1's hit objects, timing and damage stay.
@@ -330,12 +333,68 @@ pub fn give_back(state: StateName, grounded: bool, falling: bool, combo: (bool, 
 ///   glide speed and fall (its step `0x1402B0890`: along `+0x30`, KH1's speed up to its top and a
 ///   steady fall otherwise), KH2's growth numbers at Sora's Glide level. KH1's glide start, end,
 ///   slots and collision stay.
+///
+/// KH1's own physics fields are where momentum lives, whoever moves him (`docs/kh1-physics.md`,
+/// `crate::kh1phys`): KH2's numbers on KH1's states are written into them (`air_step` keeps KH1's
+/// arc on KH2's), and while KH2's controller has him each of its steps is written into them
+/// (`mirror`), so KH1's air state takes him from there at KH2's speed (`kh1_takes_air`) and KH2
+/// takes him from KH1's at KH1's (`kh1_velocity`).
 pub mod physics {
     use super::super::addr::Rva;
     use super::styles::{self, Kind};
-    use character_core::Arc;
-    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+    use crate::kh1phys::{self, Motion};
+    use character_core::{Arc, Character, Output};
+    use std::sync::atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering};
     use std::sync::Mutex;
+
+    /// Whose physics numbers move base Sora: the one switch point (`source`).
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Source {
+        Kh1,
+        Kh2,
+    }
+
+    /// How `source` decides. `Style`, the only one in use now: per move style (KH2's numbers on
+    /// KH1's states where the style is KH2's). `Kh1` / `Kh2`: one game's physics for every move
+    /// whatever its style, the user's later setting ("if its kh1 then all the animations ... will
+    /// run with kh1s physics (with exceptions to drive forms) if its kh2 then all the animations
+    /// (including vanilla animations) will run with kh2s physics instead"). Not in the ini yet:
+    /// `docs/kh1-physics.md` says what each still needs.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Rule {
+        Style,
+        Kh1,
+        Kh2,
+    }
+    static RULE: AtomicU8 = AtomicU8::new(0);
+
+    /// (For the later setting.)
+    #[allow(dead_code)]
+    pub fn set_rule(r: Rule) {
+        RULE.store(r as u8, Ordering::Relaxed);
+    }
+
+    pub fn rule() -> Rule {
+        match RULE.load(Ordering::Relaxed) {
+            1 => Rule::Kh1,
+            2 => Rule::Kh2,
+            _ => Rule::Style,
+        }
+    }
+
+    /// Whose physics a move of this kind uses while KH1's own states have base Sora. A Drive Form
+    /// is KH2's controller's all through (KH2's). KH2's own moves (its borrows: Aerial Dodge, its
+    /// Square moves, its spells) are KH2's controller's, so KH2's numbers, whatever this says.
+    pub fn source(kind: Kind) -> Source {
+        if super::super::form::in_form() {
+            return Source::Kh2;
+        }
+        match rule() {
+            Rule::Style if styles::kh2(kind) => Source::Kh2,
+            Rule::Style | Rule::Kh1 => Source::Kh1,
+            Rule::Kh2 => Source::Kh2,
+        }
+    }
 
     const TABLE_RVA: Rva = Rva(0x2DB4240);
     /// KH1's frame scale (1.0 at 60 fps).
@@ -351,8 +410,6 @@ pub mod physics {
     const ARC_H: usize = 0x3BC;
     /// KH1's early-release cut is still open (its button handler, `0x1402A59A0`).
     const CUT_OPEN: u32 = 0x4_0000;
-    /// KH1's gravity (`0x1403EAB54`).
-    const KH1_G: f32 = 0.484_693_88;
 
     static ORIG_GROUND: AtomicUsize = AtomicUsize::new(0);
     static ORIG_AIR: AtomicUsize = AtomicUsize::new(0);
@@ -410,11 +467,14 @@ pub mod physics {
     }
 
     /// KH2's arc for KH1's jump or fall now, the height KH1 reached on its last step and the rise
-    /// asked for then (a ceiling: less than half of it happened).
+    /// asked for then (a ceiling: less than half of it happened), and the height KH1's arc fields
+    /// were written for (`air_step`: moved to where he is, if a floor, a ceiling or a push had him
+    /// elsewhere, before KH1's own step reads them).
     struct Air {
         arc: Arc,
         last_y: f32,
         asked_up: f32,
+        written: Option<(f32, kh1phys::Arc)>,
     }
     static AIR: Mutex<Option<Air>> = Mutex::new(None);
 
@@ -443,7 +503,149 @@ pub mod physics {
 
     /// KH2's physics apply to KH1's states for this kind of move now.
     fn kh2(kind: Kind) -> bool {
-        super::active() && styles::kh2(kind) && !super::super::form::in_form()
+        super::active() && source(kind) == Source::Kh2 && !super::super::form::in_form()
+    }
+
+    /// KH1's sideways velocity (`+0x3C0`: x, y, z, w = its length, per 60 Hz frame) and its
+    /// vertical step this frame (`+0x3C4`).
+    const VEL: usize = 0x3C0;
+    const VEL_Y: usize = 0x3C4;
+    /// KH1's flag that holds an actor still in its air state (its arc started over each frame).
+    const AIR_HELD: u32 = 0x1000;
+
+    /// KH1's motion fields on an actor (`kh1phys::Motion`).
+    pub unsafe fn kh1_motion(actor: usize) -> Motion {
+        let v: [f32; 4] = rd(actor + VEL);
+        let arc = kh1phys::Arc { t: rd(actor + ARC_T), y0: rd(actor + ARC_Y0), up_t: rd(actor + ARC_UP_T), h: rd(actor + ARC_H) };
+        Motion { h: [v[0], v[2]], arc }
+    }
+
+    /// Writes them: `dt` the frame scale its vertical step `+0x3C4` is for (KH1 writes the frame's).
+    pub unsafe fn set_kh1_motion(actor: usize, m: &Motion, dt: f32) {
+        let a = m.arc;
+        if ![a.t, a.y0, a.up_t, a.h, m.h[0], m.h[1]].iter().all(|x| x.is_finite()) {
+            return;
+        }
+        wr(actor + VEL, [m.h[0], 0.0f32, m.h[1], m.h[0].hypot(m.h[1])]);
+        wr(actor + VEL_Y, -a.up_speed() * dt);
+        wr(actor + ARC_T, a.t);
+        wr(actor + ARC_Y0, a.y0);
+        wr(actor + ARC_UP_T, a.up_t);
+        wr(actor + ARC_H, a.h);
+    }
+
+    /// KH2's motion last written into KH1's fields (`mirror`), KH1's height then and the game
+    /// frame (`takeover::GAME_FRAME`).
+    static LAST: Mutex<Option<(Motion, f32, u64)>> = Mutex::new(None);
+
+    fn game_frame() -> u64 {
+        super::super::takeover::GAME_FRAME.load(Ordering::Relaxed)
+    }
+
+    /// After each of KH2's controller's steps while it has him (`takeover`, every 60 Hz step at 30
+    /// fps too): its motion written into KH1's own fields. Sideways: the step's travel (a 60 Hz
+    /// step's, so its velocity, an attack's root motion included); up: KH2's arc going on from
+    /// where he is (`kh1phys::from_kh2_step`), or nothing on the ground. KH1's physics step doesn't
+    /// run on KH2's frames (`takeover` has moved him), so nothing is applied twice; the fields are
+    /// what KH1's air state goes on from when it takes him (`kh1_takes_air`).
+    pub unsafe fn mirror(actor: usize, ch: &Character, out: &Output, grounded: bool) {
+        let y: f32 = rd(actor + 0x14);
+        if !y.is_finite() {
+            return;
+        }
+        let p = &ch.params;
+        let m = if grounded {
+            Motion { h: kh1phys::carried([out.displacement[0], out.displacement[2]]), arc: kh1phys::Arc::rest(y) }
+        } else {
+            kh1phys::from_kh2_step(ch.air_arc(), out.displacement, y, p.gravity, p.fall_max)
+        };
+        set_kh1_motion(actor, &m, 1.0);
+        if let Ok(mut l) = LAST.try_lock() {
+            *l = Some((m, y, game_frame()));
+        }
+    }
+
+    /// KH1's air state takes him from KH2's controller in the air (KH1's air command, KH2's move
+    /// given back as a fall; KH1's state already set to 2): KH1's fields with KH2's momentum, the
+    /// last `mirror` moved to where he is. (Before, the arc was zeroed here: KH1 started him
+    /// falling from rest, the user's "no momentum during his kh1 move".) Returns that motion.
+    pub unsafe fn kh1_takes_air(actor: usize) -> Motion {
+        let y: f32 = rd(actor + 0x14);
+        let last = LAST.try_lock().ok().and_then(|l| *l).filter(|(_, _, f)| game_frame().saturating_sub(*f) <= 2);
+        let fresh = last.is_some();
+        let m = match last {
+            Some((mut m, then, _)) => {
+                m.arc.y0 += y - then;
+                m
+            }
+            None => Motion { h: kh1phys::carried(super::super::takeover::kh2_sideways()), arc: kh1phys::Arc::rest(y) },
+        };
+        set_kh1_motion(actor, &m, dt());
+        off_air();
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 40 {
+            let (h, up) = m.velocity();
+            super::super::log(&format!(
+                "KH1's air state takes him with KH2's momentum{}: sideways {:.1}/frame, up {up:.1}/frame (KH1's arc: time {:.1}, apex at {:.1}, {:.0} higher)",
+                if fresh { "" } else { " (no KH2 step written lately: from rest, KH2's sideways speed)" },
+                h[0].hypot(h[1]),
+                m.arc.t,
+                m.arc.up_t,
+                m.arc.rise_left()
+            ));
+        }
+        m
+    }
+
+    /// One of KH1's own air moves just started from `kh1_takes_air`'s motion `before` (KH1's
+    /// command step ran it): an air attack's start sets its own sideways lunge and hop in place of
+    /// what was there (`0x1402A4760`); it keeps the faster speed and the higher rise
+    /// (`kh1phys::keep_momentum`). A spell keeps KH1's own rule (half the sideways speed,
+    /// `0x1402A5380`) and the carried arc, which KH1's cast leaves alone.
+    pub unsafe fn kh1_air_attack_started(actor: usize, before: &Motion) {
+        if rd::<i32>(actor + 0x70) != 2 {
+            return;
+        }
+        let now = kh1_motion(actor);
+        if now == *before {
+            // (No attack started: KH2's own took the press, or KH1 refused it.)
+            return;
+        }
+        let kept = kh1phys::keep_momentum(before, &now);
+        if kept != now {
+            set_kh1_motion(actor, &kept, dt());
+        }
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 40 {
+            let s = |v: [f32; 2]| v[0].hypot(v[1]);
+            super::super::log(&format!(
+                "KH1's air attack out of KH2's motion: its own lunge {:.1}/frame and hop {:.0}; KH2's speed {:.1}/frame and rise {:.0} left; kept {:.1}/frame and {}",
+                s(now.h),
+                now.arc.rise_left(),
+                s(before.h),
+                before.arc.rise_left(),
+                s(kept.h),
+                if kept.arc == now.arc { "KH1's hop" } else { "KH2's rise" }
+            ));
+        }
+    }
+
+    /// KH2's arc has KH1's air state now (Jump at KH2, `air_step`): its motion as KH1's fields hold
+    /// it, for a KH1 air attack started from it (`kh1_air_attack_started`, `combat::command`).
+    pub unsafe fn kh2_air_motion(actor: usize) -> Option<Motion> {
+        let ours = is_sora(actor) && rd::<i32>(actor + 0x70) == 2 && kh2(Kind::Jump) && AIR.try_lock().is_ok_and(|g| g.is_some());
+        ours.then(|| kh1_motion(actor))
+    }
+
+    /// His velocity in KH1's own air state, per 60 Hz frame (sideways, up), for KH2's controller
+    /// taking him from KH1's states: KH1's fields, not his travel over the game frame (two 60 Hz
+    /// frames' worth at 30 fps). None outside state 2 (KH1's other states keep none there).
+    pub unsafe fn kh1_velocity(actor: usize) -> Option<([f32; 2], f32)> {
+        if rd::<i32>(actor + 0x70) != 2 || rd::<u32>(actor) & AIR_HELD != 0 {
+            return None;
+        }
+        let (h, up) = kh1_motion(actor).velocity();
+        (h.iter().all(|x| x.is_finite()) && up.is_finite()).then(|| (kh1phys::carried(h), up.clamp(-30.0, 30.0)))
     }
 
     /// Puts our wrappers in KH1's state table (each Sora physics frame: KH1 fills the table itself
@@ -651,31 +853,62 @@ pub mod physics {
         arc.holdable = true;
         wr(actor + ARC_UP_T, arc.uptime);
         wr(actor + ARC_H, -h);
+        // (KH1's takeoff set its air time 0 and start height here: with these, KH1's arc is KH2's.)
         if let Ok(mut a) = AIR.lock() {
-            *a = Some(Air { arc, last_y: rd(actor + 0x14), asked_up: 0.0 });
+            *a = Some(Air { arc, last_y: rd(actor + 0x14), asked_up: 0.0, written: None });
         }
         static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         if N.fetch_add(1, Ordering::Relaxed) < 20 {
-            super::super::log(&format!("KH1's {} with KH2's arc: {h:.0} high, {:.1} frames up (KH1's own: {:.0})", if high { "High Jump" } else { "jump" }, arc.uptime, {
-                let stats = super::super::pose::ptr(rd::<u32>(actor + 0x6C));
-                if stats > 0x10000 { rd::<f32>(stats + 0x10) } else { 0.0 }
-            }));
+            let stats = super::super::pose::ptr(rd::<u32>(actor + 0x6C));
+            // (KH1's own air numbers too, its stats `+0x10` jump height, `+0x14` air acceleration,
+            // `+0x18` air drag a 30 Hz frame: `docs/kh1-physics.md`.)
+            let s = |o: usize| if stats > 0x10000 { rd::<f32>(stats + o) } else { 0.0 };
+            super::super::log(&format!(
+                "KH1's {} with KH2's arc: {h:.0} high, {:.1} frames up (KH1's own: {:.0}; its air acceleration {:.3}, drag {:.3})",
+                if high { "High Jump" } else { "jump" },
+                arc.uptime,
+                s(0x10),
+                s(0x14),
+                s(0x18)
+            ));
         }
         r
     }
 
-    /// State 2's step (KH1's rise and fall): KH2's arc and air steering (Jump at KH2).
+    /// State 2's step (KH1's rise and fall): KH2's arc and air steering (Jump at KH2), written into
+    /// KH1's own arc and air speed each frame, so that KH1's own step (an air attack's, a spell's,
+    /// flag 4) goes on from KH2's motion, and KH2's arc picks up from KH1's when it has him again.
     unsafe extern "system" fn air_step(actor: usize, disp: *mut [f32; 4]) -> usize {
         let f: StepFn = std::mem::transmute(ORIG_AIR.load(Ordering::Acquire));
         let sora = is_sora(actor);
         let v0: [f32; 4] = if sora { rd(actor + 0x3C0) } else { [0.0; 4] };
+        let ours = sora && rd::<i32>(actor + 0x70) == 2 && !disp.is_null() && kh2(Kind::Jump);
+        if ours {
+            // KH1's arc written last frame for a height a floor, a ceiling or a push didn't leave
+            // him at: moved to where he is (the same speed from here).
+            if let Ok(mut g) = AIR.try_lock() {
+                if let Some(a) = g.as_mut() {
+                    // (Only while they are still ours: KH1's own air attack this frame, started in its
+                    // command step, has set its hop there from where he is.)
+                    if let Some((then, arc)) = a.written.take() {
+                        let y: f32 = rd(actor + 0x14);
+                        if y.is_finite() && (y - then).abs() > 1e-3 && kh1_motion(actor).arc == arc {
+                            wr(actor + ARC_Y0, arc.y0 + (y - then));
+                        }
+                    }
+                }
+            }
+        }
+        // (KH1's own arc before its step: where KH2's goes on from if KH1 moved him last.)
+        let before = if ours { Some(kh1_motion(actor)) } else { None };
         let r = f(actor, disp);
         if !sora || rd::<i32>(actor + 0x70) != 2 || disp.is_null() || !kh2(Kind::Jump) {
             return r;
         }
         let Some(n) = numbers() else { return r };
         let Ok(mut g) = AIR.try_lock() else { return r };
-        // KH1's own action in the air (flag 4: an air attack, a spell's cast) moves him its own way.
+        // KH1's own action in the air (flag 4: an air attack, a spell's cast) moves him its own way,
+        // from KH2's motion (KH1's fields hold it).
         if rd::<u32>(actor) & 4 != 0 {
             *g = None;
             return r;
@@ -683,12 +916,19 @@ pub mod physics {
         let dt: f32 = rd(base() + DT_RVA);
         let dt = if dt.is_finite() && dt > 0.0 && dt < 4.0 { dt } else { 1.0 };
         let y: f32 = rd(actor + 0x14);
-        // (A fall KH1 started itself: off a ledge, out of a ladder or a move.)
-        let air = g.get_or_insert_with(|| Air { arc: Arc::fall(), last_y: y, asked_up: 0.0 });
+        // A fall KH1 started itself (off a ledge, out of a ladder) or KH1's own move in the air
+        // just over: KH2's arc from KH1's (its rise exactly, its fall at its speed), not from rest.
+        let air = g.get_or_insert_with(|| {
+            let arc = before.map_or_else(Arc::fall, |m| m.arc.to_kh2(n.gravity));
+            static N: AtomicU32 = AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 20 {
+                super::super::log(&format!("KH2's arc on KH1's air state from KH1's own: {}", if arc.rising() { format!("rising, {:.0} to go", arc.height - arc.y(arc.t, n.gravity)) } else { format!("falling at {:.1}/frame", n.gravity * arc.t) }));
+            }
+            Air { arc, last_y: y, asked_up: 0.0, written: None }
+        });
         // A ceiling stopped the rise (less than half of it happened): falling from here.
         if air.asked_up > 0.5 && (air.last_y - y) < air.asked_up * 0.49 {
             air.arc = Arc::fall();
-            wr(actor + ARC_UP_T, rd::<f32>(actor + ARC_T));
         }
         // KH2's early release (its own rule; KH1's cut kept off).
         wr(actor, rd::<u32>(actor) & !CUT_OPEN);
@@ -697,23 +937,19 @@ pub mod physics {
             if !held && air.arc.t > character_core::HOLD_MIN_FRAMES && air.arc.t < air.arc.uptime - character_core::HOLD_APEX_MARGIN {
                 let hop = character_core::release_hop(n.gravity);
                 air.arc = Arc::new(hop, n.gravity);
-                wr(actor + ARC_UP_T, rd::<f32>(actor + ARC_T) + air.arc.uptime);
-                wr(actor + ARC_H, -hop);
-                wr(actor + ARC_Y0, y);
             } else if air.arc.t >= air.arc.uptime - character_core::HOLD_APEX_MARGIN {
                 air.arc.holdable = false;
             }
         }
         let up = air.arc.advance(dt, n.gravity, n.fall_max);
-        // Past KH2's apex: KH1's own arc past its apex too (its fall animation, its air moves).
-        if !air.arc.rising() && rd::<f32>(actor + ARC_UP_T) > rd::<f32>(actor + ARC_T) {
-            wr(actor + ARC_UP_T, rd::<f32>(actor + ARC_T));
-        }
         let d = &mut *disp;
         d[1] = -up;
-        wr(actor + 0x3C4, -up);
         air.last_y = y;
         air.asked_up = up;
+        // KH1's arc is KH2's from here (its rise the same curve; past KH2's apex, KH1's fall at
+        // KH2's speed, so its fall animation, its air-move gates and its grabs see KH2's apex).
+        let kh1_arc = kh1phys::Arc::from_kh2(&air.arc, y + d[1], n.gravity, n.fall_max);
+        air.written = Some((y + d[1], kh1_arc));
         // Steering: KH2's (`air_keep` toward the stick at KH2's walk or run speed, `air_drag`
         // without it), from the speed before KH1's own steering this frame. (Both are per 60 Hz
         // frame: `dt` of them a game frame, 2 at 30 fps.)
@@ -734,42 +970,11 @@ pub mod physics {
         } else {
             v = [v[0] * air_drag, v[1] * air_drag];
         }
-        let len = v[0].hypot(v[1]);
-        wr(actor + 0x3C0, [v[0], 0.0f32, v[1], len]);
+        set_kh1_motion(actor, &Motion { h: v, arc: kh1_arc }, dt);
+        // (The frame's own drop, as KH1 writes it.)
+        wr(actor + VEL_Y, -up);
         d[0] = v[0] * dt;
         d[2] = v[1] * dt;
         r
-    }
-
-    /// KH1's fall state just set up by a give-back (`takeover::shared_give_back`): his fall goes on
-    /// at KH2's speed `up` (per frame, KH2's way up): KH2's arc with Jump at KH2, else KH1's own
-    /// fall picked up at that speed.
-    pub unsafe fn fall_from(actor: usize, up: f32) {
-        let up = if up.is_finite() { up } else { 0.0 };
-        if kh2_now() {
-            if let Some(n) = numbers() {
-                let mut arc = if up > 0.5 { Arc::new(up * up / (2.0 * n.gravity), n.gravity) } else { Arc::fall() };
-                if up <= 0.5 {
-                    arc.t = (-up).max(0.0) / n.gravity;
-                }
-                if let Ok(mut a) = AIR.lock() {
-                    *a = Some(Air { arc, last_y: rd(actor + 0x14), asked_up: 0.0 });
-                }
-                return;
-            }
-        }
-        // KH1's fall: `y = start + g/2 t^2` (y-down) from its air time, so that time is where its
-        // speed is his.
-        let down = (-up).max(0.0).min(20.0);
-        let t0 = down / KH1_G;
-        let y: f32 = rd(actor + 0x14);
-        wr(actor + ARC_T, t0);
-        wr(actor + ARC_Y0, y - 0.5 * KH1_G * t0 * t0);
-        off_air();
-    }
-
-    /// Jump at KH2 for base Sora (the give-back sets the mode right after).
-    fn kh2_now() -> bool {
-        styles::kh2(Kind::Jump) && !super::super::form::in_form()
     }
 }

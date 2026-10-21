@@ -526,6 +526,31 @@ fn sora_is_launched_lands_and_gets_up() {
     assert!(w.pos[2] < -200.0, "{:?}", w.pos);
 }
 
+/// `air_arc` says where on its arc he is (the host writes it into its own physics state): its
+/// time, a frame short after a physics tick's first frame, gives his height every frame.
+#[test]
+fn air_arc_matches_where_he_is() {
+    let mut w = World::new(sora());
+    w.ch.abilities.high_jump = 0;
+    w.step(Pad { jump: true, ..IDLE });
+    let mut seen = 0;
+    for _ in 0..80 {
+        w.step(Pad { jump: true, ..IDLE });
+        if let Some((a, first)) = w.ch.air_arc() {
+            let g = w.ch.params.gravity;
+            if a.rising() {
+                // (Mid-tick, a frame short of the arc's time, he has gone half the tick's rise in a
+                // straight line.)
+                let at = if first { (a.y(a.t, g) + a.y((a.t - 2.0).max(0.0), g)) / 2.0 } else { a.y(a.t, g) };
+                assert!((at - w.pos[1]).abs() < 1e-3, "t {}: arc {at} at {}", a.t, w.pos[1]);
+                seen += 1;
+            }
+        }
+    }
+    assert!(seen > 10, "{seen} rising frames");
+    assert!(w.ch.air_arc().is_none(), "landed: no arc");
+}
+
 #[test]
 fn carried_into_the_air_falls_on_at_its_speed() {
     // Handed over mid-fall (off a bar): moving 6 sideways and 3 down per frame.

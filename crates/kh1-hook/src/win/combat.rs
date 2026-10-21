@@ -428,7 +428,14 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     };
     let kh1_combo = kh1_combo && !matches!(next, Some(super::combomods::Next::Kh2));
     if actor != sora || kind == 0 || kind == 1 && !kh1_combo || NOT_SORAS.contains(&kind) || !super::settings::get().commands || !takeover::ON.load(Ordering::Relaxed) || !takeover::kh2_has() {
-        return f(actor, dir);
+        // KH1's own air attack out of KH2's jump arc on KH1's states (Jump at KH2): it keeps KH2's
+        // momentum as out of KH2's own moves (below; `shared::physics`).
+        let on_kh2 = if actor == sora && kind == 1 { super::shared::physics::kh2_air_motion(actor) } else { None };
+        f(actor, dir);
+        if let Some(m) = on_kh2 {
+            super::shared::physics::kh1_air_attack_started(actor, &m);
+        }
+        return;
     }
     // KH2 runs a command only when Sora can act: a spell when free, landing or in an attack's
     // "combo magic" window (`can_cast`), anything else when free or in a combo window
@@ -463,25 +470,23 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     }
     trail_off(actor);
     let before = (rd::<i32>(actor + 0x70), rd::<u32>(actor + 0x164));
-    if air {
+    // KH1's air state with KH2's momentum (its air speed `+0x3C0` and its arc, as KH2's steps wrote
+    // them, `shared::physics::kh1_takes_air`; before, its arc was zeroed here, so KH1 started him
+    // falling from rest: the user, "if sora does a kh1 air move from a kh2 air move then he gets
+    // no momentum during his kh1 move"). KH1's command step then slows the sideways speed as for
+    // its own air casts (the user: "when sora does aerial magic the kh1 animation currently does
+    // not carry momentum from kh2s jump").
+    let carried = if air {
         let set_state: unsafe extern "system" fn(usize, u32) -> u32 = std::mem::transmute(base + STATE_RVA);
-        let y = rd::<f32>(actor + 0x14);
         set_state(actor, 2);
-        wr(actor + 0x3B0, 0.0f32);
-        wr(actor + 0x3B8, 0.0f32);
-        wr(actor + 0x3BC, 0.0f32);
-        wr(actor + 0x3B4, y);
-        // KH2's jump's sideways speed carried into KH1's air state (`+0x3C0`: x, y, z, its
-        // length; KH1's command step then slows it as for its own air casts), the user: "when sora
-        // does aerial magic the kh1 animation currently does not carry momentum from kh2s jump".
-        let [vx, vz] = takeover::kh2_sideways();
-        let n = (vx * vx + vz * vz).sqrt();
-        let k = if n > 30.0 { 30.0 / n } else { 1.0 };
-        wr(actor + 0x3C0, [vx * k, 0.0f32, vz * k, n * k]);
-        cmd_log(format!("air command: KH2's sideways speed {:.1}/frame carried into KH1's air state", n * k));
+        let m = super::shared::physics::kh1_takes_air(actor);
+        cmd_log(format!("air command: KH2's speed {:.1}/frame sideways, {:.1}/frame up carried into KH1's air state", m.h[0].hypot(m.h[1]), m.arc.up_speed()));
         wr(actor + 0x3D0, 0u32);
         wr(actor, rd::<u32>(actor) & !0x1_0000);
-    }
+        Some(m)
+    } else {
+        None
+    };
     // What KH1 doing something with him changes: his state, motion request, the script-held
     // flag 0x1000000 (spells and items set it, the user's log), his motion slot.
     // ... and above all any motion KH1 sets on him (`probe`'s set-motion hooks count them: the
@@ -502,6 +507,11 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     // Only if KH1 did something with him (a new state or motion request); else as before.
     let after = look();
     if after != set {
+        // KH1's air attack out of KH2's move: its start replaced the speed and arc carried in with
+        // its own lunge and hop; the faster and the higher are kept (`shared::physics`).
+        if let Some(m) = carried.filter(|_| kind == 1) {
+            super::shared::physics::kh1_air_attack_started(actor, &m);
+        }
         // A spell mid-combo takes a step of it, and the combo goes on after it (the user: magic
         // cast mid-combo inserts itself in the combo, as a modifier does).
         // A spell takes its slot of the combo string as KH2's casts do (spec: one slot each).

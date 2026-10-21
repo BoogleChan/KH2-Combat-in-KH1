@@ -21,7 +21,7 @@ shared moves now, as idle, walk, run and jump are.
 | idle, walk, run, item use (Misc Animations) | KH1's states | KH1 unmodded | KH1's slot drawn with KH2's motion; KH2's walk / run speed |
 | jump, high jump, fall, landing (Jump) | KH1's states | KH1 unmodded | KH1's slots drawn with KH2's jump / fall / landing; KH2's jump arc |
 | ground combo: swings and finisher (Base Combo) | KH1's states (its rows, hit objects, timing, damage, its menu's combo abilities; KH2 borrows him for its ability moves at either style, below) | KH1 unmodded | KH1's swings drawn with KH2's: its second swing (slot 99) with KH2's second (152), its finisher (101) with KH2's (154), its first and third (98) with KH2's first (151); KH2's swing travel |
-| Glide | KH1's glide state (Square with `glide = square`, its held jump with `glide = jump`) | KH1 unmodded | KH1's glide slots drawn with KH2's glide (113 / 114) and banked glides (115 / 116); KH2's glide speed, fall and turn rate |
+| Glide | KH1's glide state (Square with `glide = square`, its held jump with `glide = jump`) | KH1 unmodded | KH1's glide slots drawn with KH2's glide (75 / 76) and banked glides (77 / 78); KH2's glide speed, fall and turn rate |
 | Aerial Dodge | KH2 borrows him | double jump with Jump at KH1 too | the same |
 | Dodge Roll (Square on the ground) | KH1 at KH1; KH2 borrows at KH2 | KH1's roll and guard; Square held through it: KH2's Quick Run (Quick Run equipped); without KH1's Dodge Roll, Square while moving: KH2's Quick Run | KH2's roll, guard, Quick Run (with them equipped) |
 | Aerial Combo | KH1's rows at KH1; KH2 borrows at KH2 | KH1's combo, KH2 borrowing him for its ability moves (below) | KH2's combo |
@@ -90,6 +90,22 @@ shared moves now, as idle, walk, run and jump are.
     KH2's glide turn rate; its step `0x1402B0890` moves him at KH2's glide speed
     (`(1 - a) × top × tilt + a × last`) and fall (`(height - fall height) × ratio`, capped), from
     KH2's growth numbers at Sora's Glide level (Glide at KH2).
+  - whose numbers: `shared::physics::source(kind)`, the one switch point (per move style now;
+    the later "physics = kh1 / kh2" setting goes there, `docs/kh1-physics.md` §7).
+- **Momentum lives in KH1's own fields** (`docs/kh1-physics.md`; the user: "if sora does a kh1
+  air move from a kh2 air move then he gets no momentum during his kh1 move"):
+  - KH2's jump arc on KH1's states is written into KH1's arc and air speed every frame (exactly:
+    KH1's rise is KH2's curve), so KH1's own air move goes on from it, and KH2's arc picks up from
+    KH1's after it (not from rest);
+  - while KH2's controller has him, each of its steps is written into them
+    (`shared::physics::mirror`);
+  - KH1 taking him in the air (its air command, a give-back to the fall, its glide) goes on from
+    them (`kh1_takes_air`), where the arc used to be zeroed (a fall from rest);
+  - KH1's air attack out of KH2's motion keeps the faster sideways speed and the higher rise of
+    its own lunge and hop and KH2's (`kh1_air_attack_started`); KH1's later swings are KH1's;
+  - KH2 taking him from KH1's air state starts at KH1's air speed and arc slope
+    (`kh1_velocity`), per 60 Hz frame (his travel over the frame was taken as one 60 Hz frame's:
+    twice his speed at 30 fps).
 
 ## The dodge roll at KH2 (s261's "kh2 dodge roll is unusable")
 
@@ -129,6 +145,9 @@ own side scales by its frame scale (`0x1423405DC`: 1.0 at 60 fps, 2.0 at 30; the
   swing (`pose`).
 - **KH2's physics on KH1's states** (`shared::physics`): the arc already advanced by the frame
   scale. Its air steering's keep and drag are now taken to the scale's power.
+- **KH2's motion into KH1's fields** (`shared::physics::mirror`): written on every 60 Hz step, per
+  60 Hz frame (KH1 scales it by its frame scale when it moves him). KH1's physics step doesn't run
+  on KH2's frames, so nothing is moved twice.
 
 ## The camera
 
@@ -215,6 +234,19 @@ Overlap with the shared-moves work (`pose.rs` / `shared.rs`): `shared::Seen` gai
 `combo_window`, `launched` and `moving`, and `shared::control` calls `combomods::control` first
 and has the Quick Run case. Nothing in `pose.rs` changed.
 
+## KH2's moves as KH1 slots (`kh2_slots`)
+
+`kh2slots.rs`, ini `kh2_slots = on` (default off; or a list of KH2 motions, e.g. `152`), `docs/kh1-anim-slots.md`. Moves now: KH1's ground combo at Base Combo KH2 (requests `0xC8..0xCB` → KH2's 151, 152, 151, 154). KH1 Sora's actor gets
+copies of its slot table (KH1's 118 slots and ours after them) and request table. While a move's
+style is KH2's, the KH1 request it stands in for plays our slot: a KH1 motion (the KH1 slot it
+replaces, retimed to the KH2 motion's length) carrying the KH2 clip's hit, combo and trail
+windows as KH1's motion events, KH1's own sounds and foot effects rescaled. KH1's state, attack
+row, attack object and request id are unchanged. `pose` draws the KH2 motion at KH1's time
+(`actor + 0x16C`) and blends by KH1's blend clock; KH2's own sounds and effects for it fire from
+KH1's clock (`kh2slots::tick`). `pose::sora_slot` and `slot_frames` report the KH1 slot it stands
+in for (with the length that plays), so `shared::physics`, `combomods` and `takeover` see KH1's
+slot numbers.
+
 ## Not yet
 
 - The aerial combo, Magic and Dodge Roll at KH2 are KH2's own moves (borrows), not yet KH1's
@@ -224,7 +256,7 @@ and has the Quick Run case. Nothing in `pose.rs` changed.
 - At Base Combo KH2, the combo is KH1's: KH2's own combo abilities (Combo Master, Negative
   Combo, Finishing Plus, Combo Plus counts) don't apply to the ground combo; KH1's from its menu
   do.
-- Unverified in game: KH1's glide slots 114 and 116 (only 113 and 115 were seen), the banked
+- Unverified in game: KH1's glide slots 76 and 78 (75 and 77 were seen in the s261 log; earlier builds took the glide for slots 113..116, which are attacks), the banked
   glides' direction, whether KH1's swing travel all goes through its ground step's
   displacement (if not, KH2's travel adds to KH1's), and KH1's roll's can-act frames.
 - KH2's physics on KH1's states: see `shared::physics`.

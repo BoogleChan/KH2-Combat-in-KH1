@@ -62,6 +62,11 @@ camera_scale = 0.89\r\n\
 ;   KH2's animations and physics where a move style is KH2; KH2 borrows him only for its own\r\n\
 ;   moves; off = KH2's controller has him whenever he stands, walks or runs (older builds)\r\n\
 shared = on\r\n\
+; kh2_slots: on = KH2's moves that have one play as new slots in KH1's own motion table (KH1's\r\n\
+;   clock, events, hit windows and blends; for now KH2's ground combo, 151 / 152 / 154, at Base\r\n\
+;   Combo KH2); a list of KH2 motions (e.g. 152) = only those; off = KH2's motions drawn over\r\n\
+;   KH1's (as before)\r\n\
+kh2_slots = off\r\n\
 ; camera_lower: KH2's camera (look point and eye together) this much lower (0 = as KH2)\r\n\
 camera_lower = 0\r\n\
 ; camera_calls: kh2 = (camera = kh2) KH2's camera runs as KH1's own camera mode: KH1's moves,\r\n\
@@ -184,6 +189,9 @@ pub struct Settings {
     /// on KH1's states per move style, KH2's controller only for KH2's own moves. Off: the old
     /// way (KH2's controller has him whenever KH1 shows him standing, walking or running).
     pub shared: bool,
+    /// KH2's moves as new slots in KH1 Sora's motion table (`kh2slots.rs`): `None` off (the
+    /// default), `Some(None)` every move that has one (`on`), else only these KH2 motions.
+    pub kh2_slots: Option<Option<Vec<u16>>>,
 }
 
 static SETTINGS: OnceLock<Settings> = OnceLock::new();
@@ -263,6 +271,11 @@ pub fn get() -> &'static Settings {
             styles: [on(&text, "ground_combo", "kh2", false), on(&text, "air_combo", "kh2", false), on(&text, "magic", "kh2", false), on(&text, "air_magic", "kh2", false), on(&text, "jump_style", "kh2", false), on(&text, "glide_style", "kh2", false), on(&text, "roll_style", "kh2", false), on(&text, "misc_anims", "kh2", false), on(&text, "player_model", "kh2", false), on(&text, "battle_quotes", "kh2", on(&text, "kh2_voice", "on", false))],
             gummi_skip: on(&text, "gummi", "skip", false),
             shared: on(&text, "shared", "on", true),
+            kh2_slots: match setting(&text, "kh2_slots").as_deref() {
+                None | Some("off") | Some("0") | Some("no") => None,
+                Some("on") | Some("all") | Some("yes") => Some(None),
+                Some(v) => Some(Some(v.split([',', ' ']).filter_map(|t| t.trim().parse().ok()).collect())),
+            },
         };
         log(&format!("settings ({path}): {s:?}"));
         s

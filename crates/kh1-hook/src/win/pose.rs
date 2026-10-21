@@ -80,6 +80,9 @@ enum Play {
     /// is KH2's second, the user: "sora base attack 2, kh2 base attack 2"), or `None` to
     /// alternate them swing by swing.
     Swing { air: bool, finisher: bool, second: Option<bool> },
+    /// One of our slots in KH1's motion table (`kh2slots`): its KH2 motion, at KH1's own time
+    /// and blend (KH1 plays the slot; its length is the KH2 motion's).
+    Slot { motion: u16 },
 }
 
 /// KH2's swing for KH1's ground swing slot (`play_for`): 98 (KH1's first and third swing) KH2's
@@ -98,7 +101,7 @@ pub fn swing_motion(slot: usize) -> Option<u16> {
 /// KH1 Sora's slots, from the user's play logs (2026-10-13): 0 / 2 / 5 field idle, walk, run;
 /// 1 / 3 / 6 the battle ones; 12 → 13 → 10 → 11 jump, rise, fall, land; 98 → 99 → 98 → 101 the
 /// ground combo (100 assumed a third swing); 102 / 103 / 104 the air combo (the user: air
-/// combos showed the glide they were first taken for); 113..116 KH1's glide (`shared::slot_kind`:
+/// combos showed the glide they were first taken for); 75..78 KH1's glide (`shared::slot_kind`:
 /// gliding slow / fast, banking one way / the other: KH2's glide, and its two banked glides).
 /// 4 / 7 are unseen and taken as battle walk / run.
 fn play_for(slot: usize) -> Option<Play> {
@@ -122,9 +125,9 @@ fn play_for(slot: usize) -> Option<Play> {
         102 | 103 => Play::Swing { air: true, finisher: false, second: None },
         104 => Play::Swing { air: true, finisher: true, second: None },
         // (KH1's glide: one group, so its slow / fast slots go on in the same clip.)
-        113 | 114 => mo(m::GLIDE, false, true, 5),
-        115 => mo(m::GLIDE_TURN_A, false, true, 5),
-        116 => mo(m::GLIDE_TURN_B, false, true, 5),
+        75 | 76 => mo(m::GLIDE, false, true, 5),
+        77 => mo(m::GLIDE_TURN_A, false, true, 5),
+        78 => mo(m::GLIDE_TURN_B, false, true, 5),
         _ => return None,
     })
 }
@@ -257,6 +260,10 @@ pub fn kh2() -> Option<&'static Kh2> {
 static SLOT_NOW: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// A KH1 motion slot's length in frames (KH1 Sora's motion table).
 pub fn slot_frames(slot: usize) -> Option<u32> {
+    // (Our slot standing in for KH1's: the length that plays, `kh2slots`.)
+    if let Some(n) = super::kh2slots::frames_for(slot) {
+        return Some(n);
+    }
     SLOTS.get()?.1.get(slot).copied().filter(|n| *n > 0)
 }
 
@@ -374,6 +381,8 @@ struct Follow {
     /// Last KH2 pose (model space), and the pose blended from on a change.
     last: Vec<Mat4>,
     from: Vec<(Vec3, Quat, Vec3)>,
+    /// When `last` was drawn.
+    last_at: Option<Instant>,
     blend_start: Option<Instant>,
     blend_secs: f32,
     /// Movement measured from the model origin (world units per second), smoothed.
@@ -631,6 +640,10 @@ pub fn load_kh2() {
                 }
             }
             log(&format!("KH1 Sora's motion table: {} slots", motions.len()));
+            // KH2's moves as new slots of that table (`kh2slots`, ini `kh2_slots`).
+            if let Some(Ok(k)) = KH2.get() {
+                super::kh2slots::prepare(&bytes, k);
+            }
             let _ = REST.set(motions.get(REST_SLOT).cloned().flatten());
             let _ = REST_OPEN.set(motions.first().cloned().flatten());
             Ok((map, lengths))
@@ -932,6 +945,11 @@ fn decompose(v: &[Mat4]) -> Vec<(Vec3, Quat, Vec3)> {
 
 /// KH2's motion for what KH1's slot shows Sora doing; `None` leaves KH1's own animation.
 fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4>> {
+    // One of our slots (`kh2slots`): its KH2 motion, whatever the styles now (KH1 plays it to its
+    // end; its template underneath is never shown).
+    if let Some(motion) = slot.and_then(super::kh2slots::kh2_motion) {
+        return follow_play(s, slot, to_world, Some(Play::Slot { motion }));
+    }
     // Misc Animations at KH2 (`styles`, base Sora): KH1 uses the item (its effect, its timing, the
     // item's logic) and KH2's item-use motion is drawn over it (P_EX100 motion 9, A110: the
     // right hand raised overhead at frames ~20-30 of its 50, a voice at 0 and a sound at 10; KH1's
@@ -1062,6 +1080,8 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
             let rate = if kh1_len > 1.0 && kh2_len > 1.0 { 60.0 * kh2_len / kh1_len } else { 60.0 };
             (motion, false, false, new_slot, rate, 0.0)
         }
+        // (No rate: drawn at KH1's own time below; blended by KH1's blend clock.)
+        Play::Slot { motion } => (motion, false, false, new_slot || f.motion != motion, 60.0, 0.0),
     };
     if !restart && matches!(play, Play::Motion { .. }) {
         // Loops change speed as he does: carry the clip position over at the new rate.
@@ -1072,7 +1092,21 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
             f.since = now.checked_sub(back).or(f.since);
         }
     }
-    if restart {
+    let actor = super::takeover::sora_actor();
+    let kh1_time = match (play, slot) {
+        (Play::Slot { .. }, Some(n)) if actor > 0x10000 => unsafe { super::kh2slots::kh1_time(actor, n) },
+        _ => None,
+    };
+    if restart && matches!(play, Play::Slot { .. }) {
+        // KH1's blend into our slot (if it asked for one) from the pose drawn last, if recent.
+        f.from = if f.last_at.is_some_and(|t| now.duration_since(t).as_secs_f32() < 0.25) { decompose(&f.last) } else { Vec::new() };
+        f.blend_start = None;
+        f.motion = motion;
+        f.field = false;
+        f.since = Some(now);
+        f.rate = 60.0;
+    }
+    if restart && !matches!(play, Play::Slot { .. }) {
         if !f.last.is_empty() && blend > 0.0 {
             f.from = decompose(&f.last);
             f.blend_start = Some(now);
@@ -1098,7 +1132,7 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
         // (A banked glide the rig lacks: its plain glide.)
         .or_else(|| rig.motions.get(&m2::GLIDE).filter(|_| matches!(motion, m2::GLIDE_TURN_A | m2::GLIDE_TURN_B)))
         .or_else(|| rig.motions.get(&m2::IDLE))?;
-    let frames = f.since.map_or(0.0, |t| now.duration_since(t).as_secs_f32() * f.rate);
+    let frames = kh1_time.unwrap_or_else(|| f.since.map_or(0.0, |t| now.duration_since(t).as_secs_f32() * f.rate));
     let t = kh2_anim::key_time(clip, frames, looping);
     let mut pose = kh2_anim::evaluate(&rig.skeleton, clip, t, kh2_anim::Options::default()).bones;
     // The Keyblade's bones after Sora's (the lunge and the blend apply to both; split off below).
@@ -1106,12 +1140,23 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
     let weapon = kh2_weapon(rig, motion, frames, looping, &pose);
     pose.extend(weapon);
     // A swing's lunge: KH1 moves him, so take KH2's root travel out of the pose.
-    if matches!(play, Play::Swing { .. }) {
+    if matches!(play, Play::Swing { .. } | Play::Slot { .. }) {
         if let Some(root) = kh2.roots.get(&motion).and_then(|r| r.get((frames as usize).min(r.len().saturating_sub(1)))) {
             let un = Mat4::from_translation(-Vec3::from(*root));
             for m in pose.iter_mut() {
                 *m = un * *m;
             }
+        }
+    }
+    if let (Play::Slot { .. }, true) = (play, f.from.len() == pose.len()) {
+        match (actor > 0x10000).then(|| unsafe { super::kh2slots::kh1_blend(actor) }).flatten() {
+            Some(w) => {
+                for (m, (fs, fr, ft)) in pose.iter_mut().zip(&f.from) {
+                    let (ss, sr, st) = m.to_scale_rotation_translation();
+                    *m = Mat4::from_scale_rotation_translation(fs.lerp(ss, w), fr.slerp(sr, w), ft.lerp(st, w));
+                }
+            }
+            None => f.from.clear(),
         }
     }
     if let Some(b) = f.blend_start {
@@ -1126,6 +1171,7 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
         }
     }
     f.last = pose.clone();
+    f.last_at = Some(now);
     let weapon = pose.split_off(body_len.min(pose.len()));
     note_kh2(&pose, to_world);
     let kh1 = r.pose(&pose);
@@ -1138,6 +1184,9 @@ unsafe fn slot_of(instance: usize) -> Option<usize> {
     let m = rd::<u64>(instance + 8) as usize;
     if m < 0x10000 {
         return None;
+    }
+    if let Some(s) = super::kh2slots::slot_of_motion(m) {
+        return Some(s);
     }
     let sig = (rd::<u32>(m + 4), rd::<u32>(m + 0x18), rd::<u32>(m + 0x20), rd::<u32>(m + 0x2C));
     SLOTS.get()?.0.get(&sig).copied()
@@ -1330,8 +1379,13 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
     }
     let orig_hands = (!ours).then(|| HANDS.map(|(b, _)| mat(world + b * 0x40)));
     let orig_blade = (!ours).then(|| (mat(world + 280 * 0x40), mat(world + 283 * 0x40)));
+    // Our slots in KH1's motion table (`kh2slots`): the tables on his actor, our KH2 sounds.
+    if MODE.load(Ordering::Relaxed) == 0 {
+        super::kh2slots::frame(super::takeover::sora_actor());
+    }
     let slot = slot_of(instance);
-    SLOT_NOW.store(slot.unwrap_or(usize::MAX), Ordering::Relaxed);
+    // (Callers test KH1's slots: ours is reported as the one it stands in for.)
+    SLOT_NOW.store(slot.map(|n| super::kh2slots::stands_for(n).unwrap_or(n)).unwrap_or(usize::MAX), Ordering::Relaxed);
     // Which weapon and how KH1 holds it, logged once a weapon (KH1's grip itself is not used:
     // it moves with KH1's motions, stage 53).
     if let (false, Some(0..=7), Some(&Some(p)), Some(r)) = (ours, slot, s.parents.get(kh1_data::retarget::GRIP_BONE).map(|p| (*p >= 0).then_some(*p as usize)).as_ref(), s.retarget.as_ref()) {

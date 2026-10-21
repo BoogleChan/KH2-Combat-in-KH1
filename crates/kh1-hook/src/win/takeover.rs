@@ -427,8 +427,10 @@ unsafe extern "system" fn physics(actor: usize) {
         combat::trail_off(actor);
         super::reflect::kh1_frame();
         // (At KH2's 60 Hz: `steps`.)
+        // (Our KH2 slot playing in KH1's motion table, `kh2slots`: its effects go on with it.)
+        let motion = super::kh2slots::fx_motion().unwrap_or(super::kh2fx::NO_MOTION);
         for _ in 0..steps() {
-            super::kh2fx::tick(super::kh2fx::NO_MOTION);
+            super::kh2fx::tick(motion);
         }
     }
     let f: PhysFn = std::mem::transmute(ORIG_PHYS.load(Ordering::Acquire));
@@ -453,11 +455,8 @@ unsafe fn style_air_start(base: usize, actor: usize, d: &Driver, glide_press: bo
         return None;
     }
     let st = d.character.state_name();
-    let (dv, up) = d.last_out.as_ref().map_or(([0.0; 2], 0.0), |o| ([o.displacement[0], o.displacement[2]], o.displacement[1]));
-    let v = dv;
-    let v = if v.iter().all(|x| x.is_finite()) { v } else { [0.0; 2] };
-    let n = v[0].hypot(v[1]);
-    let k = if n > 30.0 { 30.0 / n } else { 1.0 };
+    let up = d.last_out.as_ref().map_or(0.0, |o| o.displacement[1]);
+    // (KH2's sideways speed `v` (kept to 30, `k`) is in KH1's fields already: `shared::physics::mirror`.)
     let set: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(base + SET_STATE_RVA);
     // (Off for now, s251, the user: KH1's own jump start, its speed and take-off height:)
     // if !glide_press && super::stylejump::kh1_jump() && d.grounded && !d.character.airborne() && matches!(st, StateName::Idle | StateName::Walk | StateName::Run | StateName::Land) {
@@ -486,16 +485,12 @@ unsafe fn style_air_start(base: usize, actor: usize, d: &Driver, glide_press: bo
     if glide_press && super::stylejump::kh1_glide() && d.character.airborne() && falling && matches!(st, StateName::Air | StateName::Jump) {
         // KH1's air state as an air command sets it (`combat::command`), then its glide.
         // (Once a hold of Square: a glide that doesn't start isn't tried every frame.)
-        let y = rd::<f32>(actor + 0x14);
         if !kh1_glide_open(base) || GLIDE_TRIED.swap(true, Ordering::Relaxed) {
             return None;
         }
         set(actor, 2);
-        wr(actor + 0x3B0, 0.0f32);
-        wr(actor + 0x3B8, 0.0f32);
-        wr(actor + 0x3BC, 0.0f32);
-        wr(actor + 0x3B4, y);
-        wr(actor + 0x3C0, [v[0] * k, 0.0f32, v[1] * k, n * k]);
+        // (KH2's speed and arc, written into KH1's fields by its steps: the glide starts from them.)
+        super::shared::physics::kh1_takes_air(actor);
         wr(actor + 0x3D0, 0u32);
         wr(actor, rd::<u32>(actor) & !0x1_0000);
         return match kh1_glide_start(base, actor) {
@@ -1472,11 +1467,9 @@ unsafe fn shared_frame(base: usize, actor: usize) -> bool {
     let above = rd::<f32>(actor + 0x3D4);
     let air = matches!(state, 1 | 2) || above > STEP_DOWN;
     if air {
-        *HANDOFF_FALL.lock().unwrap() = Some(vel.map_or(([0.0; 2], 0.0), |(h, up)| {
-            let n = (h[0] * h[0] + h[1] * h[1]).sqrt();
-            let k = if n > 20.0 { 20.0 / n } else { 1.0 };
-            ([h[0] * k, h[1] * k], up.clamp(-30.0, 30.0))
-        }));
+        // His speed from KH1's own fields in its air state (per 60 Hz frame); else his travel over
+        // the frame, per 60 Hz frame too (`kh1_fall_speed`).
+        *HANDOFF_FALL.lock().unwrap() = Some(kh1_fall_speed(actor, vel));
         AIR_START.store(true, Ordering::Relaxed);
         if borrow == super::shared::AIR_JUMP {
             AIR_MOVES.store(true, Ordering::Relaxed);
@@ -1526,25 +1519,40 @@ unsafe fn shared_frame(base: usize, actor: usize) -> bool {
     true
 }
 
+/// His speed (per 60 Hz frame: sideways, up) as KH2's controller takes him in the air from KH1:
+/// KH1's own fields in its air state (`shared::physics::kh1_velocity`: its air speed and its arc's
+/// slope), else `vel`, his travel over the last game frame, divided by the frame scale (it was
+/// taken as one 60 Hz frame's, so at 30 fps KH2 started at twice his speed). A frame missed would
+/// read as a jump in speed: kept to what a fall can be.
+unsafe fn kh1_fall_speed(actor: usize, vel: Option<([f32; 2], f32)>) -> ([f32; 2], f32) {
+    let (h, up, from) = match super::shared::physics::kh1_velocity(actor) {
+        Some((h, up)) => (h, up, "KH1's air speed and arc"),
+        None => {
+            let dt = super::shared::physics::dt();
+            let (h, up) = vel.unwrap_or(([0.0; 2], 0.0));
+            ([h[0] / dt, h[1] / dt], up / dt, "his travel")
+        }
+    };
+    let n = h[0].hypot(h[1]);
+    let k = if n > 20.0 { 20.0 / n } else { 1.0 };
+    static N: AtomicU32 = AtomicU32::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) < 30 {
+        log(&format!("KH2 takes him in the air at {from}: sideways {:.1}/frame, up {up:.1}/frame (KH1 state {})", n * k, rd::<i32>(actor + 0x70)));
+    }
+    ([h[0] * k, h[1] * k], up.clamp(-30.0, 30.0))
+}
+
 /// KH2's move is over (`shared::give_back`): KH1's own states again, on the ground or falling
 /// (KH1's fall state as an air command sets it: the air-time fields, KH2's sideways speed).
 unsafe fn shared_give_back(base: usize, actor: usize, d: &mut Driver, back: super::shared::Back, out: &Output) {
     if back == super::shared::Back::Air {
+        // (KH1's air state from KH2's motion, which this step wrote into its fields: KH1's own fall,
+        // or KH2's arc on it with Jump at KH2, goes on at KH2's speed, `shared::physics`.)
         let set: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(base + SET_STATE_RVA);
-        let y = rd::<f32>(actor + 0x14);
-        let v = [out.displacement[0], out.displacement[2]];
-        let v = if v.iter().all(|x| x.is_finite()) { v } else { [0.0; 2] };
-        let n = v[0].hypot(v[1]);
-        let k = if n > 30.0 { 30.0 / n } else { 1.0 };
         set(actor, 2);
-        wr(actor + 0x3B0, 0.0f32);
-        wr(actor + 0x3B8, 0.0f32);
-        wr(actor + 0x3BC, 0.0f32);
-        wr(actor + 0x3B4, y);
-        wr(actor + 0x3C0, [v[0] * k, 0.0f32, v[1] * k, n * k]);
+        super::shared::physics::kh1_takes_air(actor);
         wr(actor + 0x3D0, 0u32);
         wr(actor, rd::<u32>(actor) & !0x1_0000);
-        super::shared::physics::fall_from(actor, out.displacement[1]);
     }
     d.last_state = None;
     d.held = (true, true);
@@ -1962,12 +1970,7 @@ unsafe fn takeover(actor: usize) -> bool {
                 LAND_NOW.store(true, Ordering::Relaxed);
             }
             if falling {
-                // (A frame missed would read as a jump in speed: kept to what a fall can be.)
-                *HANDOFF_FALL.lock().unwrap() = vel.map(|(h, up)| {
-                    let n = (h[0] * h[0] + h[1] * h[1]).sqrt();
-                    let k = if n > 20.0 { 20.0 / n } else { 1.0 };
-                    ([h[0] * k, h[1] * k], up.clamp(-30.0, 30.0))
-                });
+                *HANDOFF_FALL.lock().unwrap() = vel.map(|_| kh1_fall_speed(actor, vel));
             }
             if form_cast.is_some() && !falling {
                 *HANDOFF_SLIDE.lock().unwrap() = FORM_CAST.try_lock().ok().and_then(|f| f.map(|f| f.v));
@@ -2703,6 +2706,9 @@ unsafe fn takeover(actor: usize) -> bool {
         let f = out.facing;
         wr(actor + 0x30, [f.sin(), 0.0, f.cos(), f]);
         wr(actor + 0x150, f);
+        // KH2's motion into KH1's own physics fields (its air speed and arc), each step: KH1's
+        // states go on from it when they take him (`shared::physics::mirror`, `docs/kh1-physics.md`).
+        super::shared::physics::mirror(actor, &d.character, &out, d.grounded && !d.character.airborne());
         // KH1's own air moves (its jump's input step `0x1402ADA90` tries them in this order):
         // vines and climbable walls (state 10), ledges (13), bars (`0x1402C7E00`), objects to
         // hang from, and water to swim in (17). Tried while KH2 has him falling, the stick held.
