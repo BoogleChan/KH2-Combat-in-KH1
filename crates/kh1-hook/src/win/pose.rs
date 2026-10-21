@@ -343,6 +343,41 @@ struct Sora {
     inverse: Option<kh1_data::inverse::Inverse>,
     /// The KH2 pose (Sora's bones, the Keyblade's) the pose being drawn came from, if KH2's.
     kh2_now: Option<(Vec<Mat4>, Vec<Mat4>)>,
+    /// Where this frame's pose comes from (`wanted`), and last frame's (`src`).
+    src_now: u8,
+    src: u8,
+    /// The pose drawn last frame (model space), whoever drew it.
+    shown: Vec<Mat4>,
+    /// A change of source after one of KH1's grabs, blended from `shown` (`HANDBACK_BLEND`).
+    handback: Option<(Vec<(Vec3, Quat, Vec3)>, Instant)>,
+}
+
+/// Who drew Sora's pose (`Sora::src`): nobody yet, KH1's own animation, KH2's motion over KH1's
+/// slot (`follow`), KH2's controller (`takeover::POSE`), KH1's own jump over KH2's (`kh1_air_pose`).
+mod src {
+    pub const NONE: u8 = 0;
+    pub const KH1: u8 = 1;
+    pub const FOLLOW: u8 = 2;
+    pub const KH2: u8 = 3;
+    pub const KH1_AIR: u8 = 4;
+}
+
+/// Out of one of KH1's grabs (`takeover::grab_blend`: a ledge's pull-up, a ladder, a pole), the
+/// change from KH1's own animation to ours, and from ours over KH1's slot to KH2's own frames,
+/// blends in from the pose drawn just before over this long (seconds, eased): KH2's own 8 frames
+/// between movement motions, a little longer. KH1's climb ends in its own fall and landing, then
+/// KH2's idle took over at once (the user: "a small visual bug that happens when you go up from
+/// a ledge grab").
+const HANDBACK_BLEND: f32 = 10.0 / 60.0;
+
+fn src_name(s: u8) -> &'static str {
+    match s {
+        src::KH1 => "KH1's own animation",
+        src::FOLLOW => "KH2's motion over KH1's slot",
+        src::KH2 => "KH2",
+        src::KH1_AIR => "KH1's jump over KH2's",
+        _ => "nothing",
+    }
 }
 
 /// The pass's world matrix as the model → world the bones are drawn with: the pass flips the
@@ -417,8 +452,9 @@ struct Follow {
     /// Ground combo swings in a row, and when the last one started.
     swings: u32,
     last_swing: Option<Instant>,
-    /// Last KH2 pose (model space), and the pose blended from on a change.
+    /// Last KH2 pose (model space) and when it was drawn, and the pose blended from on a change.
     last: Vec<Mat4>,
+    last_at: Option<Instant>,
     from: Vec<(Vec3, Quat, Vec3)>,
     blend_start: Option<Instant>,
     blend_secs: f32,
@@ -1012,6 +1048,7 @@ unsafe fn keyblade_teeth_up(pose: &mut [Mat4], parents: &[i16]) {
 fn wanted(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4>> {
     let mode = MODE.load(Ordering::Relaxed);
     s.kh2_now = None;
+    s.src_now = src::FOLLOW;
     match mode {
         0 => {
             // KH1's area script walks him (zone entries and exits): KH1's own animation.
@@ -1025,6 +1062,7 @@ fn wanted(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
             if super::takeover::kh2_frame() {
                 if let Some(p) = kh1_air_pose() {
                     s.follow.slot = slot;
+                    s.src_now = src::KH1_AIR;
                     NATIVE_KH1.store(true, Ordering::Relaxed);
                     return Some(p);
                 }
@@ -1051,6 +1089,7 @@ fn wanted(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4
                     note_kh2(&b, to_world);
                     let pose = r.pose_grip(&b, super::takeover::GRIP.load(Ordering::Relaxed));
                     s.kh2_now = Some((b, w));
+                    s.src_now = src::KH2;
                     Some(pose)
                 }
                 // KH1's own jump, fall and landing while KH1 has him (dropping off a ladder or a
@@ -1292,7 +1331,11 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
         }
     }
     if restart {
-        if !f.last.is_empty() && blend > 0.0 {
+        // (Out of one of KH1's grabs, only from a pose this drew just now: frames of KH1's own
+        // animation since left `last` stale, and blending from it brought back what he did
+        // before, the hang before the climb. That change of source blends in `check`.)
+        let recent = f.last_at.is_some_and(|t| now.duration_since(t).as_secs_f32() < 0.1) || !super::takeover::grab_blend();
+        if !f.last.is_empty() && blend > 0.0 && recent {
             f.from = decompose(&f.last);
             f.blend_start = Some(now);
             f.blend_secs = blend;
@@ -1348,6 +1391,7 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
         }
     }
     f.last = pose.clone();
+    f.last_at = Some(now);
     let weapon = pose.split_off(body_len.min(pose.len()));
     note_kh2(&pose, to_world);
     let kh1 = r.pose(&pose);
@@ -1467,7 +1511,7 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
         };
         log(&format!("Sora's instance {instance:#x} (bones at {table:#x})"));
         let bind = kh2_anim::Pose::bind(&kh1).bones;
-        *g = Some(Sora { instance, retarget: None, bind, calls: 0, checked: false, follow: Follow::default(), to_world: None, wrote_root: None, last_drawn: None, param_agree: 0, param_ok: PARAM_OK.load(Ordering::Relaxed), jumps: 0, parents: kh1.iter().map(|b| b.parent).collect(), jiggle: None, secondary: None, inverse: None, kh2_now: None });
+        *g = Some(Sora { instance, retarget: None, bind, calls: 0, checked: false, follow: Follow::default(), to_world: None, wrote_root: None, last_drawn: None, param_agree: 0, param_ok: PARAM_OK.load(Ordering::Relaxed), jumps: 0, parents: kh1.iter().map(|b| b.parent).collect(), jiggle: None, secondary: None, inverse: None, kh2_now: None, src_now: src::NONE, src: src::NONE, shown: Vec::new(), handback: None });
         KH1_BONES.lock().map(|mut b| *b = kh1).ok();
     }
     let s = g.as_mut().unwrap();
@@ -1610,6 +1654,14 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
                 s.last_drawn = None;
             }
         }
+        // (As drawn, for a blend out of it: `handback`.)
+        if !ours {
+            let inv = to_world.inverse();
+            s.shown.clear();
+            s.shown.extend((0..SORA_BONES as usize).map(|i| inv * mat(world + i * 0x40)));
+            s.src = src::KH1;
+            s.handback = None;
+        }
         if let Some(o) = orig_hands {
             if let Ok(mut h) = HANDS_NOW.lock() {
                 *h = Some(Hands { orig: o, drawn: o, at: Instant::now() });
@@ -1672,6 +1724,35 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
             }
         }
     }
+    // Out of one of KH1's grabs, a change of who draws him blends in from what was drawn last
+    // frame (`HANDBACK_BLEND`): KH1's climb, fall or landing into ours, ours over KH1's idle into
+    // KH2's own. (Not out of KH1's commands: an Attack cutting a spell swings at once, as KH2's
+    // swings take no blend.)
+    let now_src = s.src_now;
+    if now_src != s.src && s.src != src::NONE && s.shown.len() >= SORA_BONES as usize && super::takeover::grab_blend() {
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 40 {
+            log(&format!("drawn by {} after {} out of KH1's grab: blended in (slot {slot:?})", src_name(now_src), src_name(s.src)));
+        }
+        s.handback = Some((decompose(&s.shown[..SORA_BONES as usize]), Instant::now()));
+    }
+    s.src = now_src;
+    if let Some((from, t0)) = s.handback.as_ref() {
+        let w = t0.elapsed().as_secs_f32() / HANDBACK_BLEND;
+        if w >= 1.0 {
+            s.handback = None;
+        } else {
+            // (Eased: the new pose shows at once, the old fades.)
+            let w = 1.0 - (1.0 - w) * (1.0 - w);
+            for (m, (fs, fr, ft)) in pose.iter_mut().zip(from) {
+                let (ps, pr, pt) = m.to_scale_rotation_translation();
+                let b = Mat4::from_scale_rotation_translation(fs.lerp(ps, w), fr.slerp(pr, w), ft.lerp(pt, w));
+                if b.is_finite() {
+                    *m = b;
+                }
+            }
+        }
+    }
     let kh2_feet = MODE.load(Ordering::Relaxed) == 0 && super::takeover::active() && super::takeover::GROUNDED.load(Ordering::Relaxed);
     super::feet::place(BASE.load(Ordering::Relaxed), &mut pose, &s.parents, &to_world, kh2_feet);
     // (KH1's own motion, `kh1_air_pose`: its hold is KH1's already.)
@@ -1729,6 +1810,8 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
         }
         _ => s.last_drawn = Some((pose.clone(), Instant::now())),
     }
+    s.shown.clear();
+    s.shown.extend_from_slice(&pose[..pose.len().min(SORA_BONES as usize)]);
     s.to_world = Some(to_world);
     let drawn = HANDS.map(|(b, _)| to_world * pose[b]);
     if let Ok(mut k) = BLADE.try_lock() {

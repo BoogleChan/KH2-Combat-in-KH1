@@ -965,6 +965,74 @@ All of it, in particular:
 - Aerial Dodge as Master's growth ability; no guard (Square on the ground does nothing);
 - the "M:" row and the copy counting with all three rows.
 
+## Forms across KH1's scenes (s307)
+
+The user: "after defeating opposite armor in wisdom form, when i get control of sora again, i get
+stuck in wisdom form with KH1 animations".
+
+**KH1's script hold bit (Checked, exe + Log).**
+- Sora's actor flag `0x1000000` is set and cleared only by KH1's actor script commands 0x24 and 0x23
+  (`0x14028C550`: `0x14028CB83` sets, `0x14028CB78` clears). The other writers of that bit
+  (`0x140287B73` and nearby) are Donald's and Goofy's. Its can-act test (`0x1402956E0`: action flag 4, `+0x88` bit `0x20`,
+  `+0x444` bit 1) doesn't read it. No read of it was found in its player control step either.
+- While it is set, KH1 takes no HP from hits (`docs/kh1-rehit.md`), and its no-damage countdown
+  stops (`0x1402962EB`: `0x80` counts down only without `0x1000000`). So `0x80` and `0x100000`
+  (the countdown's running phase, set once the reaction's action is over) stay on with it. That
+  is the "unknown" `0x00100000` in the stuck flags 0110c083: frozen by the bit, not a hold of its own.
+- Every room entry sets it for the walk-in and clears it at the end (the logs: flags 01008003 on
+  entering, then 00008003). A bit left set therefore clears in the next room.
+- The log (s307):
+  - Guard Armor's end (228 s): the killing blow sets the bit. A few seconds later the
+    script's action 4 comes, the bit is cleared, KH1 holds him (`+0x444` 1) and lets go. Flags are 0000c003.
+  - Opposite Armor's intro (470 s): the bit is set for about 8 s, then the same clear, hold and
+    release.
+  - Opposite Armor's end (570 s): the bit is set. The script's action 31 comes, its hold ends, KH1
+    lets him act (`+0x444` 0, its control step reads the pad, its own run and idle play), but no
+    0x23 comes. Flags stay 0110c083, with no event and no script action, for minutes.
+  - LuaBackend was loaded. Whether a skipped scene left the bit set isn't known.
+
+**What the port does (Ours).**
+- **The hand-back (`takeover::stale_hold`).** The script hold bit holds Sora only while some other
+  signal says KH1 is moving him:
+  - its script has actions for him (`+0x440`);
+  - KH1 holds him (`+0x444` bit 1);
+  - he can't act;
+  - KH1's player control step was skipped;
+  - an event runs (this one is checked before the bit).
+
+  If none of these holds for 1.5 s (90 frames in a row), the bit counts as left over and KH2 takes
+  Sora back. This is logged: "KH1's script hold (flag 0x1000000) left set ...". The log's "KH1 has
+  Sora (KH1's script moves him ...)" line ends with what holds him.
+
+  The bit counts again on any frame Sora isn't Sora's own (an event, a ride, another body), when
+  the bit clears, or when the script has actions for him again. KH1's own hold (`+0x444`) while KH2
+  has him is the ordinary "KH1 holds him still".
+
+  The bit itself is left as KH1 has it. KH1 still takes no HP while it is set, as in KH1 itself,
+  until a script clears it (the next room does).
+- **Forms (`takeover::scene_frame`, `form::scene_revert`).** KH2 (as played, not traced) ends a
+  Drive Form when a battle ends in a scene. Here, KH1 having Sora for a scene (an event, or its
+  script holding him) ends the form when the scene lasts:
+  - 1 s for an event (a cutscene);
+  - 2.5 s for a scene that began in battle (KH1's battle flag on within the second before), such
+    as a boss falling or a story moment mid-fight;
+  - 20 s for any other scene, so a form is never left on for long under KH1's own animations.
+
+  Door walks, room entries and talks (up to about 9 s in the logs, out of battle) keep the form,
+  and KH2 takes him back in it.
+
+  The revert is the same as on a new world: the Revert effects, Sora's controller and rig back, his
+  look (`tint`) and stats (`valorstats`) at once. Anti Form reverts too.
+
+  A Drive made just before a boss's intro scene ends with the intro. Opposite Armor's intro would
+  do this (it held him about 11 s from 470 s).
+- **Other bosses.** Only the two armors are in the logs:
+  - Guard Armor's end and Opposite Armor's intro clear the bit themselves;
+  - Opposite Armor's end doesn't.
+
+  Any other script that leaves the bit set now gives Sora back to KH2 after 1.5 s of KH1 letting
+  him act.
+
 ## When the forms open (the rules the user's, the flags Checked: scripts + saves)
 
 The user's table (`kh1-hook/src/story.rs`, `FORM_TABLE`; `form::unlocked` reads it). The Dive
@@ -1022,3 +1090,10 @@ EQUIPPED". A form's growth ability is `growth_up` of base Sora's level counting 
 his lists, equipped or not (`growth::Kh1Sora::learned`, kept in `menu::LEARNED` with the ini's
 `abilities = kh1`; `form::growth_of`), at least what he has on. Base Sora himself still gets only
 what he has equipped.
+
+### The "New Drive Form" box (s308)
+
+The user: "the game should tell you when you get a drive form and reflect". When a form opens by
+the story while the same save plays, a box reads "New Drive Form: <name>" (`menu::Growth::form_box`,
+the same queue as Reflect's "New Magic" / "Magic Up" and the bosses' gifts). Loading a save with
+forms already open shows none (its story bytes or level jump).

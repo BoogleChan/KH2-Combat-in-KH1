@@ -536,6 +536,8 @@ pub struct Growth {
     /// Reflect's fights won last second (`reflect::found`), with the story bytes and Sora's level
     /// then (a save loaded changes those too: no box for it).
     rf_seen: Option<(u8, Vec<u8>, u8)>,
+    /// The Drive Forms open at the last check, the story bytes and level then (`form_box`).
+    df_seen: Option<(Vec<super::form::Kind>, Vec<u8>, u8)>,
 }
 
 unsafe fn rd<T: Copy>(p: usize) -> T {
@@ -544,7 +546,7 @@ unsafe fn rd<T: Copy>(p: usize) -> T {
 
 impl Growth {
     pub fn new() -> Growth {
-        Growth { mode: super::settings::get().abilities, frames: 0, seen: None, applied: false, no_room: Vec::new(), gave_back: false, prompts: Default::default(), idle: 0, qr_level: None, dr_level: None, hj_level: None, ad_level: None, gl_level: None, rf_seen: None }
+        Growth { mode: super::settings::get().abilities, frames: 0, seen: None, applied: false, no_room: Vec::new(), gave_back: false, prompts: Default::default(), idle: 0, qr_level: None, dr_level: None, hj_level: None, ad_level: None, gl_level: None, rf_seen: None, df_seen: None }
     }
 
     /// Sora's side of KH1's save block, if it is there.
@@ -584,6 +586,32 @@ impl Growth {
         }
     }
 
+    /// A Drive Form opened (`form::unlocked`, by the story): a box as Reflect's (the user: "the
+    /// game should tell you when you get a drive form and reflect"), "New Drive Form: <name>".
+    /// Only for one opened while the same save plays (not when a save is loaded).
+    unsafe fn form_box(&mut self, now: &Kh1Sora) {
+        if !super::settings::get().drive {
+            return;
+        }
+        let open: Vec<super::form::Kind> = super::form::Kind::ALL.iter().copied().filter(|&k| super::form::unlocked(k)).collect();
+        let seen = (open.clone(), now.progress.clone(), now.level);
+        let Some((old, progress, level)) = self.df_seen.replace(seen) else { return };
+        let new: Vec<super::form::Kind> = open.iter().copied().filter(|k| !old.contains(k)).collect();
+        if new.is_empty() {
+            return;
+        }
+        let worlds = progress.iter().zip(&now.progress).filter(|(a, b)| a != b).count();
+        let same_save = worlds <= 1 && now.level >= level && now.level - level <= 1;
+        for k in new {
+            if same_save {
+                log(&format!("Drive Form opened: {} (a box)", k.name()));
+                self.prompts.push_back(("New Drive Form".to_string(), k.name().to_string(), String::new()));
+            } else {
+                log(&format!("Drive Form open: {} (no box: a save loaded)", k.name()));
+            }
+        }
+    }
+
     /// Every second: KH1's menu and level, and Sora's abilities from them (`kh1`), or the
     /// mode's fixed set once.
     pub unsafe fn update(&mut self, base: usize, ch: &mut Character) {
@@ -615,6 +643,7 @@ impl Growth {
         }
         let Some(mut now) = Self::kh1(base) else { return };
         self.reflect_box(&now);
+        self.form_box(&now);
         // Sora learns KH2's abilities at their levels (`kh1`), or has them taken back out.
         if let Some(save) = save_block(base) {
             if self.mode == Mode::Kh1 {

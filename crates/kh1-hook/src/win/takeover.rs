@@ -234,6 +234,23 @@ static NO_GRAB: AtomicU32 = AtomicU32::new(0);
 /// KH2's fall taken over from KH1's free jump or fall: its Aerial Dodge is there.
 static AIR_MOVES: AtomicBool = AtomicBool::new(false);
 const NO_GRAB_FRAMES: u32 = 20;
+/// The hand-off running (or the last one) is one of KH1's grabs (`grab`: a ledge, a bar, a
+/// ladder, a vine), not a command; and when KH2 took him back after it (`grab_blend`).
+static GRAB_MOVE: AtomicBool = AtomicBool::new(false);
+static GRAB_BACK_MS: AtomicU64 = AtomicU64::new(0);
+/// The floor under him (KH2 height, up) as KH1's grab took him.
+static GRAB_FLOOR: Mutex<Option<f32>> = Mutex::new(None);
+/// KH1's pull-up onto a ledge is settling him on its top (latched for the hand-off): KH1 sets him
+/// down itself, its own fall and landing after its climb, and KH2 takes him on the ground.
+static SETTLE: AtomicBool = AtomicBool::new(false);
+/// A grab's fall state with the floor this much higher than where the grab took him, and him at
+/// most `SETTLE_ABOVE` over it, is the pull-up's settle on the top (the user's s307 log: the
+/// "bar" grab, state 15 hanging some 170 over the floor, 16 pulling up, then 2 only 46 over the
+/// ledge's top; KH2's fall from there drew his arms flung out until he landed on it).
+const CLIMBED_ONTO: f32 = 50.0;
+const SETTLE_ABOVE: f32 = 100.0;
+/// How long after a grab's hand-back `pose` may still start its blend (KH2's first frames).
+const GRAB_BLEND_MS: u64 = 500;
 /// Where KH1's move had him last frame (his speed while it moves him).
 static HANDOFF_POS: Mutex<Option<[f32; 3]>> = Mutex::new(None);
 /// KH1's move ended in its fall: his speed then (per frame: sideways, up), for KH2's fall.
@@ -1219,6 +1236,115 @@ static FLICKER: std::sync::Mutex<std::collections::VecDeque<u64>> = std::sync::M
 static RIDE_UNTIL: AtomicU64 = AtomicU64::new(0);
 static LAST_FROZEN: AtomicBool = AtomicBool::new(false);
 
+/// KH1's script hold bit (`0x1000000`) taken as left over: KH1 has let Sora act this many frames
+/// in a row with it set (1.5 s).
+const STALE_FRAMES: u32 = 90;
+/// `stale_hold`'s run: the frame last seen, the frames KH1 has let him act, and whether the bit is
+/// taken as left over (until it clears, an event or a ride or another body comes, or KH1's script
+/// has actions for him again: any frame not seen here).
+static STALE: Mutex<(u64, u32, bool)> = Mutex::new((u64::MAX, 0, false));
+static STALE_LOGGED: AtomicU32 = AtomicU32::new(0);
+
+/// The script hold bit is set: is it left over? KH1's script holds him for real while it has
+/// actions for him (`+0x440`), or KH1 holds him (`+0x444` bit 1, what the event script's waits and
+/// KH1's camera read as "can't act"), or he can't act (`0x1402956E0`), or KH1's player control
+/// step was skipped (`frozen`); an event was ruled out before. With none of these for
+/// `STALE_FRAMES`, KH1 itself gives him to the player (its control step reads the pad and moves
+/// him in its own animations): the bit no longer holds him, and KH2 has him. KH1 keeps honouring
+/// the bit as no damage (`hurt`) until a script clears it (the next room's entry does).
+/// The second value says, for the log, what holds him (or that nothing does).
+unsafe fn stale_hold(base: usize, actor: usize, script: usize, frozen: bool) -> (bool, &'static str) {
+    let frame = GAME_FRAME.load(Ordering::Relaxed);
+    let can_act: unsafe extern "system" fn(usize) -> i32 = std::mem::transmute(base + CAN_ACT_RVA);
+    let (free, what) = if script != 0 {
+        (false, "")
+    } else if rd::<u32>(actor + 0x444) & 1 != 0 {
+        (false, "; KH1 holds him (+0x444)")
+    } else if frozen {
+        (false, "; KH1's control step skipped")
+    } else if can_act(actor) == 0 {
+        (false, "; he can't act")
+    } else {
+        (true, "; KH1 lets him act")
+    };
+    let Ok(mut s) = STALE.lock() else { return (false, what) };
+    let run = s.0.wrapping_add(1) == frame;
+    let (n, latched) = if run { (s.1, s.2) } else { (0, false) };
+    let latched = latched && script == 0;
+    let n = if free { n.saturating_add(1) } else { 0 };
+    let now = latched || n >= STALE_FRAMES;
+    if now && !latched && STALE_LOGGED.fetch_add(1, Ordering::Relaxed) < 40 {
+        log(&format!(
+            "KH1's script hold (flag 0x1000000) left set: KH1 has let him act {:.1} s (no event, no script action, not held, can act, its control step ran; flags {:08x}, +0x444 {:08x}, slot {:?}, battle {}): KH2 takes him back",
+            n as f32 / 60.0,
+            rd::<u32>(actor),
+            rd::<u32>(actor + 0x444),
+            pose::sora_slot(),
+            rd::<u32>(base + BATTLE_RVA) & 1 != 0
+        ));
+    }
+    if s.2 && !now && run && STALE_LOGGED.fetch_add(1, Ordering::Relaxed) < 40 {
+        log(&format!("KH1's script hold: its script has actions for him again (flags {:08x}): KH1's", rd::<u32>(actor)));
+    }
+    *s = (frame, n, now);
+    (now, if now { "" } else { what })
+}
+
+/// The frame Sora was last seen in battle (KH1's battle flag), for `scene_frame`.
+static BATTLE_FRAME: AtomicU64 = AtomicU64::new(u64::MAX);
+/// `scene_frame`'s run: the frame last seen, its length, and whether it began in battle.
+static SCENE: Mutex<(u64, u32, bool)> = Mutex::new((u64::MAX, 0, false));
+/// A Drive Form ends when KH1 has had Sora for a scene this long (frames): a cutscene 1 s, a
+/// scene that began in battle (a boss falling, a story moment mid-fight) 2.5 s, any other 20 s.
+const SCENE_EVENT_FRAMES: u32 = 60;
+const SCENE_BATTLE_FRAMES: u32 = 150;
+const SCENE_ANY_FRAMES: u32 = 1200;
+
+/// KH1 has Sora for a scene this frame (an event, or its script holding him: not one of its own
+/// moves, a ride or another body). In a Drive Form, a scene long enough ends the form there and
+/// then (`form::scene_revert`, as a new world does): KH2 reverts a form when a battle ends in a
+/// scene, and a form is never left on under KH1's own animations for long.
+unsafe fn scene_frame(actor: usize, event: bool) {
+    let frame = GAME_FRAME.load(Ordering::Relaxed);
+    let (n, battle) = {
+        let Ok(mut s) = SCENE.lock() else { return };
+        if s.0.wrapping_add(1) == frame {
+            *s = (frame, s.1.saturating_add(1), s.2);
+        } else {
+            // (In battle as it began, or a moment before: KH1 may drop its battle flag as the
+            // boss falls.)
+            let seen = BATTLE_FRAME.load(Ordering::Relaxed);
+            *s = (frame, 1, seen != u64::MAX && frame.saturating_sub(seen) <= 60);
+        }
+        (s.1, s.2)
+    };
+    let long = if event {
+        n >= SCENE_EVENT_FRAMES
+    } else if battle {
+        n >= SCENE_BATTLE_FRAMES
+    } else {
+        n >= SCENE_ANY_FRAMES
+    };
+    if !long || !(super::form::in_form() || super::form::busy()) {
+        return;
+    }
+    let Some(kh2) = pose::kh2() else { return };
+    let Ok(mut g) = DRIVER.try_lock() else { return };
+    let Some(d) = g.as_mut() else { return };
+    let why = format!(
+        "KH1 has had Sora {:.1} s for {}",
+        n as f32 / 60.0,
+        if event {
+            "an event"
+        } else if battle {
+            "a scene out of a battle (its script holds him)"
+        } else {
+            "a scene (its script holds him)"
+        }
+    );
+    super::form::scene_revert(&mut d.drive, &mut d.character, &mut d.anim, kh2, actor, &why);
+}
+
 unsafe fn takeover(actor: usize) -> bool {
     let base = BASE.load(Ordering::Relaxed);
     if actor != rd::<u64>(base + PARTY_RVA) as usize {
@@ -1235,9 +1361,13 @@ unsafe fn takeover(actor: usize) -> bool {
         release("a ride: KH1's control comes and goes");
         return false;
     }
+    if rd::<u32>(base + BATTLE_RVA) & 1 != 0 {
+        BATTLE_FRAME.store(GAME_FRAME.load(Ordering::Relaxed), Ordering::Relaxed);
+    }
     if rd::<u32>(base + EVENT_RVA) != 0 {
         SCRIPTED.store(false, Ordering::Relaxed);
         release("an event runs");
+        scene_frame(actor, true);
         return false;
     }
     // Not in his own body (the Heartless form): KH1 has him, its own moves and animations
@@ -1249,9 +1379,13 @@ unsafe fn takeover(actor: usize) -> bool {
     // KH1's area scripts walk / turn him (zone entries and exits, doors): their pending
     // actions hang off `+0x440` (`0x14028CD60`); KH1 moves and animates him meanwhile.
     // Flag `0x1000000` (script commands 0x24 / 0x23, `0x14028C550`) is set from a door's turn
-    // until the walk through it ends, and at a zone entry until he has walked in.
+    // until the walk through it ends, and at a zone entry until he has walked in. A script can
+    // leave it set when KH1 has given him back (the user, s307: after Opposite Armor fell, flags
+    // 0110c083 for minutes, no event, no script action, KH1's own run and idle under the stick):
+    // the bit alone holds him only until KH1 has let him act for `STALE_FRAMES` (`stale_hold`).
     let script = pose::ptr(rd::<u32>(actor + 0x440));
-    let held_by_script = rd::<u32>(actor) & 0x0100_0000 != 0;
+    let (stale, what) = if rd::<u32>(actor) & 0x0100_0000 != 0 { stale_hold(base, actor, script, frozen) } else { (false, "") };
+    let held_by_script = rd::<u32>(actor) & 0x0100_0000 != 0 && !stale;
     SCRIPTED.store(script != 0 || held_by_script, Ordering::Relaxed);
     if script != 0 || held_by_script {
         let mut kinds = Vec::new();
@@ -1260,7 +1394,8 @@ unsafe fn takeover(actor: usize) -> bool {
             kinds.push(rd::<u8>(a + 0x10));
             a = rd::<u64>(a + 0x58) as usize;
         }
-        release(&format!("KH1's script moves him, actions {kinds:?}, flags {:08x}", rd::<u32>(actor)));
+        release(&format!("KH1's script moves him, actions {kinds:?}, flags {:08x}{what}", rd::<u32>(actor)));
+        scene_frame(actor, false);
         return false;
     }
     // KH1 jumped him on its own while KH2 had him (the user: holding jump and pressing L1; the
@@ -1423,6 +1558,28 @@ unsafe fn takeover(actor: usize) -> bool {
         // glide and Superglide never come out of it (its jump / Square are KH2's meanwhile,
         // `kh1_air_free`).
         let air_free = kh1_air_free(base, actor) && above > STEP_DOWN && vel.is_some();
+        // The end of a pull-up onto a ledge (the user: "a small visual bug that happens when you
+        // go up from a ledge grab"; the s307 video: KH1's climb, then a pop into KH2's fall with
+        // his arms flung out, held ~11 frames, then a pop into KH2's landing): KH1's climb ends in
+        // its fall state a little over the top it climbed onto, and KH2's fall gained nothing
+        // there (the log: "KH1 holds Sora still: no input for KH2" from the hand-off until KH1's
+        // landing slot). KH1 sets him down there itself, its own fall and landing following its own
+        // climb, and KH2 takes him on the ground (its idle, the stick: `kh1_moving` / `free`).
+        // An Attack, Square or a jump meanwhile still hands him to KH2's fall at once.
+        if GRAB_MOVE.load(Ordering::Relaxed) && !command && fall_state && !SETTLE.load(Ordering::Relaxed) && above < SETTLE_ABOVE {
+            let floor = -p[1] - above;
+            let rise = GRAB_FLOOR.lock().unwrap().map(|f| floor - f);
+            if rise.is_some_and(|r| r.is_finite() && r > CLIMBED_ONTO) {
+                SETTLE.store(true, Ordering::Relaxed);
+                log(&format!(
+                    "KH1's climb ends on top ({above:.0} above a floor {:.0} higher than at the grab, KH1 state {state}): KH1 sets him down itself",
+                    rise.unwrap_or_default()
+                ));
+            }
+        }
+        let settling = SETTLE.load(Ordering::Relaxed) && state != 0 && !(attack || square || jump_fresh);
+        let falling = falling && !settling;
+        let air_free = air_free && !settling;
         // (Off, s241, the user: "comment out anything related to having kh1 magic animations
         // transition into kh2 landing animation, its unneeded at the moment and causes more bugs
         // then fixes anything". KH1's air spell lands in KH1's own landing, and KH2 takes him
@@ -1652,6 +1809,10 @@ unsafe fn takeover(actor: usize) -> bool {
             FLY_PRESS_GROUND.store(carried, Ordering::Relaxed);
             CARRY_FRAMES.store(if carried { CARRY_MAX } else { 0 }, Ordering::Relaxed);
             HANDOFF.store(false, Ordering::Relaxed);
+            if GRAB_MOVE.load(Ordering::Relaxed) {
+                GRAB_BACK_MS.store(now_ms().max(1), Ordering::Relaxed);
+            }
+            SETTLE.store(false, Ordering::Relaxed);
             KH1_WINDOW.store(false, Ordering::Relaxed);
             ITEM_COMMAND.store(false, Ordering::Relaxed);
             set_air_cast(None);
@@ -2424,6 +2585,8 @@ unsafe fn takeover(actor: usize) -> bool {
         let drift = glam::Vec2::new(out.displacement[0], out.displacement[2]);
         let toward = if tilt > 0.0 { dir } else if drift.length() > 0.5 { drift.normalize() } else { glam::Vec2::new(out.facing.sin(), out.facing.cos()) };
         mv(actor, &[toward.x * 4.0, 0.0, toward.y * 4.0, 0.0], 0);
+        // (The floor under him as that move found it, before a grab moves him onto its hold.)
+        let floor = -rd::<f32>(actor + 0x14) - rd::<f32>(actor + 0x3D4);
         let (gx, gz) = if tilt > 0.0 { (dir.x, dir.y) } else { (0.0, 0.0) };
         let took = grab(base, actor, [gx, 0.0, gz, tilt]);
         if took.is_none() {
@@ -2434,6 +2597,9 @@ unsafe fn takeover(actor: usize) -> bool {
             ATTACK_AFTER.store(false, Ordering::Relaxed);
             HANDOFF_FRAMES.store(0, Ordering::Relaxed);
             HANDOFF.store(true, Ordering::Relaxed);
+            GRAB_MOVE.store(true, Ordering::Relaxed);
+            SETTLE.store(false, Ordering::Relaxed);
+            *GRAB_FLOOR.lock().unwrap() = floor.is_finite().then_some(floor);
             set_air_cast(None);
             log(&format!("KH1 takes him: {what} (KH1 state {}, slot {:?})", rd::<i32>(actor + 0x70), pose::sora_slot()));
         }
@@ -3046,8 +3212,18 @@ pub fn hand_to_kh1(why: &str) {
     CUT_LEFT.store(false, Ordering::Relaxed);
     ATTACK_AFTER.store(false, Ordering::Relaxed);
     HANDOFF_FRAMES.store(0, Ordering::Relaxed);
+    GRAB_MOVE.store(false, Ordering::Relaxed);
+    SETTLE.store(false, Ordering::Relaxed);
     HANDOFF.store(true, Ordering::Relaxed);
     log(&format!("KH1 takes him: {why}"));
+}
+
+/// The hand-off running now, or the one KH2 took him back from in the last `GRAB_BLEND_MS`, is
+/// one of KH1's grabs: `pose` blends the change from KH1's own animation to ours (and on to
+/// KH2's own frames) from the pose drawn just before (the user: a pop after the climb up from a
+/// ledge).
+pub fn grab_blend() -> bool {
+    GRAB_MOVE.load(Ordering::Relaxed) && (HANDOFF.load(Ordering::Relaxed) || now_ms().saturating_sub(GRAB_BACK_MS.load(Ordering::Relaxed)) < GRAB_BLEND_MS)
 }
 
 /// While KH2 has Sora: his controller and its last frame (for `hurt`).

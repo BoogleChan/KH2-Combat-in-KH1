@@ -50,6 +50,19 @@ Next to the game; written with the defaults when missing, read when the game sta
 - KH1: damage numbers (KH1's attack data and stats), enemies, magic, summons, items,
   specials (Sonic Blade and the rest), ledge grabs, vines, swimming, doors and zone changes,
   events, death.
+- Out of KH1's grabs (`takeover`, `pose`):
+  - A drop off a ladder, a pole or a ledge is KH2's fall.
+  - A pull-up onto a ledge is KH1's to the end. KH1's climb ends in its fall state a little
+    over the top (the s307 log: the "bar" grab, state 15 hanging, 16 pulling up, then 2 some 46
+    over the top). When the floor is over 50 higher than where the grab took him and he is
+    under 100 over it, KH1 sets him down with its own fall and landing (`SETTLE`). KH2 takes
+    him on the ground, as after KH1's other moves. An Attack, Square or a jump meanwhile still
+    hands him to KH2's fall.
+  - After a grab, each change of who draws him blends over 10 frames from the pose drawn just
+    before: KH1's own animation into KH2's motion over KH1's slot, and that into KH2's own
+    frames (`HANDBACK_BLEND`, `takeover::grab_blend`). Before this, KH2's arms-out fall popped
+    in after the climb (the user: "a small visual bug that happens when you go up from a
+    ledge grab").
 
 ## Abilities from KH1's menu (`abilities = kh1`)
 
@@ -210,7 +223,9 @@ on enemies.
   with the attack from behind (damage). The log has a line per hit (`Sora hit by ...`).
 - Platforms: ride a moving platform (`carried ...` lines in the log).
 - Ceilings: jump under a low ceiling (`ceiling: rose ...`).
-- Grabs: fall past a ledge holding toward it; jump at a vine (`KH1 takes him: ...`).
+- Grabs: fall past a ledge holding toward it; jump at a vine (`KH1 takes him: ...`). Climb up
+  a ledge: no pose snaps from the climb to the landing and idle (`KH1's climb ends on top ...`,
+  `drawn by ... out of KH1's grab: blended in`).
 - Commands: cast a spell standing and in mid-air, use an item, a special
   (`KH1 takes him: command ...`, then `KH1's move ended ...: KH2 again`).
 - Swings: the Keyblade trail and Sora's voice on KH2's combo (`Keyblade trail drawn ...`).

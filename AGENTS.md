@@ -3559,3 +3559,18 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   "When the forms open"): TT >= 0x2B, journal 0x9F, cup bytes save+0xF37 / +0xF38 >= 1, Neverland
   >= 0x32, Hollow Bastion >= 0x82, Agrabah >= 0x35, journal 0xA6 and Diamond Dust owned.
   "New Magic: Reflect" / "Magic Up" boxes when one more is won.
+
+### 2026-10-21: Stage 308 (stuck in a form after a boss; the ledge climb's end; New Drive Form box)
+- The user: "after defeating opposite armor in wisdom form ... i get stuck in wisdom form with KH1
+  animations". Opposite Armor's end leaves KH1's script-hold bit (0x01000000, set / cleared only by
+  actor script commands 0x24 / 0x23) set while KH1 gives control back; our takeover read the bit
+  alone as "KH1's script moves him". Now it holds only with a real signal (script actions, KH1's
+  hold, can't act, control step skipped, an event); 1.5 s without, KH2 takes him back
+  (`stale_hold`). A form reverts when KH1 holds him for an event (1 s), a scene out of battle
+  (2.5 s) or any scene (20 s) (`scene_revert`).
+- The user (video): "a small visual bug that happens when you go up from a ledge grab". KH1's climb
+  ends in its fall state 46 above the top and KH2's fall took him (the arms-out pose, unblended).
+  KH1 now sets him down itself (floor 50+ higher than at the grab); KH2 takes him on the ground (a
+  press still hands him over at once). Draw changes for 500 ms after a grab blend over 10 frames.
+- The user: "the game should tell you when you get a drive form and reflect": "New Drive Form:
+  <name>" box when a form opens by the story (`form_box`), beside s307's Reflect boxes.

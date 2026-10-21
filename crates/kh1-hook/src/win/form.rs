@@ -776,6 +776,20 @@ unsafe fn revert(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     log(&format!("Revert ({why}){}", if ch.airborne() { ", falling" } else { "" }));
 }
 
+/// KH1 has had Sora for a scene long enough in the form (`takeover::scene_frame`: a cutscene, a
+/// scene out of a battle such as a boss falling, any long one): back to Sora there and then, as
+/// in a new world (KH2 reverts a form when a battle ends in a scene; the user, s307: Wisdom's look
+/// stayed on under KH1's own animations after Opposite Armor fell). His own look and stats come
+/// back now, not on KH2's next step (which waits for KH1 to let him go). Anti Form too.
+pub unsafe fn scene_revert(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &pose::Kh2, actor: usize, why: &str) {
+    if d.form.is_none() && d.change.is_none() {
+        return;
+    }
+    revert(d, ch, anim, kh2, why);
+    super::tint::refresh(actor, None);
+    super::valorstats::step(actor);
+}
+
 /// After KH1's menu set Sora's abilities (`menu::Growth`): in the form, they are his own for
 /// after it, and the form's stay.
 pub fn abilities(d: &mut Drive, ch: &mut Character) {
