@@ -195,6 +195,22 @@ writes the mouse delta into the right-stick bytes. `0x1422DBDF8` (`0x1401392B0`)
 "mouse/keyboard mode", which changes mode 1's speed limits. The mouse sensitivity is a u16
 at `0x14012AC50()+0x20`. [med]
 
+More on the mouse [high unless tagged]:
+
+- The pad step `0x140289360` writes the mouse into the right-stick bytes. It scales the
+  motion by 24, clamps it to ±1, and uses a dead zone of 1 instead of 60 for it. The mouse's y
+  ends up with the stick's sign (down positive).
+- So KH1's camera applies the Config's up/down and left/right options (5.4) to the mouse as
+  to the pad. Neither mouse function (`0x140138850`, `0x140138980`) reads any invert option.
+  The PC settings have none either [med: their menu edits only `+0x1C`, `+0x1E` and the
+  sensitivity].
+- `0x14012AC50` returns KH1 PC's own settings block (`"SET-"` magic, 0x1F8 bytes), separate
+  from the save. Its `+0x20` is the mouse sensitivity: 0..40, default 20 (the settings menu
+  `0x140153390`). Read it with `0x140138B70`. The Steam build keeps it at `+0x24`, and its
+  getter reads that.
+- Mode 1 with the mouse: accel 0.3°, decay 4°, max `2.5° + 0.0875° · sensitivity` a step. The
+  velocity drops to 0 when the mouse stops.
+
 `0x140289360` also produces digital direction bits from the right stick: right `0x200000`,
 left `0x800000`, up `0x100000`, down `0x400000` in the raw word. [high]
 

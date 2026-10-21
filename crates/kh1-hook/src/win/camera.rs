@@ -35,16 +35,27 @@ const KH1_MOTION_RVAS: [Rva; 9] = [Rva(0x2538850), Rva(0x2538854), Rva(0x2538AB4
 const STEP_RVA: Rva = Rva(0x23405DC);
 const RIGHT_STICK_RVA: Rva = Rva(0x298D4D0);
 const LEFT_STICK_RVA: Rva = Rva(0x298D4E0);
-/// Stick dead zone for KH2's camera (of full tilt).
+/// Right stick across: dead zone for KH2's camera (of full tilt), kept small so gentle tilts
+/// turn (the user).
 const STICK_DEAD: f32 = 0.15;
+/// Right stick up / down: KH2's own rule. KH2's camera zooms only while the stick's digital
+/// up / down bit is set, a raw axis byte below 0x40 or above 0xC0: past half tilt.
+const KH2_AXIS: f32 = 64.0 / 127.0;
 /// Logical buttons: `+8` pressed this frame. R3 `0x200`, Select `0x8000`.
 const BUTTONS_RVA: Rva = Rva(0x298D4A0);
 const R3: u32 = 0x200;
 const SELECT: u32 = 0x8000;
 /// KH1's config block (`+8`: field camera 0 Auto / 1 Manual).
 const CONFIG_PTR_RVA: Rva = Rva(0x2E1FE70);
-/// The camera left/right option's sign (+1 normal).
+/// KH1's Config camera options as its camera applies them (`docs/kh1-camera.md` 5.4): the
+/// up/down option's sign (-1 Normal, +1 Reverse; KH1 multiplies its pitch input by it) and the
+/// left/right option's (+1 Normal, -1 Reverse; its yaw input). The Config setter writes them at
+/// once, a load or a new game from the save's config block. Pad and mouse alike: the mouse
+/// reaches KH1's camera as the right stick.
+const PITCH_SIGN_RVA: Rva = Rva(0x507AA8);
 const TURN_SIGN_RVA: Rva = Rva(0x507AAC);
+/// KH1 PC's mouse sensitivity, `u16 ()`: 0..40, default 20, in the PC settings (not the save).
+const MOUSE_SENS_RVA: Rva = Rva(0x138B70);
 const FLAGS_RVA: Rva = Rva(0x2867CD8);
 const FLAGS2_RVA: Rva = Rva(0x2867CDC);
 /// Nonzero while an event runs.
@@ -312,6 +323,50 @@ fn to_kh1(v: Vec3, s: f32) -> [f32; 3] {
     [v.x * s, -v.y * s, v.z * s]
 }
 
+/// KH1's camera options, read each frame so a change in the Config menu counts at once (the
+/// player: KH2's camera ignored the inverted X / Y setting): (up/down reversed, left/right
+/// reversed, mouse sensitivity). Logged at the start and on each change.
+unsafe fn kh1_options(base: usize) -> (bool, bool, u16) {
+    let y_rev = rd::<f32>(base + PITCH_SIGN_RVA) > 0.0;
+    let x_rev = rd::<f32>(base + TURN_SIGN_RVA) < 0.0;
+    let sens: unsafe extern "system" fn() -> u16 = std::mem::transmute(base + MOUSE_SENS_RVA);
+    let sens = sens().min(40);
+    static LAST: AtomicU32 = AtomicU32::new(u32::MAX);
+    static N: AtomicU32 = AtomicU32::new(0);
+    let packed = y_rev as u32 | (x_rev as u32) << 1 | (sens as u32) << 8;
+    if LAST.swap(packed, Ordering::Relaxed) != packed && N.fetch_add(1, Ordering::Relaxed) < 40 {
+        let word = |r: bool| if r { "Reverse" } else { "Normal" };
+        log(&format!("KH2 camera: KH1's camera options: up/down {}, left/right {}, mouse sensitivity {sens}", word(y_rev), word(x_rev)));
+    }
+    (y_rev, x_rev, sens)
+}
+
+/// The mouse's speed for KH2's camera from KH1's mouse sensitivity. KH1's own camera turns at
+/// most `2.5° + 0.0875° · sensitivity` a frame with the mouse (2.5° with the pad); ours keeps
+/// that proportion, 1 at the default 20 (0.59 at 0, 1.41 at 40).
+fn mouse_speed(sens: u16) -> f32 {
+    (2.5 + 0.0875 * sens as f32) / (2.5 + 0.0875 * 20.0)
+}
+
+/// The view never looks up more steeply than KH2's free camera can (the player: it looked
+/// straight at the sky at times): at its closest, the eye 150 below the look point and 250
+/// away, 31°. Steeper (the eye pulled in low behind Sora by a slope or a wall, the look point
+/// rising ahead of the eye in a high jump, a lock-on target overhead) lowers the look point,
+/// the eye staying where it is. Some: it was clamped.
+fn clamp_look_up(eye: Vec3, at: Vec3, yaw: f32) -> Option<Vec3> {
+    let tan = kh2_camera::EYE_DOWN / kh2_camera::Params::FIELD.dist_min;
+    let d = at - eye;
+    let flat = Vec2::new(d.x, d.z);
+    let h = flat.length();
+    if d.y <= h * tan || !d.is_finite() {
+        return None;
+    }
+    // (Straight under it: along the camera's facing, the eye being at `at + dist·(sin, cos)`.)
+    let dir = if h > 1.0 { flat / h } else { -Vec2::new(yaw.sin(), yaw.cos()) };
+    let c = 1.0 / (1.0 + tan * tan).sqrt();
+    Some(eye + Vec3::new(dir.x * c, tan * c, dir.y * c) * d.length())
+}
+
 /// One frame of KH2's camera in KH1's follow (`lock` false) or lock-on mode. None: leave it to
 /// KH1's own this frame.
 unsafe fn run(lock: bool) -> Option<()> {
@@ -380,26 +435,55 @@ unsafe fn run(lock: bool) -> Option<()> {
         let k = ((m - STICK_DEAD) / (1.0 - STICK_DEAD)).min(1.0) / m;
         [v[0] * k, v[1] * k]
     };
-    let raw_r = dead([axis(raw[0]), axis(raw[1])]);
+    // The right stick an axis at a time (the player: the camera looked up at the sky at random
+    // times; one dead zone round the middle let any slant of the stick while turning zoom it
+    // in, down to the ground looking up). Across: the small dead zone. Up / down: KH2's rule,
+    // nothing until past half tilt, then the tilt.
+    let across = |v: f32| -> f32 {
+        if v.abs() < STICK_DEAD {
+            0.0
+        } else {
+            v.signum() * ((v.abs() - STICK_DEAD) / (1.0 - STICK_DEAD)).min(1.0)
+        }
+    };
+    let updown = |v: f32| -> f32 {
+        if v.abs() > KH2_AXIS {
+            v.clamp(-1.0, 1.0)
+        } else {
+            0.0
+        }
+    };
+    let raw_r = [across(axis(raw[0])), updown(axis(raw[1]))];
+    // KH1's processed right stick with the pad's idle: the mouse (KH1 PC writes it there; the
+    // pad's own would be idle there too), KH2's up / down rule for it as well (a mouse moved
+    // across always moves a little up or down).
+    let mut mouse = false;
     let r = if !free {
         [0.0; 2]
     } else if raw_r != [0.0; 2] {
         raw_r
     } else {
-        rd::<[f32; 2]>(base + RIGHT_STICK_RVA)
+        let m = rd::<[f32; 2]>(base + RIGHT_STICK_RVA);
+        let m = if m.iter().all(|v| v.is_finite()) { [m[0].clamp(-1.0, 1.0), updown(m[1])] } else { [0.0; 2] };
+        mouse = m != [0.0; 2];
+        m
     };
     let raw_l = dead([axis(raw[2]), axis(raw[3])]);
     let l = if raw_l != [0.0; 2] { raw_l } else { rd::<[f32; 2]>(base + LEFT_STICK_RVA) };
     let pressed = rd::<u32>(base + BUTTONS_RVA + 8);
-    let turn = rd::<f32>(base + TURN_SIGN_RVA);
-    let turn = if turn < 0.0 { -1.0 } else { 1.0 };
+    // KH1's Config camera options, as KH1's camera applies them: to the pad and the mouse alike,
+    // and the mouse sensitivity to the mouse.
+    let (y_rev, x_rev, sens) = kh1_options(base);
+    let turn = if x_rev { -1.0 } else { 1.0 };
+    let tilt = if y_rev { -1.0 } else { 1.0 };
+    let speed = if mouse { mouse_speed(sens) } else { 1.0 };
     let config = rd::<u64>(base + CONFIG_PTR_RVA) as usize;
     let auto = config < 0x10000 || rd::<i32>(config + 8) == 0;
     let ctl = kh2_camera::Controls {
         move_stick: Vec2::new(l[0], l[1]).clamp_length_max(1.0),
         // (Negated: KH1 world turns the other way round from the camera crate's; the user: x was
-        // inverted.)
-        look_stick: Vec2::new(-r[0] * turn, -r[1]).clamp_length_max(1.0),
+        // inverted. And KH1's y is down: up zooms in, as KH1's Normal looks up.)
+        look_stick: Vec2::new(-r[0] * turn, -r[1] * tilt) * speed,
         reset: free && pressed & R3 != 0,
         auto,
     };
@@ -498,11 +582,43 @@ unsafe fn run(lock: bool) -> Option<()> {
         }
     }
     let cam = g.as_mut()?;
+    let dist_was = cam.dist;
     cam.update(&subject, &ctl, lock_at, dt, &wall);
-    let (eye, at) = (cam.eye, cam.at);
+    let (eye, mut at) = (cam.eye, cam.at);
     if !eye.is_finite() || !at.is_finite() || (eye - at).length() < 1.0 {
         *g = None;
         return None;
+    }
+    // (What drove a zoom all the way in, for reports of the camera looking up.)
+    if cam.dist <= cam.params.dist_min && dist_was > cam.params.dist_min && ctl.look_stick.y > 0.0 {
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 30 {
+            log(&format!(
+                "KH2 camera: zoomed all the way in by the {} (up/down {:.2}, across {:.2}; raw right stick {:02x} {:02x})",
+                if mouse { "mouse" } else { "right stick" },
+                ctl.look_stick.y,
+                ctl.look_stick.x,
+                raw[0],
+                raw[1]
+            ));
+        }
+    }
+    let clamped = clamp_look_up(eye, at, cam.yaw);
+    static CLAMPED: AtomicBool = AtomicBool::new(false);
+    let onset = !CLAMPED.swap(clamped.is_some(), Ordering::Relaxed);
+    if let Some(lower) = clamped {
+        static N: AtomicU32 = AtomicU32::new(0);
+        if onset && N.fetch_add(1, Ordering::Relaxed) < 30 {
+            let d = at - eye;
+            log(&format!(
+                "KH2 camera: looked up {:.0}° ({}, distance {:.0}, eye {:.0} above the feet): held at KH2's 31°",
+                d.y.atan2(Vec2::new(d.x, d.z).length()).to_degrees(),
+                if lock_at.is_some() { "locked on" } else { "following" },
+                (eye - at).length(),
+                eye.y - subject.feet.y
+            ));
+        }
+        at = lower;
     }
     LAST_MS.store(now_ms(), Ordering::Relaxed);
     jerk_note(eye * s, at * s, subject.feet * s, dt, cam.yaw);

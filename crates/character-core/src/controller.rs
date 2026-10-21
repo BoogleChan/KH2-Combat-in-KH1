@@ -1588,39 +1588,48 @@ impl Character {
                 self.forced_row = None;
                 return false;
             }
-            if !moving {
-                // Row 11's motion (the moveset's own), else the press's, else the repel's.
-                let press = self.moveset.combo_rows.iter().find(|r| r.id == GUARD_ROW).map(|r| r.motion).filter(|m| self.clip(*m).is_some());
-                let m = press.or_else(|| self.clip(motion::GUARD_PRESS).map(|_| motion::GUARD_PRESS)).or_else(|| self.clip(motion::GUARD).map(|_| motion::GUARD));
-                if a.guard {
-                    if let Some(m) = m {
-                        self.vel_h = [0.0; 2];
-                        // Facing the target with a reticle on it (the lock), as KH2's guard does
-                        // (the user: guard didn't turn him toward it).
-                        if let Some(t) = self.lock.and_then(|id| env.targets.iter().find(|t| t.id == id)) {
-                            let d = [t.pos[0] - env.pos[0], t.pos[2] - env.pos[2]];
-                            if len2(d) > 1e-3 {
-                                self.facing = yaw_of(d);
-                            }
-                        }
-                        self.start_action(ActionKind::Guard, m);
-                        return true;
-                    }
-                }
-                return false;
+            // KH2's order on the ground (exe `0x1403A75A0`): with the stick at rest, Guard; then
+            // Dodge Roll (moving, or standing without Guard); then Quick Run; then Guard again,
+            // moving too (Sora with neither growth ability guards on the run). Quick Run with
+            // Dodge Roll equipped comes out of the roll, the button held to its quick-run check.
+            if !moving && a.guard && self.start_guard(env) {
+                return true;
             }
             if a.dodge_roll > 0 && self.clip(motion::DODGE_ROLL).is_some() {
-                self.facing = yaw_of(input.stick);
+                if moving {
+                    self.facing = yaw_of(input.stick);
+                }
                 self.vel_h = [0.0; 2];
                 self.start_action(ActionKind::DodgeRoll, motion::DODGE_ROLL);
                 return true;
             }
-        }
-        // Quick Run is ground-only (the game checks airborne first).
-        if a.quick_run > 0 && moving && !self.airborne {
-            return self.start_quick_run(input.stick);
+            // (Quick Run is ground-only: the game checks airborne first. Standing, along his
+            // facing: Wisdom Form, with no guard, dashes from a standstill.)
+            if a.quick_run > 0 && self.start_quick_run(if moving { input.stick } else { self.forward() }) {
+                return true;
+            }
+            return a.guard && self.start_guard(env);
         }
         false
+    }
+
+    /// Guard (the action button): row 11's motion (the moveset's own), else the press's, else
+    /// the repel's.
+    fn start_guard(&mut self, env: &Env) -> bool {
+        let press = self.moveset.combo_rows.iter().find(|r| r.id == GUARD_ROW).map(|r| r.motion).filter(|m| self.clip(*m).is_some());
+        let m = press.or_else(|| self.clip(motion::GUARD_PRESS).map(|_| motion::GUARD_PRESS)).or_else(|| self.clip(motion::GUARD).map(|_| motion::GUARD));
+        let Some(m) = m else { return false };
+        self.vel_h = [0.0; 2];
+        // Facing the target with a reticle on it (the lock), as KH2's guard does (the user: guard
+        // didn't turn him toward it).
+        if let Some(t) = self.lock.and_then(|id| env.targets.iter().find(|t| t.id == id)) {
+            let d = [t.pos[0] - env.pos[0], t.pos[2] - env.pos[2]];
+            if len2(d) > 1e-3 {
+                self.facing = yaw_of(d);
+            }
+        }
+        self.start_action(ActionKind::Guard, m);
+        true
     }
 
     /// Glide, when it is owned and Sora is high enough.

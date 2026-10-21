@@ -1706,3 +1706,94 @@ fn magnet_burst_with_foes_beside() {
     let m = combo_motions(base, group, None, true);
     assert!(m.contains(&184), "not locked: {m:?}");
 }
+
+/// Sora with Guard (its press motion), Dodge Roll and Quick Run as asked.
+fn square_sora(guard: bool, roll: bool, quick_run: bool) -> Character {
+    let mut ch = sora();
+    ch.moveset.clips.insert(motion::GUARD_PRESS, Clip::plain(motion::GUARD_PRESS, 30));
+    ch.abilities.guard = guard;
+    ch.abilities.dodge_roll = if roll { 2 } else { 0 };
+    ch.abilities.quick_run = if quick_run { 2 } else { 0 };
+    ch
+}
+
+/// KH2's Square on the ground (exe `0x1403A75A0`), every combination of Guard, Dodge Roll and
+/// Quick Run, standing and moving: standing, Guard; else Dodge Roll; else Quick Run; else Guard
+/// (moving too). (The player: on keyboard, Guard or the roll always came out, never Quick Run.)
+#[test]
+fn square_priority_for_every_equipped_combination() {
+    use StateName::*;
+    for guard in [false, true] {
+        for roll in [false, true] {
+            for qr in [false, true] {
+                for moving in [false, true] {
+                    let want = match (moving, guard, roll, qr) {
+                        (false, true, _, _) => Some(Guard),
+                        (_, _, true, _) => Some(DodgeRoll),
+                        (_, _, false, true) => Some(QuickRun),
+                        (true, true, false, false) => Some(Guard),
+                        _ => None,
+                    };
+                    let stick = if moving { [1.0, 0.0] } else { [0.0, 0.0] };
+                    let mut w = World::new(square_sora(guard, roll, qr));
+                    w.run(20, Pad { stick, ..IDLE });
+                    let o = w.step(Pad { stick, action: true, ..IDLE });
+                    let what = format!("guard {guard} roll {roll} quick run {qr} moving {moving}");
+                    match want {
+                        Some(s) => assert_eq!(o.state, s, "{what}"),
+                        None => assert!(matches!(o.state, Idle | Walk | Run), "{what}: {:?}", o.state),
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// With Guard, Dodge Roll and Quick Run all equipped, Quick Run is still there: Square while
+/// moving rolls, and the button held to the roll's quick-run check turns it into Quick Run.
+#[test]
+fn quick_run_out_of_the_roll_with_guard_equipped() {
+    let mut w = World::new(square_sora(true, true, true));
+    w.run(20, Pad { stick: [1.0, 0.0], ..IDLE });
+    let outs = w.run(20, Pad { stick: [1.0, 0.0], action: true, ..IDLE });
+    assert_eq!(outs[0].state, StateName::DodgeRoll);
+    assert_eq!(outs[12].state, StateName::QuickRun);
+    // Let go before the check: the roll stays a roll.
+    let mut w = World::new(square_sora(true, true, true));
+    w.run(20, Pad { stick: [1.0, 0.0], ..IDLE });
+    let outs: Vec<_> = (0..20).map(|f| w.step(Pad { stick: [1.0, 0.0], action: f < 3, ..IDLE })).collect();
+    assert!(outs.iter().all(|o| o.state != StateName::QuickRun));
+}
+
+/// Standing with no Guard and no roll (Wisdom Form's case), Quick Run dashes along his facing.
+#[test]
+fn quick_run_from_a_standstill_goes_along_the_facing() {
+    let mut w = World::new(square_sora(false, false, true));
+    w.run(20, Pad { stick: [0.0, 1.0], ..IDLE });
+    w.run(30, IDLE);
+    let z = w.pos[2];
+    let o = w.step(Pad { action: true, ..IDLE });
+    assert_eq!(o.state, StateName::QuickRun);
+    w.run(8, Pad { action: true, ..IDLE });
+    assert!(w.pos[2] - z > 50.0, "dashed {} along +z", w.pos[2] - z);
+    assert!(w.pos[0].abs() < 1.0);
+}
+
+/// Quick Run's motions carry no free state and no combo window in KH2's data (only the
+/// reaction-command range from frame 8), so the dash takes no Attack or jump; letting go of the
+/// button ends it (its end motion), and the landing after it takes a jump.
+#[test]
+fn quick_run_ends_only_on_release() {
+    let mut ch = square_sora(true, false, true);
+    ch.moveset.clips.insert(motion::QUICK_RUN, Clip::plain(motion::QUICK_RUN, 60));
+    ch.moveset.clips.insert(motion::QUICK_RUN_END, Clip::plain(motion::QUICK_RUN_END, 12));
+    let mut w = World::new(ch);
+    w.run(20, Pad { stick: [1.0, 0.0], ..IDLE });
+    assert_eq!(w.step(Pad { stick: [1.0, 0.0], action: true, ..IDLE }).state, StateName::QuickRun);
+    let outs: Vec<_> = (0..6).map(|f| w.step(Pad { stick: [1.0, 0.0], action: true, attack: f == 1, jump: f == 3, ..IDLE })).collect();
+    assert!(outs.iter().all(|o| o.state == StateName::QuickRun && o.motion == motion::QUICK_RUN), "{:?}", outs.iter().map(|o| (o.state, o.motion)).collect::<Vec<_>>());
+    let outs = w.run(2, Pad { stick: [1.0, 0.0], ..IDLE });
+    assert_eq!((outs[1].state, outs[1].motion), (StateName::QuickRun, motion::QUICK_RUN_END));
+    let outs = w.run(30, Pad { stick: [1.0, 0.0], ..IDLE });
+    assert!(outs.iter().any(|o| o.state != StateName::QuickRun), "never left the Quick Run");
+}

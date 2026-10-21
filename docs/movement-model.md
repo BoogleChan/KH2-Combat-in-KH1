@@ -93,9 +93,40 @@ All **Checked (exe)** unless noted:
   run speed (`air_keep`) but fades no faster than with the stick let go (`air_drag`), unless
   pushed against (the user: an Aerial Dodge's speed, up to 36 a frame, was gone in a few frames
   as soon as a direction was pressed).
+- **Square on the ground** (the action button handler `0x1403A75A0`, after Glide and the
+  Square combo rows). "Standing" is the stick at rest (its tilt exactly 0 after KH2's dead
+  zone; ours: under `DEAD_ZONE`), "moving" anything else:
+  1. Standing: **Guard** (combo row 11), if equipped.
+  2. **Dodge Roll**, if equipped: moving (along the stick), or standing without Guard (along
+     his facing).
+  3. **Quick Run**, if equipped: moving, or standing with neither Guard nor the roll (along his
+     facing; Wisdom Form, which has no guard, dashes from a standstill).
+  4. **Guard** again, if equipped, moving too: with neither growth ability Sora guards on
+     the run.
+  - So with Dodge Roll and Quick Run both equipped, Quick Run comes out of the roll: Square
+    while moving rolls, and the button still held at the roll's frame-10 check turns it into
+    Quick Run (below). Without the roll, Square while moving is Quick Run, Guard equipped or not.
+  - The roll and Quick Run also need a free state (the motion's range 0/1/2) and the ground.
+  - Tests: `square_priority_for_every_equipped_combination`,
+    `quick_run_out_of_the_roll_with_guard_equipped`,
+    `quick_run_from_a_standstill_goes_along_the_facing`.
+  - **Keyboard (s300 fix, the KH1 port).** KH1 reads Square as its logical bit `0x10` too, and
+    its menu step (`0x140291660`) turns a press of it into its own Square action (bit
+    `0x4000000` of `0x142D54440`), its block or dodge roll by KH1's rule (block unless it has the
+    roll and the stick is tilted, `0x1402A59A0`). A pad's Square is taken out of its record
+    before KH1 reads it, but the keyboard's keys are merged in after that (`0x1400D7DE0`), so on
+    keyboard KH1 blocked or rolled over KH2's Square (the player: Guard or the roll always, no
+    Quick Run). The takeover's control step now takes that action and those bits out whenever
+    the Square is KH2's. The stick itself reads fine on keyboard: KH1's key bindings set the
+    stick bytes by a fixed offset each frame, no ramp.
 - **Quick Run.** Ground only.
   - **Start:** `air_slide_speed` along the stick, with no gravity, invulnerable for
     `air_slide_star_time`.
+  - **No cancel** (Data + exe): its motions (203 dash, 204 end) carry no free state (ranges
+    0/1/2) and no combo window, only the reaction-command range from frame 8, so Attack, magic,
+    jump and Square are all refused until it ends; letting go of the button is the way out
+    (then the end motion and KH2's landing, which takes a jump at once). Test
+    `quick_run_ends_only_on_release`.
   - **Each tick:** the speed is multiplied by `brake`.
   - **Hold:** the dash lasts while the action button is held, up to `air_slide_time`
     frames.
@@ -347,7 +378,8 @@ What this produces on your install (`kh2-combat sora`):
   Force, No-combo).
 
 - **Auto-target selection** (nearest within reach).
-- **Dodge Roll / Quick Run cancel points.**
+- **Dodge Roll cancel point** (ours: from its fall-check event, frame 34; its free state, range
+  2, starts at 36). Quick Run's is settled: none but the release (above).
 
 
 ## Ground inertia and moving attacks (stage 192)

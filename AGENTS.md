@@ -3511,3 +3511,16 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - "got an ability that I already had": KH1's level-up (`0x1402B34C0`) adds its later copy of an
   ability the mod gave early, with its box; now skipped and its line blanked for single KH2
   abilities (`growth::single`, `level_up_spare`; hooks at `0x2B34C0` / `0x2B3210`).
+
+### 2026-10-21: Stage 303 (Square's KH2 order on keyboard; the KH2 camera follows KH1's options)
+- A player: "you CANNOT use Quick Run while you have Guard equipped ... Dodge Roll has priority
+  over Quick Run". On keyboard KH1 saw Square through its own action bit (`0x10`, added after our
+  pad strip) and did its block / roll over ours. KH1's Square bits are now cleared before its
+  control step whenever Square is KH2's. `try_action_button` follows KH2's exe (`0x1403A75A0`):
+  stick at rest Guard; else Dodge Roll; else Quick Run (standing too, along facing); else Guard
+  while moving. Roll held into Quick Run. Quick Run has no cancel in KH2 (only letting go).
+- A player: "the KH2 camera doesn't seem to respect the inverted X or Y setting ... look straight
+  to the sky at random times". KH1's options are floats at `0x140507AA8` (up/down) / `0x140507AAC`
+  (left/right), live; the mouse feeds the same stick, its sensitivity from `0x140138B70`. The
+  round right-stick dead zone let any slant zoom in (eye low, looking up): now up/down only past
+  half tilt (KH2's rule), left/right 15%; look-up held at 31° (KH2's steepest).

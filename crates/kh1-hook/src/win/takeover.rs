@@ -652,6 +652,28 @@ unsafe extern "system" fn control(actor: usize, dir: usize) {
     };
     let state = base + BUTTONS_RVA;
     let saved = rd::<[u32; 6]>(state);
+    // KH1's Square from the keyboard. KH1 has Square as its logical `0x10` and `0x800000` too
+    // (its pad table `0x140528F90`), and its menu step (`0x140291660`) turns a press of `0x10`
+    // into its Square action (`KH1_SQUARE_ACTION`), which this step takes as KH1's block or
+    // dodge roll (`0x1402A59A0`, by KH1's rule: block unless it has the roll and the stick is
+    // tilted). A pad's Square is taken out of its record (`probe::pad`); the keyboard's keys are
+    // merged into that record after it (`0x1400D7DE0`), so on keyboard KH1 blocked or rolled over
+    // KH2's Quick Run (the player: "Guard has priority over Quick Run ... on keyboard and
+    // mouse"). While the Square is KH2's (as `probe::pad` has it), those go for this step too.
+    let square_kh2 = actor > 0x10000 && actor == rd::<u64>(base + PARTY_RVA) as usize && square_is_kh2(l1_menu, submenu);
+    if square_kh2 {
+        let c = rd::<u32>(base + KH1_COMMAND_RVA);
+        if c & KH1_SQUARE_ACTION != 0 {
+            wr(base + KH1_COMMAND_RVA, c & !KH1_SQUARE_ACTION);
+            static N: AtomicU32 = AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 10 {
+                log("KH1's Square action (the keyboard's Square) taken out: the Square is KH2's");
+            }
+        }
+        for off in [4usize, 8, 0x10, 0x14] {
+            wr(state + off, rd::<u32>(state + off) & !KH1_SQUARE_BITS);
+        }
+    }
     // KH1's glide at the Glide style KH1 (`stylejump::GLIDE`): its jump button held is Square held
     // (it glides on Square, the user), for its held state only.
     let inject: u32 = if strip && super::stylejump::mode() == super::stylejump::GLIDE && buttons() & SQUARE != 0 { 0x6 } else { 0 };
@@ -669,6 +691,25 @@ unsafe extern "system" fn control(actor: usize, dir: usize) {
             wr(state + off, rd::<u32>(state + off) | (saved[off / 4] & bits(off)));
         }
     }
+    if square_kh2 {
+        for off in [4usize, 8, 0x10, 0x14] {
+            wr(state + off, rd::<u32>(state + off) | (saved[off / 4] & KH1_SQUARE_BITS));
+        }
+    }
+}
+
+/// KH1's command word (`0x142D54440`): its menu step's action flags in the top byte.
+const KH1_COMMAND_RVA: Rva = Rva(0x2D54440);
+/// KH1's Square action there (set from a press of its logical `0x10`, `0x140291660`).
+const KH1_SQUARE_ACTION: u32 = 0x0400_0000;
+/// Square's other logical bits in KH1's button state (beside `0x100000`).
+const KH1_SQUARE_BITS: u32 = 0x10 | 0x80_0000;
+
+/// The Square is KH2's, not KH1's: the same rule `probe::pad` takes a pad's Square out of KH1's
+/// record by (KH2 has Sora and L1's shortcut menu isn't up; or KH1's air spell, or KH1 back on
+/// the ground after one of its air moves, with no shortcut menu or submenu up).
+fn square_is_kh2(l1_menu: bool, submenu: bool) -> bool {
+    (active() && !l1_menu) || ((air_cast().is_some() || !kh1_keeps_square()) && !l1_menu && !submenu)
 }
 
 /// Frames of the current rise, and whether a slope's contact (collision bit 3) has been there
