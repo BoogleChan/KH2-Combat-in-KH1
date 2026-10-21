@@ -115,7 +115,7 @@ pub unsafe fn start() {
                 // (And Wisdom Form's spells, Fire / Blizzard / Thunder / Cure by level, as packages
                 // `form::spell_package`.)
                 // (The spells' packages without the forms too: base Sora's KH2 magic, `styles`.)
-                let last = if super::settings::get().drive { LIMIT } else { super::form::LAST_PACKAGE };
+                let last = if super::settings::get().drive { MASTER } else { super::form::LAST_PACKAGE };
                 let spell: Vec<Option<SpellFx>> = (1..=last)
                     .map(|level| {
                         let lib = if level == WISDOM {
@@ -128,6 +128,8 @@ pub unsafe fn start() {
                             form_library(kh2.anti.as_ref(), "Anti Form", &common)
                         } else if level == LIMIT {
                             form_library(kh2.limit.as_ref(), "Limit Form", &common)
+                        } else if level == MASTER {
+                            form_library(kh2.master.as_ref(), "Master Form", &common)
                         } else if level > WISDOM {
                             form_spell_library(level, &common)
                         } else {
@@ -266,7 +268,11 @@ pub const ANTI: u8 = FINAL + 1;
 /// form").
 pub const LIMIT: u8 = ANTI + 1;
 
-/// The form package now: Final's in Final, Anti's in Anti, Limit's in Limit, else Valor's.
+/// Master Form's (`P_EX100_TRIF.a.us`), after Limit's.
+pub const MASTER: u8 = LIMIT + 1;
+
+/// The form package now: Final's in Final, Anti's in Anti, Limit's in Limit, Master's in Master,
+/// else Valor's.
 fn form_package() -> u8 {
     if super::form::in_final() {
         FINAL
@@ -274,6 +280,8 @@ fn form_package() -> u8 {
         ANTI
     } else if super::form::in_limit() {
         LIMIT
+    } else if super::form::in_master() {
+        MASTER
     } else {
         VALOR
     }
@@ -539,7 +547,8 @@ fn form_bone(code: u16, tip_local: Vec3) -> Option<Mat4> {
         0x4005 | 0x4006 => 0.0,
         _ => 0.5,
     };
-    if super::form::in_final() {
+    // (Master Form's too: its blades as drawn, the left one floating, `leftblade::note_pose`.)
+    if super::form::floating_blade() {
         return final_weapon_point(second, along);
     }
     // Limit Form's are KH2's own as Final's: its one Keyblade's blade bone where KH1 draws it (in
@@ -614,10 +623,10 @@ fn final_weapon_point(second: bool, along: f32) -> Option<Mat4> {
     Some(blade * Mat4::from_translation(TIP_IN_BLADE * along))
 }
 
-/// The bone codes of a spell package's elements: the forms' (Valor's, Limit's, Final's) weapon
-/// anchors are their Keyblades' (`form_bone`), the rest as Sora's own (`bone`).
+/// The bone codes of a spell package's elements: the forms' (Valor's, Limit's, Master's, Final's)
+/// weapon anchors are their Keyblades' (`form_bone`), the rest as Sora's own (`bone`).
 fn package_bone(package: usize, code: u16, tip_local: Vec3) -> Option<Mat4> {
-    if package == VALOR as usize - 1 || package == FINAL as usize - 1 || package == LIMIT as usize - 1 {
+    if package == VALOR as usize - 1 || package == FINAL as usize - 1 || package == LIMIT as usize - 1 || package == MASTER as usize - 1 {
         form_bone(code, tip_local)
     } else {
         bone(code, tip_local)

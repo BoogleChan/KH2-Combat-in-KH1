@@ -1,11 +1,12 @@
-//! Valor's and Final Form's Keyblades in KH1's Equipment page (`docs/kh1-equipment.md`, section
-//! 4): Sora's slots get a row under his weapon for each of the two forms unlocked
-//! (`form::unlocked`), "V: <Keyblade>" (`equip::valor_keyblade`, kept at `save + equip::
-//! VALOR_OFF`) then "F: <Keyblade>" (`equip::final_keyblade`, kept at `save + equip::
-//! FINAL_OFF`; the user: "add a section in the equipment menu for the second keyblade in final
-//! form"). Picking one opens KH1's own weapon list, narrowed to the Keyblades the form may take
-//! (owned, a copy not equipped and not the other slot's); the pick is stored in that form's slot
-//! and Sora's own weapon is left as it was.
+//! Valor's, Master's and Final Form's Keyblades in KH1's Equipment page (`docs/kh1-equipment.md`,
+//! section 4): Sora's slots get a row under his weapon for each of the three forms unlocked
+//! (`form::unlocked`), in KH2's order: "V: <Keyblade>" (`equip::valor_keyblade`, kept at `save +
+//! equip::VALOR_OFF`), "M: <Keyblade>" (`equip::master_keyblade`, `save + equip::MASTER_OFF`),
+//! then "F: <Keyblade>" (`equip::final_keyblade`, kept at `save + equip::FINAL_OFF`; the user:
+//! "add a section in the equipment menu for the second keyblade in final form"). Picking one
+//! opens KH1's own weapon list, narrowed to the Keyblades the form may take (owned, a copy not
+//! equipped and not another slot's); the pick is stored in that form's slot and Sora's own weapon
+//! is left as it was.
 //!
 //! - A slot's Keyblade is in use like an equipped one (the user: "When you put a keyblade in any
 //!   of the drive equipment slots ... it doesn't remove the keyblade from the list"): it leaves
@@ -142,16 +143,18 @@ static MEM: AtomicUsize = AtomicUsize::new(0);
 static LABEL_ON: AtomicU8 = AtomicU8::new(0);
 const LABEL_SLOTS: u8 = 1;
 const LABEL_PAGE: u8 = 2;
-/// Per form (Valor, Final): the id its label was made for, and the label (KH1 text codes; one
-/// buffer each, as both rows may be drawn in one frame).
-static LABEL_ID: [AtomicU8; 2] = [AtomicU8::new(0), AtomicU8::new(0)];
-static LABEL_BUF: [AtomicUsize; 2] = [AtomicUsize::new(0), AtomicUsize::new(0)];
+/// Per form (Valor, Final, Master): the id its label was made for, and the label (KH1 text codes;
+/// one buffer each, as all the rows may be drawn in one frame).
+static LABEL_ID: [AtomicU8; FORMS] = [AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0)];
+static LABEL_BUF: [AtomicUsize; FORMS] = [AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0)];
 const LABEL_LEN: usize = 64;
 /// The last form rows logged / Sora rows count logged (logs on change only).
-static LOGGED_ID: AtomicU32 = AtomicU32::new(u32::MAX);
+static LOGGED_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
 static LOGGED_ROWS: AtomicU32 = AtomicU32::new(u32::MAX);
-/// The form of Sora's rows 1 and 2 (`Form` as u8, 0 none), set as the slots are prepared.
-static ROW_FORM: [AtomicU8; 2] = [AtomicU8::new(0), AtomicU8::new(0)];
+/// The form of Sora's rows 1..=3 (`Form` as u8, 0 none), set as the slots are prepared.
+static ROW_FORM: [AtomicU8; FORMS] = [AtomicU8::new(0), AtomicU8::new(0), AtomicU8::new(0)];
+/// The forms with a row (and their rows at most).
+const FORMS: usize = 3;
 /// Sora's own weapon while a pick's preview may have put another in his weapon byte (0: none):
 /// kept from the list's opening until his byte holds it again with the list closed.
 static PICK_WEAPON: AtomicU32 = AtomicU32::new(0);
@@ -162,14 +165,14 @@ static HOVER_LOGS: AtomicU32 = AtomicU32::new(0);
 // Layout of `MEM`.
 const STUB_R12: usize = 0x00;
 const STUB_ROW: usize = 0x40;
-const STUB_NAME: usize = 0xB0;
+const STUB_NAME: usize = 0xC0;
 /// u64: the shadow record's address while Sora's slots show form rows, else 0.
-const CELL_SHADOW: usize = 0xC8;
-/// u8 each, for Sora's rows 1 and 2: 0 not a form row, 1 a form row with Keyblades to choose
+const CELL_SHADOW: usize = 0xE0;
+/// u8 each, for Sora's rows 1..=3: 0 not a form row, 1 a form row with Keyblades to choose
 /// from, 2 a form row with none (confirm refused).
-const CELL_ROWS: usize = 0xD0;
-/// u8: the form row confirmed (1 or 2; a pick is under way), set by the row stub; else 0.
-const CELL_PICK: usize = 0xD8;
+const CELL_ROWS: usize = 0xE8;
+/// u8: the form row confirmed (1..=3; a pick is under way), set by the row stub; else 0.
+const CELL_PICK: usize = 0xF0;
 const SHADOW: usize = 0x100;
 const MEM_SIZE: usize = 0x140;
 
@@ -178,6 +181,7 @@ const MEM_SIZE: usize = 0x140;
 enum Form {
     Valor = 1,
     Final = 2,
+    Master = 3,
 }
 
 impl Form {
@@ -185,6 +189,7 @@ impl Form {
         match b {
             1 => Some(Form::Valor),
             2 => Some(Form::Final),
+            3 => Some(Form::Master),
             _ => None,
         }
     }
@@ -192,6 +197,7 @@ impl Form {
         match self {
             Form::Valor => "Valor",
             Form::Final => "Final",
+            Form::Master => "Master",
         }
     }
     /// Its slot in the save.
@@ -199,6 +205,7 @@ impl Form {
         match self {
             Form::Valor => equip::VALOR_OFF,
             Form::Final => equip::FINAL_OFF,
+            Form::Master => equip::MASTER_OFF,
         }
     }
     /// Its row's label before the Keyblade's name (short: the row is `0xA6` px wide).
@@ -206,6 +213,7 @@ impl Form {
         match self {
             Form::Valor => "V: ",
             Form::Final => "F: ",
+            Form::Master => "M: ",
         }
     }
     fn index(self) -> usize {
@@ -256,33 +264,38 @@ pub(crate) fn stub_r12(at: usize, cell: usize, back: usize) -> Vec<u8> {
 }
 
 /// The row stub at `at` (entered with `ebx` = the confirmed row): row 0 the weapon way; rows 1
-/// and 2 by their cell (`rows`, `rows + 1`): 1 the weapon way with the pick cell set to the
-/// row, 2 sound 4 then the drawing part, 0 (and rows past 2) the accessory way. Only `rax` and
-/// the flags change, as before.
+/// to 3 by their cell (`rows`, `rows + 1`, `rows + 2`): 1 the weapon way with the pick cell set
+/// to the row, 2 sound 4 then the drawing part, 0 (and rows past 3) the accessory way. Only `rax`
+/// and the flags change, as before.
 pub(crate) fn stub_row(at: usize, rows: usize, pick_cell: usize, weapon: usize, accessory: usize, draw: usize, sound: usize) -> Vec<u8> {
     let mut b = vec![
         0x85, 0xDB, // 0: test ebx, ebx
-        0x74, 41, // 2: jz weapon (45)
-        0x83, 0xFB, 0x01, // 4: cmp ebx, 1
-        0x75, 9, // 7: jne row2 (18)
-        0x0F, 0xB6, 0x05, // 9: movzx eax, byte [rip + rows]
+        0x74, 55, // 2: jz weapon (59)
+        0x83, 0xFB, 0x03, // 4: cmp ebx, 3
+        0x77, 64, // 7: ja accessory (73; unsigned, so a negative row too)
+        0x83, 0xFB, 0x01, // 9: cmp ebx, 1
+        0x75, 9, // 12: jne row2 (23)
+        0x0F, 0xB6, 0x05, // 14: movzx eax, byte [rip + rows]
     ];
-    b.extend_from_slice(&rel32(at + 16, rows));
-    b.extend_from_slice(&[0xEB, 12]); // 16: jmp status (30)
-    b.extend_from_slice(&[0x83, 0xFB, 0x02]); // 18: cmp ebx, 2
-    b.extend_from_slice(&[0x75, 36]); // 21: jne accessory (59)
-    b.extend_from_slice(&[0x0F, 0xB6, 0x05]); // 23: movzx eax, byte [rip + rows + 1]
-    b.extend_from_slice(&rel32(at + 30, rows + 1));
-    b.extend_from_slice(&[0x85, 0xC0]); // 30: test eax, eax
-    b.extend_from_slice(&[0x74, 25]); // 32: jz accessory (59)
-    b.extend_from_slice(&[0x83, 0xF8, 0x02]); // 34: cmp eax, 2
-    b.extend_from_slice(&[0x74, 34]); // 37: je refused (73)
-    b.extend_from_slice(&[0x88, 0x1D]); // 39: mov byte [rip + pick_cell], bl
-    b.extend_from_slice(&rel32(at + 45, pick_cell));
-    debug_assert_eq!(b.len(), 45);
-    jmp_abs(&mut b, weapon); // 45
-    jmp_abs(&mut b, accessory); // 59
-    debug_assert_eq!(b.len(), 73);
+    b.extend_from_slice(&rel32(at + 21, rows));
+    b.extend_from_slice(&[0xEB, 21]); // 21: jmp status (44)
+    b.extend_from_slice(&[0x83, 0xFB, 0x02]); // 23: cmp ebx, 2
+    b.extend_from_slice(&[0x75, 9]); // 26: jne row3 (37)
+    b.extend_from_slice(&[0x0F, 0xB6, 0x05]); // 28: movzx eax, byte [rip + rows + 1]
+    b.extend_from_slice(&rel32(at + 35, rows + 1));
+    b.extend_from_slice(&[0xEB, 7]); // 35: jmp status (44)
+    b.extend_from_slice(&[0x0F, 0xB6, 0x05]); // 37: movzx eax, byte [rip + rows + 2]
+    b.extend_from_slice(&rel32(at + 44, rows + 2));
+    b.extend_from_slice(&[0x85, 0xC0]); // 44: test eax, eax
+    b.extend_from_slice(&[0x74, 25]); // 46: jz accessory (73)
+    b.extend_from_slice(&[0x83, 0xF8, 0x02]); // 48: cmp eax, 2
+    b.extend_from_slice(&[0x74, 34]); // 51: je refused (87)
+    b.extend_from_slice(&[0x88, 0x1D]); // 53: mov byte [rip + pick_cell], bl
+    b.extend_from_slice(&rel32(at + 59, pick_cell));
+    debug_assert_eq!(b.len(), 59);
+    jmp_abs(&mut b, weapon); // 59
+    jmp_abs(&mut b, accessory); // 73
+    debug_assert_eq!(b.len(), 87);
     b.extend_from_slice(&[0xB9, 4, 0, 0, 0]); // 73: mov ecx, 4
     b.extend_from_slice(&[0x48, 0xB8]); // mov rax, sound
     b.extend_from_slice(&(sound as u64).to_le_bytes());
@@ -394,7 +407,7 @@ pub unsafe fn install() {
     j.extend_from_slice(&rel32(row_site + 5, m + STUB_ROW));
     j.extend_from_slice(&[0x90, 0x90, 0x90]);
     ok &= hook::patch(row_site, &row_old, &j, "Equipment slot row test");
-    log(&format!("Equipment: Valor and Final rows for Sora{} (stubs at {m:#x})", if ok { "" } else { ", some patches failed (see above)" }));
+    log(&format!("Equipment: Valor, Master and Final rows for Sora{} (stubs at {m:#x})", if ok { "" } else { ", some patches failed (see above)" }));
 }
 
 /// The save block.
@@ -446,14 +459,16 @@ unsafe fn with_real_weapon<R>(save: usize, f: impl FnOnce() -> R) -> R {
     r
 }
 
-/// The form rows under Sora's weapon (rows 1, 2): Valor's then Final's, each once its form is
-/// unlocked (`form::unlocked`; Final comes at a higher level than Valor, so Final's row is
-/// normally the second).
+/// The form rows under Sora's weapon (rows 1..=3): Valor's, Master's then Final's (KH2's order,
+/// as the Drive list), each once its form is unlocked (`form::unlocked`).
 unsafe fn form_rows() -> Vec<Form> {
     use super::form::{unlocked, Kind};
-    let mut v = Vec::with_capacity(2);
+    let mut v = Vec::with_capacity(FORMS);
     if unlocked(Kind::Valor) {
         v.push(Form::Valor);
+    }
+    if unlocked(Kind::Master) {
+        v.push(Form::Master);
     }
     if unlocked(Kind::Final) {
         v.push(Form::Final);
@@ -468,7 +483,7 @@ unsafe fn rows_shown() -> usize {
     if m == 0 {
         return 0;
     }
-    (0..2).filter(|i| rd::<u8>(m + CELL_ROWS + i) != 0).count()
+    (0..FORMS).filter(|i| rd::<u8>(m + CELL_ROWS + i) != 0).count()
 }
 
 /// The form a pick is for (the form row confirmed, `CELL_PICK`), if one is under way.
@@ -478,12 +493,12 @@ unsafe fn pick_form() -> Option<Form> {
         return None;
     }
     match rd::<u8>(m + CELL_PICK) {
-        r @ 1..=2 => Form::from(ROW_FORM[r as usize - 1].load(Ordering::Relaxed)),
+        r @ 1..=3 => Form::from(ROW_FORM[r as usize - 1].load(Ordering::Relaxed)),
         _ => None,
     }
 }
 
-/// The Keyblade on Sora's form row `row` (1 or 2) as prepared (0 for none).
+/// The Keyblade on Sora's form row `row` (1..=3) as prepared (0 for none).
 unsafe fn row_id(row: usize) -> u8 {
     rd::<u8>(mem() + SHADOW + ACC_FIRST + row - 1)
 }
@@ -499,6 +514,8 @@ unsafe fn form_id(save: usize, form: Form) -> u8 {
         (Form::Valor, false) => super::valor::keyblade().unwrap_or(0),
         (Form::Final, true) => equip::final_stored(base()),
         (Form::Final, false) => super::valor::final_keyblade(),
+        (Form::Master, true) => equip::master_stored(base()),
+        (Form::Master, false) => super::valor::master_keyblade(),
     }
 }
 
@@ -531,7 +548,7 @@ unsafe fn prepare(save: usize, win: usize) -> bool {
     if forms.is_empty() {
         if m != 0 {
             wr(m + CELL_SHADOW, 0u64);
-            wr(m + CELL_ROWS, 0u16);
+            wr(m + CELL_ROWS, 0u32);
         }
         return false;
     }
@@ -541,17 +558,17 @@ unsafe fn prepare(save: usize, win: usize) -> bool {
     }
     let sh = m + SHADOW;
     std::ptr::write_bytes(sh as *mut u8, 0, 0x40);
-    let mut key = 0u32;
-    for i in 0..2 {
+    let mut key = 0u64;
+    for i in 0..FORMS {
         let (form, id) = match forms.get(i) {
             Some(&f) => (f as u8, form_id(save, f)),
             None => (0, 0),
         };
         ROW_FORM[i].store(form, Ordering::Relaxed);
-        // Valor's row holds a Keyblade only when one is free; Final's holds the Kingdom Key at
-        // least, but offers a choice only when one is free. (A Keyblade to choose from: owned,
-        // not equipped, not the other slot's copy, counted with his own weapon; the row's own
-        // one counts.)
+        // Valor's row holds a Keyblade only when one is free; Final's and Master's hold the
+        // Kingdom Key at least, but offer a choice only when one is free. (A Keyblade to choose
+        // from: owned, not equipped, not another slot's copy, counted with his own weapon; the
+        // row's own one counts.)
         let free = match Form::from(form) {
             Some(f) => with_real_weapon(save, || !candidates(f).is_empty()),
             None => false,
@@ -563,7 +580,7 @@ unsafe fn prepare(save: usize, win: usize) -> bool {
         };
         wr(m + CELL_ROWS + i, cell);
         wr(sh + ACC_FIRST + i, id);
-        key |= ((form as u32) << 8 | id as u32) << (16 * i);
+        key |= ((form as u64) << 8 | id as u64) << (16 * i);
     }
     for i in 0..acc {
         wr(sh + ACC_FIRST + forms.len() + i, rd::<u8>(save + ACC_FIRST + i));
@@ -590,7 +607,7 @@ unsafe fn after(save: usize) {
         return;
     }
     let pick = rd::<u8>(m + CELL_PICK);
-    if (1..=2).contains(&pick) {
+    if (1..=FORMS as u8).contains(&pick) {
         let id = row_id(pick as usize);
         if g::<i32>(CURRENT) != id as i32 {
             s(CURRENT, id as i32);
@@ -710,22 +727,25 @@ unsafe extern "system" fn free_count(id: i32) -> i32 {
     (n - held).max(0)
 }
 
-/// The Keyblades a form's slot may take (`equip::valor_candidates` / `final_candidates`: not
-/// equipped, not the other slot's copy; its own current one included).
+/// The Keyblades a form's slot may take (`equip::valor_candidates` / `final_candidates` /
+/// `master_candidates`: not equipped, not another slot's copy; its own current one included).
 unsafe fn candidates(form: Form) -> Vec<u8> {
     match form {
         Form::Valor => equip::valor_candidates(base()),
         Form::Final => equip::final_candidates(base()),
+        Form::Master => equip::master_candidates(base()),
     }
 }
 
 /// The copies of `id` a list shows as Sora's to take: owned less those the form slots hold, his
 /// own slot's (`form`, during its pick) left in.
 unsafe fn shown_count(id: u8, form: Option<Form>) -> u32 {
+    let b = base();
     let held = match form {
-        None => equip::form_held(base(), id),
-        Some(Form::Valor) => (equip::final_held(base()) == id) as u32,
-        Some(Form::Final) => (equip::valor_held(base()) == id) as u32,
+        None => equip::form_held(b, id),
+        Some(Form::Valor) => (equip::final_held(b) == id) as u32 + (equip::master_held(b) == id) as u32,
+        Some(Form::Final) => (equip::valor_held(b) == id) as u32 + (equip::master_held(b) == id) as u32,
+        Some(Form::Master) => (equip::valor_held(b) == id) as u32 + (equip::final_held(b) == id) as u32,
     };
     (equip::owned(base(), id) as u32).saturating_sub(held)
 }
@@ -770,7 +790,7 @@ unsafe extern "system" fn fill() {
     f();
     let m = mem();
     let pick = if m == 0 { 0 } else { rd::<u8>(m + CELL_PICK) };
-    if !(1..=2).contains(&pick) {
+    if !(1..=FORMS as u8).contains(&pick) {
         if g::<i32>(MEMBER) == 0 {
             fill_sora();
         }

@@ -69,8 +69,8 @@ enum Weapon {
 struct Library {
     install: kh2_data::Install,
     source: kh2_data::Source,
-    /// Base Sora, then Valor, Wisdom, Final, Anti, Limit.
-    bodies: [Option<Arc<Loaded>>; 6],
+    /// Base Sora, then Valor, Wisdom, Final, Anti, Limit, Master.
+    bodies: [Option<Arc<Loaded>>; 7],
     /// KH2's Keyblades: name (lower case) → model name.
     keyblades: Vec<(String, String)>,
     /// By model name.
@@ -222,8 +222,8 @@ pub fn load() {
             let install = kh2_data::Install::locate(&exe).map_err(|e| format!("KH2 install: {e}"))?;
             let source = if install.has_backup() { kh2_data::Source::Backup } else { kh2_data::Source::Live };
             let read = |name: &str| install.read_any(source, name).map_err(|e| format!("{name}: {e}"));
-            let mut bodies: [Option<Arc<Loaded>>; 6] = [None, None, None, None, None, None];
-            for (i, name) in ["P_EX100", "P_EX100_BTLF", "P_EX100_MAGF", "P_EX100_ULTF", "P_EX100_HTLF", "P_EX100_KH1F"].iter().enumerate() {
+            let mut bodies: [Option<Arc<Loaded>>; 7] = [None, None, None, None, None, None, None];
+            for (i, name) in ["P_EX100", "P_EX100_BTLF", "P_EX100_MAGF", "P_EX100_ULTF", "P_EX100_HTLF", "P_EX100_KH1F", "P_EX100_TRIF"].iter().enumerate() {
                 match read(&format!("obj/{name}.mdlx")).and_then(|b| Loaded::new(name, &b)) {
                     Ok(l) => {
                         log(&format!(
@@ -286,6 +286,7 @@ fn body(lib: &Library) -> Option<Arc<Loaded>> {
         Some(Kind::Final) => 3,
         Some(Kind::Anti) => 4,
         Some(Kind::Limit) => 5,
+        Some(Kind::Master) => 6,
         None => 0,
     };
     lib.bodies[i].clone().or_else(|| lib.bodies[0].clone())
@@ -343,10 +344,11 @@ unsafe fn held_weapon(base: usize) -> Option<u8> {
     (save >= 0x10000 && super::crash::readable(save + 0x36)).then(|| std::ptr::read_unaligned((save + 0x36) as *const u8))
 }
 
-/// The left Keyblade's KH1 item (Valor's, Final's), if he holds two.
+/// The left Keyblade's KH1 item (Valor's, Master's, Final's), if he holds two.
 unsafe fn left_weapon(base: usize) -> Option<u8> {
     match super::form::current()? {
         Kind::Final => Some(super::equip::final_stored(base)),
+        Kind::Master => Some(super::equip::master_stored(base)),
         Kind::Valor => super::equip::valor_keyblade(base),
         Kind::Wisdom | Kind::Limit | Kind::Anti => None,
     }

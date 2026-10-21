@@ -497,7 +497,13 @@ hand would be wrong.
   - Handles are made with KH1's `0x14038B080` and checked to resolve back.
 - **When:**
   - The left weapon's own trail ranges (trigger 12) are read at start, in the background, from
-    the KH2 install's `wmst`-named mset for Valor's left hand (`W_EX010_BTLF_L`).
+    the KH2 install's `wmst`-named mset for each two-Keyblade form's left hand (`W_EX010_BTLF_L`,
+    `_TRIF_L`, `_ULTF_L`; Valor's alone until Master Form, so Final's trail ran on Valor's
+    frames), and the current form's are used (`docs/drive-model.md`, "The second Keyblade's
+    trail"). The trail is made only in a move (not standing, walking or running).
+  - The owner is filled right after the left bones are posed (`note_pose`, Sora's matrices
+    just written by the pose pass), and again at the left Keyblade's draw: filled only at the
+    draw, it could be a frame behind KH1's own right trail.
   - `takeover` passes the clip's motion, frame and its trail flag (the same `kh2_left` line,
     now with three more arguments). If the mset can't be read, KH2's trail window of either
     hand is used.
@@ -521,7 +527,8 @@ hand would be wrong.
    the owner, or keeps it past Valor, it writes into our block (never freed), not into Sora.
 2. The trail's motion-slot check reads the copy's `+0x164`, which is Sora's. A left trail ends
    when Sora's KH1 motion slot changes, as the right one does.
-3. Check in the log: `trail windows of W_EX010_BTLF_L for N motions` at start, then for each
+3. Check in the log: `trail windows of W_EX010_BTLF_L (moveset 2) for N motions` (and
+   `_TRIF_L`, `_ULTF_L`) at start, then for each
    Valor swing `trail ... made at motion M frame F`, then `ended`. In the game, check that the
    ribbon follows the left blade, not the right one.
 

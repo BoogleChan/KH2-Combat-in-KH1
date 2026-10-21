@@ -758,6 +758,156 @@ lists (`.hed` names). Nothing of it is in the repository.
   - Zantetsuken's power 600 against KH1's enemies;
   - Sora's `plyr` stand-in.
 
+## Master Form in the KH1 port (Data; the rules ours where marked)
+
+The user: "lets take the rules and procedures we've done for wisdom form and valor form, and lets
+make master form. I want sora's jumpsuit to be yellow, and the inside of sora's jacket's hood be
+yellow as well instead of blue. I want soras belt to be black. Lets make sure when sora uses his
+KH2 Master Form attacks, his secondary keyblade's trail actually follows the keyblade." Its cost
+and unlock are the user's: 2 MP to enter (`form::MASTER_COST_MP`), open from level 97
+(`form::MASTER_LEVEL`, the same level check as Limit Form's).
+
+Read from fresh copies of the Steam install's `00battle.bin`, `03system.bin`, `00objentry.bin`,
+`obj/P_EX100_TRIF.mdlx` / `.mset` and `obj/W_EX010_TRIF_R` / `_L.mset` (research helpers
+`kh2-data/examples/form_info.rs` and `mset_slots.rs`, `kh2-anim/examples/final_blades.rs`).
+Nothing of it is in the repository.
+
+### Its data
+
+- **Object.** `P_EX100_TRIF`, moveset 4, form id 4 (`kh2_data::sora::FORMS[3]`). The same
+  256-bone skeleton as Sora's.
+- **Weapons.** `wmst` rows 4 × 2 and 4 × 2 + 1: `W_EX010_TRIF_R` on the right hand bone (178,
+  51 motions) and `W_EX010_TRIF_L` on the left (86, 48 motions), both with the Keyblade's 17
+  shapes. KH2's blade bone (2) of each, against its hand (`final_blades`):
+  - the right one is always in his hand, 6..9 units from it, in every motion checked (idle, run,
+    jump, fall, the casts, 181..185, Aerial Dodge);
+  - the left one floats ("held by magic"): 29..50 from the left hand standing, 30..111 in the
+    attacks, 15..99 in the casts, 123 in motion 8; it is held (8 units) in the jump (3), the fall
+    (4), the run (10), the air recovery (40) and Aerial Dodge (202). From the right hand it is
+    15..201 away.
+- **Movement (`prty` 4).** Walk 2, run 10, jump 285, turn 0.26, no acceleration / brake. `plyr`
+  4: auto lock-on 500, lock-on 1200.
+- **Motions.** 0..19, 40..43, 53, 56..73 (the casts), 139, 151..154, 181..185, 202. The attacks
+  are 181..185 (tags D330, D331, D333, D334, D332); 151..154 are the same clips as the casts (no
+  combo row names them). Motion 53 is the arrival (elements 1..12 and 100..102). Motion 202 (A160,
+  a guard window ATKP 406) and 8 (A101, the same) are Aerial Dodge's.
+- **No guard (Data).** Motions 41, 42 and 43 are one clip, D350 (the repel), with no guard window
+  in the body's or either Keyblade's set. Sora's 42 (A321) has one (ATKP 162 on the Keyblade).
+  There is no 173 (the guard's press) and no row 11. **Ours:** `form::form_abilities` now gives
+  a form the guard only if its motion 42 has a guard window. That changes nothing for the others
+  (Valor's and Limit's 42 have one, Wisdom and Final have no 42; Anti never guards).
+- **Combo rows (PTYA set 4, 16 rows).** None needs an ability. Flags: 0x1 air, 0x4 finisher.
+
+  | Row | Kind | Flags | Motion | Its hits (ATKP, right / left Keyblade) |
+  |---|---|---|---|---|
+  | 5 | 3 (ground default) | | 185 | 1077 / 1076 |
+  | 4 | 1 (0..1000) | | 181 | 1060 / 1059, 1366 |
+  | 6, 9, 22 | 1 | 0x10, 0x11 | 185, 181 | |
+  | 0, 10, 24 | 1 (0..300) | 0x8, 0x9, 0x1 | 182 | 1062 / 1061, 1063 |
+  | 8 | 3 (ground finisher default) | 0x5 | 183 | 1252, 1254, 1255, 1256 / 1257, 1368..1370, 1356 |
+  | 7, 58 | 2, 1 (0..300) | 0x5 | 184, 183 | 184: the body's group 3, 1100 frames 20..210, then 1101 |
+  | 21 | 3 (air default) | 0x1 | 181 | |
+  | 20, 23 | 1 | 0x11, 0x1 | 185 | |
+  | 25 | 1 (0..300) | 0x15 (air finisher) | 184 | |
+  | 1 | 0 | | 181 | |
+
+  184 (D334, 254 frames) is the long spinning finisher: its hits are the body's (group 3), with an
+  allow-movement range 0..200.
+- **Casts (Data).** MAGC gives the same motion ids in every form, and Master's moveset fills them
+  with one clip each for the ground, the finisher and the air: Fire 56 / 57 / 58 (D371), Blizzard
+  59..61 (D370), Thunder 62..64 (D372), Cure 65 / 67 (D374, also 68 and 70), Reflect 71..73
+  (D373). Each casts with frame trigger 17 (at 14, 32, 8, 20 and 0) and swings the Keyblades
+  meanwhile: Fire 1097 / 1096, Blizzard 1066 / 1065, Thunder 1098 (left), Cure 1099 (left),
+  Reflect 1078 (left). A no-gravity range covers most of each. Master's magic sub is + 20
+  (above).
+- **Effects and sounds.** Its motions start elements 20..32 of its own archive
+  (`obj/P_EX100_TRIF.a.us`; whether the install has it and whether it holds a "p_ex" PAX isn't
+  checked here). The Keyblades' sounds are bank 500's (500 040..055), with the voices (frame
+  trigger 14).
+- **Growth.** Aerial Dodge (the forms' table above).
+
+### The port (ours, on the rules every form has here)
+
+- `form::Kind::Master`, `pose::Kh2::master` (`load_form`), `drive::FORMS`' fourth entry, KH2's
+  order (Valor, Wisdom, Limit, Master, Final): record 0x87 and word 0x1F5, the next free ones after
+  Limit Form's limits (0x82..0x86, 0x1FA..0x1F6). The records' arguments follow the list, so
+  Final's is 0x14 now. It is listed only once unlocked.
+- The change, the revert, the MP drain and its two extra bars (`valorstats::DRIVE_MP`), the revert
+  out of MP, on a KO and in a new world, full HP on entering, no KH1 limits (`combat`, through
+  `form::two_blades`), and talking and examining are all as for every form.
+- **Growth.** Aerial Dodge at base Sora's level + 1, MAX at most (`form::growth_up`), following
+  KH1's menu changes mid-form (`form::abilities`).
+- **Magic.** As Wisdom's and Final's (`form::casting_form`, `formmagic`): Fire, Blizzard and
+  Thunder are KH2's at sub level × 2 − 2 (+ 1 for the finisher) + 20 on Master's own casts; Cure
+  is KH1's on Master's Cure motion; Gravity, Stop and Aero are KH1's on its Thunder / Cure motions
+  (`pose::follow`); Reflect at sub + 20. In the air its casts are KH2's own, as Final's
+  (`takeover`'s air-magic block): the clip is the same as on the ground.
+- **Effects and sounds.** Its archive is `kh2fx::MASTER` (frame trigger 1 → `kh2fx::form_event`).
+  Its weapon anchors are KH2's, as Final's: each Keyblade's blade bone as drawn
+  (`leftblade::final_blade`, filled for Master by `note_pose`: the right one where KH1's held
+  grip is, the left one where it floats). Its elements' sounds are in
+  `formmagic::element_sounds`, and its swings' sounds and voices in `kh2sound`.
+- **Second Keyblade.** Its own slot and "M:" row (`docs/kh1-equipment.md`), Final's rules (the
+  Kingdom Key when it holds none). Its Strength and MP count in the form (`valorstats`).
+- **Where the second Keyblade is drawn** (`leftblade::note_pose`). It is matched by KH2's blade
+  bone (2), as Final's. The right one is KH1's own grip (held: no float, unlike Final's
+  `final_float`). The left one:
+  - floating, it hangs from KH1's right hand by KH2's right hand bone, as Final's does (s282: a
+    blade far from the left hand swung with that hand's error);
+  - held (KH2's blade within `MASTER_HELD` 12 units of its left hand), it hangs from KH1's left
+    hand, so it stays in his grip in the jump, the fall, the run and Aerial Dodge;
+  - in between (12..22 units), the two are blended (place, turn and scale, smoothstepped), and not
+    blended across a mirrored hand.
+  - Its reach check is Final's (400 from the hand).
+- **Look.** `tint::Look::Master` (`docs/kh1-tint.md`).
+- **Square.** On the ground it does nothing: Master has no guard (above), no row 11 and no Dodge
+  Roll. In the air it is Aerial Dodge. What KH2's Master does with Square on the ground isn't
+  traced.
+
+### The second Keyblade's trail (Valor, Master, Final)
+
+The user: "Lets make sure when sora uses his KH2 Master Form attacks, his secondary keyblade's
+trail actually follows the keyblade". KH1's trail point (read again: `0x14029C990` → bone `0x30`
+through the model's id table → `0x1401D41C0`) is the parent's world matrix applied to the bone's
+sampled local translation (`instance + 0x1B0`, KH1's own channels), lerped from the parent's
+position by `t` in the weapon's blade range (Sora's: 0.00..-5.20 over 110 units in the s261
+log, so the bone sits about 21 units from its parent; inferred: 283, the chain's first bone,
+under the grip 280, which is 21 units from it in the same log). So it follows the world matrices
+its owner has when KH1's trail follower runs. Two things kept the left ribbon off its
+Keyblade:
+
+1. **The wrong windows.** The left trail opened and closed on Valor's left weapon's windows
+   (`W_EX010_BTLF_L`) whatever the form: in Final, its 154 trails 11..124 of 280 frames, Valor's
+   37..95; its 183 has four windows over 360 frames, Valor's one at 19..29. Master's
+   (`W_EX010_TRIF_L`: 181 0..end, 182 1..37, 183 4..83 and 102..120, 185 0..24, the casts) would
+   have been Valor's too. Now each form's own left weapon set is read (`wmst` row
+   `moveset × 2 + 1`: Valor 2, Master 4, Final 5) and the current form's is used.
+2. **A frame behind.** Its owner (a copy of Sora's actor whose matrices are his own moved by the
+   right-grip-to-left-grip turn) was filled only at the left Keyblade's draw. KH1's own right
+   trail reads Sora's matrices as the pose pass leaves them. When the follower ran between the
+   pose and the draw, the left ribbon was the previous frame's: a fast floating blade (Master's,
+   Final's) trailed it. Now the owner is filled again right after the left Keyblade is posed
+   (`note_pose`, just after Sora's matrices are written), so both trails read the same frame. It
+   is still filled at the draw too.
+
+Also: the left trail is made only in a move (not standing, walking or running). Master's left
+set has a trail window all through its idle, walk and run (0..2, as KH2 draws its float), and
+KH1's swing ribbon would hang on him all the time there. Final's jump, fall and glide windows now
+open its left trail, as KH2's do (they never opened before: Valor's set has no windows there).
+
+### Unchecked in game
+
+All of it, in particular:
+- the Drive list's fourth row (record 0x87, word 0x1F5) and Final's new argument 0x14;
+- Master's moves and combos through KH2's controller; the 184 finisher's body hits (group 3);
+- its casts on KH1's cast timing, its KH1 spells on Master's motions, the air casts' physics;
+- its effects (whether the TRIF archive loads), its sounds;
+- the left Keyblade's float (its blend between held and floating, the reach check) and its effects;
+- the left trail: in Master's attacks, following the floating blade; in Final, now on its own
+  windows (and in its jump and glide); in Valor, unchanged but filled earlier;
+- Aerial Dodge as Master's growth ability; no guard (Square on the ground does nothing);
+- the "M:" row and the copy counting with all three rows.
+
 ## Not modelled
 
 - Form keyblade stats (forms deal Sora's base damage).

@@ -135,6 +135,10 @@ enum Eyes {
 const SLEEVES: [[f32; 4]; 2] = [[0.035, 0.415, 0.236, 0.85], [0.236, 0.415, 0.215 + 0.025, 0.62]];
 const BELT: [f32; 4] = [0.035, 0.07, 0.57, 0.14];
 const HOOD_LINING: [f32; 4] = [0.755, 0.72, 1.0, 1.0];
+/// The collar's red strip on `-1c0` (the texture's one large red run, 3460 texels at u 0..0.018,
+/// v 0.35..0.69). The other on it, a red oval on the shoe piece at u 0.40..0.49, v 0.63..0.70, is
+/// left out: Master keeps the shoes as they are.
+const COLLAR: [f32; 4] = [0.0, 0.34, 0.025, 0.70];
 /// The jacket on `-1c1` (`Mask::Jacket`): the UV islands of the remastered mesh (`-c0.cvbl`, mesh
 /// 1) holding these points (u, v), each less a region if given: the sleeves, the vest less its
 /// open zipper (the teeth and tape along its front edges, painted on the vest's own triangles),
@@ -148,7 +152,7 @@ const JACKET: [([f32; 2], Option<[f32; 4]>); 4] = [([0.12, 0.65], None), ([0.45,
 static UV_TRIS: OnceLock<Option<Vec<kh1_data::texmap::UvTri>>> = OnceLock::new();
 
 /// A form's look (`form`): Wisdom's blue, Valor's red, Final's white, Limit's black and yellow,
-/// Anti's Shadow Sora.
+/// Master's yellow and black, Anti's Shadow Sora.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Look {
     Wisdom,
@@ -157,6 +161,8 @@ pub enum Look {
     /// Limit Form: KH1 Sora's outfit with the jumpsuit, the jacket and the shoes black, the belt
     /// yellow.
     Limit,
+    /// Master Form: the jumpsuit, the collar and the hood's lining yellow, the belt black.
+    Master,
     /// (`form` maps Anti Form here; until it does, nothing names it.)
     Anti,
 }
@@ -230,6 +236,8 @@ fn ops(look: Look, k: usize) -> Vec<Op> {
     let shoes = |to| Op::Shift { from: YELLOW_HUE, width: YELLOW_WIDTH, to, min_v: YELLOW_MIN_V, rect: None };
     let white = |from, width, min_v| Op::Grey { from, width, min_v, lo: WHITE_LO, hi: WHITE_HI, rect: None };
     let black = |from, width, min_v| Op::Grey { from, width, min_v, lo: BLACK_LO, hi: BLACK_HI, rect: None };
+    // (Master's yellow: Limit's belt's, the bright yellow near the shoes'.)
+    let paint_yellow = |from, width, rect| Op::Paint { from, width, to: LIMIT_BELT_HUE, sat: LIMIT_BELT_SAT, lo: LIMIT_BELT_LO, hi: 1.0, rect };
     match (look, k) {
         // Wisdom (the user: "recolor KH1 Sora blue"): the reds and the shoes' yellow blue, and
         // the sleeves blue (the user, s232: "can you make his sleeves blue when in wisdom?").
@@ -275,6 +283,19 @@ fn ops(look: Look, k: usize) -> Vec<Op> {
             Op::Darken { lo: BLACK_LO, hi: BLACK_HI, mask: Mask::Jacket },
         ],
         (Look::Limit, 2) => vec![black(YELLOW_HUE, YELLOW_WIDTH, YELLOW_MIN_V), black(RED, RED_WIDTH, 0.0), black(BLUE_HUE, BLUE_WIDTH, 0.0)],
+        // Master (the user: "I want sora's jumpsuit to be yellow, and the inside of sora's jacket's
+        // hood be yellow as well instead of blue. I want soras belt to be black"): the belt's blue
+        // black first, as Final's (so nothing after touches it); the hood lining's blue and the
+        // reds (jumpsuit, collar) one bright yellow, Limit's belt yellow near the shoes' (`Op::Paint`:
+        // a plain hue shift of the dark red and blue reads olive), their shading kept. The jacket's
+        // blue trim outside the lining, the shoes and the rest stay (on `-1c0` only the collar's
+        // strip: its other red is on the shoe piece).
+        (Look::Master, 0) => vec![paint_yellow(RED, RED_WIDTH, Some(COLLAR))],
+        (Look::Master, 1) => vec![
+            Op::Grey { from: BLUE_HUE, width: BLUE_WIDTH, min_v: 0.0, lo: BLACK_LO, hi: BLACK_HI, rect: Some(BELT) },
+            paint_yellow(BLUE_HUE, BLUE_WIDTH, Some(HOOD_LINING)),
+            paint_yellow(RED, RED_WIDTH, None),
+        ],
         // Anti (the user: "make sora look like shadow sora in this form (the miniboss from
         // neverland)"): all of him black, the face's eye frames too (else KH1 would paste
         // Sora's blue eyes onto the black face).
@@ -738,6 +759,7 @@ unsafe fn ours_for(s: &mut Swap, k: usize, src: usize, look: Look) -> Option<u64
         Look::Valor => b"kh2combat_valor_red\0",
         Look::Final => b"kh2combat_final_white\0",
         Look::Limit => b"kh2combat_limit_black\0",
+        Look::Master => b"kh2combat_master_yellow\0",
         Look::Anti => b"kh2combat_anti_shadow\0",
     };
     let t = create(r, &desc, p.bgra.as_ptr(), label.as_ptr(), 0);

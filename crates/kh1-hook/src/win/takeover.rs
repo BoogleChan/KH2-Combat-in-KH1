@@ -1781,7 +1781,9 @@ unsafe fn takeover(actor: usize) -> bool {
     // (the user: "aerial final form reflect is not 1:1 physics wise with kh2").
     // Base Sora's Aerial Magic style at KH2 (`styles`): KH2's own air casts too (Reflect's with
     // them), not KH1's fall.
-    if super::form::in_final() || super::formmagic::base_kh2(true) {
+    // Master Form as Final: its casts are one clip on the ground and in the air (D370..D374, a
+    // no-gravity range through most of each), KH2 holding him there as it plays.
+    if super::form::in_final() || super::form::in_master() || super::formmagic::base_kh2(true) {
         d.character.air_magic_falls = false;
         d.character.air_magic_gravity = 1.0;
         d.character.air_magic_fall_max = None;
@@ -2452,7 +2454,9 @@ unsafe fn takeover(actor: usize) -> bool {
     }
     // Valor's left Keyblade (the form rig's second weapon), and the clip playing for its trail,
     // for `leftblade`.
-    super::leftblade::kh2_left(d.anim.weapons.get(1).map(|w| w.as_slice()), &d.anim.bones, out.motion, out.clip_frame, out.weapon_trail);
+    // (Its trail in moves only: not standing, walking or running, `leftblade::kh2_left`.)
+    let acting = !matches!(out.state, StateName::Idle | StateName::Walk | StateName::Run);
+    super::leftblade::kh2_left(d.anim.weapons.get(1).map(|w| w.as_slice()), &d.anim.bones, out.motion, out.clip_frame, out.weapon_trail, acting);
     // The Keyblade during attacks (the user: invisible while attacking): every 15 frames.
     static ATTACK_FRAMES: AtomicU32 = AtomicU32::new(0);
     if matches!(out.state, StateName::Attack) {

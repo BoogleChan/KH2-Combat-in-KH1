@@ -63,6 +63,17 @@
 //! of KH1's own five limits instead (equipped or not; its shortcuts KH2 FM's Limit Form layout),
 //! run as KH1 does them, KH1 having him for each, the form on and draining (`drain`) all through.
 //! It costs `LIMIT_COST_MP` and opens at level `LIMIT_LEVEL` (the user).
+//!
+//! Master Form (the user: "lets take the rules and procedures we've done for wisdom form and valor
+//! form, and lets make master form"; `docs/drive-model.md`, "Master Form in the KH1 port"): in the
+//! Drive list after Limit, before Final (KH2's order), the same change and revert, `P_EX100_TRIF`
+//! (moveset 4): its own moveset, motions, combo rows, effects and sounds, two Keyblades (the right
+//! one in his hand, the second floating by his left, `leftblade`), its second Keyblade from its own
+//! slot (`valor::master_keyblade`, the Equipment page's "M:" row; the Kingdom Key when it holds
+//! none, as Final's). Its growth ability is Aerial Dodge, one level above Sora's; no guard (its
+//! motion 42 is the repel's clip, with no guard window). It casts as Wisdom and Final do, on its
+//! own cast motions, at KH2's Master sub (+ 20, `Kind::magic_sub`, `formmagic`). It costs
+//! `MASTER_COST_MP` and opens at level `MASTER_LEVEL` (the user).
 
 use super::{log, pose};
 use character_core::{Abilities, Character, EventKind};
@@ -95,6 +106,7 @@ fn cost_mp(kind: Kind, have: i32) -> i32 {
     match kind {
         Kind::Valor | Kind::Wisdom => 1,
         Kind::Limit => LIMIT_COST_MP,
+        Kind::Master => MASTER_COST_MP,
         Kind::Final => 3,
         Kind::Anti => have.max(0) / 2,
     }
@@ -102,6 +114,8 @@ fn cost_mp(kind: Kind, have: i32) -> i32 {
 
 /// Limit Form's MP cost (the user: 1 MP to enter, as Valor and Wisdom).
 pub const LIMIT_COST_MP: i32 = 1;
+/// Master Form's MP cost (the user: 2 MP to enter).
+pub const MASTER_COST_MP: i32 = 2;
 
 /// Anti Form's Side Spin: its PTYA row 12 (motion 161), Square in a ground combo (Data).
 const ANTI_SIDE_SPIN_ROW: u8 = 12;
@@ -128,6 +142,8 @@ pub enum Kind {
     Wisdom,
     /// `P_EX100_KH1F`, KH1 Sora's look.
     Limit,
+    /// `P_EX100_TRIF`, its second Keyblade floating.
+    Master,
     Final,
     /// Only by the secret code (`pad`), never in the Drive list.
     Anti,
@@ -135,15 +151,16 @@ pub enum Kind {
 
 impl Kind {
     /// The Drive list's (Final too now, the user: "put it into the drive menu"; Limit after
-    /// Wisdom, as in KH2's list).
-    pub const ALL: [Kind; 4] = [Kind::Valor, Kind::Wisdom, Kind::Limit, Kind::Final];
+    /// Wisdom and Master after Limit, as in KH2's list).
+    pub const ALL: [Kind; 5] = [Kind::Valor, Kind::Wisdom, Kind::Limit, Kind::Master, Kind::Final];
     /// Every form (Anti too, the secret code's), in the enum's order (`code`).
-    const EVERY: [Kind; 5] = [Kind::Valor, Kind::Wisdom, Kind::Limit, Kind::Final, Kind::Anti];
+    const EVERY: [Kind; 6] = [Kind::Valor, Kind::Wisdom, Kind::Limit, Kind::Master, Kind::Final, Kind::Anti];
     pub fn name(self) -> &'static str {
         match self {
             Kind::Valor => "Valor Form",
             Kind::Wisdom => "Wisdom Form",
             Kind::Limit => "Limit Form",
+            Kind::Master => "Master Form",
             Kind::Final => "Final Form",
             Kind::Anti => "Anti Form",
         }
@@ -160,13 +177,19 @@ impl Kind {
             Kind::Valor => kh2.valor.as_ref(),
             Kind::Wisdom => kh2.wisdom.as_ref(),
             Kind::Limit => kh2.limit.as_ref(),
+            Kind::Master => kh2.master.as_ref(),
             Kind::Final => kh2.final_form.as_ref(),
             Kind::Anti => kh2.anti.as_ref(),
         }
     }
-    /// With a second Keyblade (Valor's slot's).
+    /// With a second Keyblade (its form slot's: Valor's, Master's, Final's).
     pub fn two_blades(self) -> bool {
-        matches!(self, Kind::Valor | Kind::Final)
+        matches!(self, Kind::Valor | Kind::Master | Kind::Final)
+    }
+    /// Its second Keyblade floats away from his hand (Master's left one, both of Final's), placed
+    /// by KH2's blade bone (`leftblade::note_pose`).
+    pub fn floats(self) -> bool {
+        matches!(self, Kind::Master | Kind::Final)
     }
     /// KH2's magic sub offset in the form (`docs/drive-model.md`: + 10 in Wisdom, + 30 in Final;
     /// 03system `magi` and the spells' ATKP rows have subs 30..35 for Final), for a form that casts
@@ -176,10 +199,13 @@ impl Kind {
     /// magic, and bring it to final form, with final form's animations". KH2 has no spell files
     /// of Final's own: MAGC's rows are the same as Sora's, and the form's moveset gives the
     /// motions under its ids, `P_EX100_ULTF`'s E36x / E37x.)
+    /// (Master, + 20: the same rules on its own casts, `P_EX100_TRIF`'s D370..D374, with both its
+    /// Keyblades' hits in them.)
     pub fn magic_sub(self) -> Option<i32> {
         match self {
             Kind::Valor | Kind::Limit | Kind::Anti => None,
             Kind::Wisdom => Some(10),
+            Kind::Master => Some(20),
             Kind::Final => Some(30),
         }
     }
@@ -229,9 +255,19 @@ pub fn in_limit() -> bool {
     current() == Some(Kind::Limit)
 }
 
+/// In Master Form.
+pub fn in_master() -> bool {
+    current() == Some(Kind::Master)
+}
+
 /// In Final Form.
 pub fn in_final() -> bool {
     current() == Some(Kind::Final)
+}
+
+/// In a form whose second Keyblade floats (Master, Final: `Kind::floats`).
+pub fn floating_blade() -> bool {
+    current().is_some_and(Kind::floats)
 }
 
 /// In Anti Form (no magic, items, summons or specials, no Revert; 1.5 times the damage).
@@ -246,7 +282,7 @@ pub fn casting_form() -> Option<Kind> {
     current().filter(|k| k.magic_sub().is_some())
 }
 
-/// In a form with a second Keyblade (Valor, Final).
+/// In a form with a second Keyblade (Valor, Master, Final).
 pub fn two_blades() -> bool {
     current().is_some_and(|k| k.two_blades())
 }
@@ -382,6 +418,8 @@ const SECOND_FORM_LEVEL: u8 = 98;
 const FINAL_LEVEL: u8 = 99;
 /// Limit Form's level (the user: unlocked "at level 97", by the same level check).
 pub const LIMIT_LEVEL: u8 = 97;
+/// Master Form's level (the user: level 97, the same as Limit Form, by the same level check).
+pub const MASTER_LEVEL: u8 = 97;
 
 /// The form is open to Sora (the Drive list's; Anti is the code's, always). The user: "if the
 /// player picked the sword or the shield as their main power in the beginning of the game, have
@@ -400,6 +438,7 @@ pub unsafe fn unlocked(kind: Kind) -> bool {
     let open = match kind {
         Kind::Anti => true,
         Kind::Limit => level >= LIMIT_LEVEL,
+        Kind::Master => level >= MASTER_LEVEL,
         Kind::Final => level >= FINAL_LEVEL,
         k if k == first => guard_armor || level >= SECOND_FORM_LEVEL,
         _ => level >= SECOND_FORM_LEVEL,
@@ -416,7 +455,8 @@ pub unsafe fn unlocked(kind: Kind) -> bool {
 unsafe fn own_needs(kind: Kind) -> Result<(), String> {
     match kind {
         Kind::Valor => super::valor::keyblade().map(|_| ()).ok_or_else(|| "no Keyblade for the second hand (one Sora owns that isn't equipped)".into()),
-        Kind::Wisdom | Kind::Limit | Kind::Final | Kind::Anti => Ok(()),
+        // (Master and Final fall back to the Kingdom Key: never refused.)
+        Kind::Wisdom | Kind::Limit | Kind::Master | Kind::Final | Kind::Anti => Ok(()),
     }
 }
 
@@ -520,7 +560,11 @@ const GROWTH_MAX: u8 = 4;
 fn form_abilities(sora: &Abilities, form: &Character, kind: Kind) -> Abilities {
     let mut a = Abilities {
         // (Never in Anti Form: the user, "you shouldnt be able to guard in anti form".)
-        guard: kind != Kind::Anti && form.moveset.clips.contains_key(&character_core::motion::GUARD),
+        // (Only with a guard window in its motion 42: Master's 42 is its repel's clip, D350, as its
+        // 41 and 43, with none in its body's or either Keyblade's set, so KH2's Master has no
+        // guard. Valor's and Limit's have one, ATKP 162; Wisdom and Final have no 42.)
+        guard: kind != Kind::Anti
+            && form.moveset.clips.get(&character_core::motion::GUARD).is_some_and(|c| c.windows.iter().any(|w| matches!(w.kind, character_core::WindowKind::Guard { .. }))),
         // (Sora's Aerial Recovery in the form, with its own recovery motion: the user, Wisdom and
         // Valor were "missing aerial recovery".)
         aerial_recovery: sora.aerial_recovery && form.moveset.clips.contains_key(&character_core::motion::AIR_RECOVERY),
@@ -530,12 +574,12 @@ fn form_abilities(sora: &Abilities, form: &Character, kind: Kind) -> Abilities {
         negative_combo: sora.negative_combo,
         combo_master: sora.combo_master,
         one_swing_on_miss: sora.one_swing_on_miss,
-        // Each form's growth ability (Valor High Jump, Wisdom Quick Run, Limit Dodge Roll, Final
-        // Glide) one level above base Sora's, MAX at most (`growth_up`). Anti has none (00battle `fmlv`'s Anti
+        // Each form's growth ability (Valor High Jump, Wisdom Quick Run, Limit Dodge Roll, Master
+        // Aerial Dodge, Final Glide) one level above base Sora's, MAX at most (`growth_up`). Anti has none (00battle `fmlv`'s Anti
         // rows give no ability at any level), so none of Sora's growth abilities either.
         high_jump: if kind == Kind::Valor { growth_up(sora.high_jump) } else { 0 },
         quick_run: if kind == Kind::Wisdom { growth_up(sora.quick_run) } else { 0 },
-        aerial_dodge: 0,
+        aerial_dodge: if kind == Kind::Master { growth_up(sora.aerial_dodge) } else { 0 },
         glide: if kind == Kind::Final { growth_up(sora.glide) } else { 0 },
         dodge_roll: if kind == Kind::Limit { growth_up(sora.dodge_roll) } else { 0 },
         ..sora.clone()
@@ -687,6 +731,7 @@ unsafe fn arrive(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
         Kind::Valor => ("High Jump", lv.0.high_jump, lv.1.high_jump),
         Kind::Wisdom => ("Quick Run", lv.0.quick_run, lv.1.quick_run),
         Kind::Limit => ("Dodge Roll", lv.0.dodge_roll, lv.1.dodge_roll),
+        Kind::Master => ("Aerial Dodge", lv.0.aerial_dodge, lv.1.aerial_dodge),
         Kind::Final => ("Glide", lv.0.glide, lv.1.glide),
         Kind::Anti => {
             log(&format!(
@@ -742,6 +787,7 @@ pub fn abilities(d: &mut Drive, ch: &mut Character) {
                 Kind::Valor => own.high_jump = growth_up(f.sora.high_jump),
                 Kind::Wisdom => own.quick_run = growth_up(f.sora.quick_run),
                 Kind::Limit => own.dodge_roll = growth_up(f.sora.dodge_roll),
+                Kind::Master => own.aerial_dodge = growth_up(f.sora.aerial_dodge),
                 Kind::Final => own.glide = growth_up(f.sora.glide),
                 // (No growth ability of its own.)
                 Kind::Anti => {}
@@ -774,6 +820,9 @@ pub unsafe fn after_step(d: &mut Drive, actor: usize, battle: bool) {
             // (KH1 Sora's outfit recoloured, the user: "change sora's outfit in limit form to
             // have his jumpsuit be black, his belt yellow, and his shoes black".)
             Kind::Limit => Some(super::tint::Look::Limit),
+            // (The user: "I want sora's jumpsuit to be yellow, and the inside of sora's jacket's
+            // hood be yellow as well instead of blue. I want soras belt to be black".)
+            Kind::Master => Some(super::tint::Look::Master),
             // (Shadow Sora's look, the user: "make sora look like shadow sora in this form".)
             Kind::Anti => Some(super::tint::Look::Anti),
         }),
@@ -781,15 +830,21 @@ pub unsafe fn after_step(d: &mut Drive, actor: usize, battle: bool) {
     // Valor's second Keyblade's Strength and MP (and back to Sora's own after).
     super::valorstats::step(actor);
     let Some(kind) = d.form.as_ref().map(|f| f.kind) else { return };
-    // (Valor, Final: its Keyblade checked every 10 frames, so a change made in the menu reaches
-    // his hand, `valor::keyblade` / `valor::final_keyblade`.)
+    // (Valor, Master, Final: its Keyblade checked every 10 frames, so a change made in the menu
+    // reaches his hand, `valor::keyblade` / `valor::master_keyblade` / `valor::final_keyblade`.)
     if kind.two_blades() {
         static TICK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         if TICK.fetch_add(1, Ordering::Relaxed) % 10 == 0 {
-            if kind == Kind::Final {
-                super::valor::final_keyblade();
-            } else {
-                super::valor::keyblade();
+            match kind {
+                Kind::Final => {
+                    super::valor::final_keyblade();
+                }
+                Kind::Master => {
+                    super::valor::master_keyblade();
+                }
+                _ => {
+                    super::valor::keyblade();
+                }
             }
         }
     }
@@ -841,12 +896,12 @@ pub fn takes(d: &Drive, e: &EventKind) -> bool {
     d.form.is_some() && matches!(e, EventKind::Effect(_))
 }
 
-/// A frame trigger 1 of the form's motion: Wisdom's shots, Valor's (Limit's, Final's, Anti's)
-/// own elements.
+/// A frame trigger 1 of the form's motion: Wisdom's shots, Valor's (Limit's, Master's, Final's,
+/// Anti's) own elements.
 pub fn effect(motion: u16, n: i16) {
     if in_wisdom() {
         super::formmagic::effect(n);
-    } else if in_valor() || in_limit() || in_final() || in_anti() {
+    } else if in_valor() || in_limit() || in_master() || in_final() || in_anti() {
         super::kh2fx::form_event(motion, n);
     }
 }

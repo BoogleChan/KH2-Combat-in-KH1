@@ -257,10 +257,26 @@ static FAKE_MATS_H: AtomicU32 = AtomicU32::new(0);
 static FAKE_FILLED: AtomicBool = AtomicBool::new(false);
 /// The left weapon's trail window is open (last KH2 step).
 static LEFT_OPEN: AtomicBool = AtomicBool::new(false);
-/// KH2's left weapon's trail ranges by motion id (the Valor moveset's left weapon motion set,
-/// trigger 12), read once.
+/// KH2's left weapon's trail ranges by motion id (each two-Keyblade form's own left weapon motion
+/// set, range 12), read once, by the form's moveset (`TRAIL_MOVESETS`). Valor's alone were read
+/// before, and Final's left trail opened and closed on Valor's frames for its motion ids (its
+/// 154 trails 11..124 of 280 frames, Valor's 37..95; its 183 four windows over 360 frames, Valor's
+/// one, 19..29), as Master's would have.
 type Windows = std::collections::HashMap<u16, Vec<(u32, Option<u32>)>>;
-static TRAIL_WINDOWS: std::sync::OnceLock<Windows> = std::sync::OnceLock::new();
+static TRAIL_WINDOWS: std::sync::OnceLock<std::collections::HashMap<usize, Windows>> = std::sync::OnceLock::new();
+/// The two-Keyblade forms' movesets (03system `wmst` row `moveset × 2 + 1` is the left weapon's)
+/// and their left sets' names if `wmst` can't be read.
+const TRAIL_MOVESETS: [(usize, &str); 3] = [(2, "W_EX010_BTLF_L"), (4, "W_EX010_TRIF_L"), (5, "W_EX010_ULTF_L")];
+
+/// The current form's moveset (its left trail windows), if it has two Keyblades.
+fn form_moveset() -> Option<usize> {
+    match super::form::current()? {
+        super::form::Kind::Valor => Some(2),
+        super::form::Kind::Master => Some(4),
+        super::form::Kind::Final => Some(5),
+        _ => None,
+    }
+}
 
 struct Trail {
     effect: usize,
@@ -576,8 +592,12 @@ unsafe extern "system" fn wpn_release(record: usize) -> u64 {
 /// - KH2's left Keyblade this frame (the rig's second weapon), if there is one;
 /// - the clip playing (`motion`, `frame`);
 /// - whether any of the clip's trail windows is open (`trail`, used if the left weapon's own
-///   ranges couldn't be read).
-pub fn kh2_left(bones: Option<&[Mat4]>, body: &[Mat4], motion: u16, frame: u32, trail: bool) {
+///   ranges couldn't be read);
+/// - whether he is in a move (`acting`: not standing, walking or running). Master's floating
+///   Keyblade has a trail window all through its idle, walk and run (`W_EX010_TRIF_L` 0..2) as
+///   KH2 draws its float; KH1's swing trail there would hang on him all the time, so the left
+///   trail is for moves only, as the right one is (its attack windows).
+pub fn kh2_left(bones: Option<&[Mat4]>, body: &[Mat4], motion: u16, frame: u32, trail: bool, acting: bool) {
     super::model::note_left(bones);
     if !INSTALLED.load(Ordering::Relaxed) {
         return;
@@ -591,7 +611,7 @@ pub fn kh2_left(bones: Option<&[Mat4]>, body: &[Mat4], motion: u16, frame: u32, 
             }
         }
     }
-    unsafe { trail_step(valor, motion, frame, trail) };
+    unsafe { trail_step(valor, motion, frame, trail, acting) };
 }
 
 /// Base Sora's Keyblade root relative to his KH2 right hand bone in his idle (held), once.
@@ -723,9 +743,12 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
     if let Ok(mut w) = TO_WORLD.try_lock() {
         *w = Some(*to_world);
     }
-    // Which KH2 weapon bone the two are matched by: the root (Valor's, held), or in Final Form the
-    // blade, whose spin its weapon motions carry (the right one was floated by it, `final_float`).
-    let pick = |w: &[Mat4]| if super::form::in_final() { kh2_blade(w) } else { w.first().copied() };
+    // Which KH2 weapon bone the two are matched by: the root (Valor's, held), or in Final and
+    // Master Form the blade, whose turn its weapon motions carry (Final's right one was floated by
+    // it, `final_float`; Master's right one is held, 6..9 units from the hand in every motion).
+    let floats = super::form::floating_blade();
+    let master = super::form::in_master();
+    let pick = |w: &[Mat4]| if floats { kh2_blade(w) } else { w.first().copied() };
     // KH2's left Keyblade of the step whose body this is (else the latest).
     let Some(left) = KH2_LEFT.try_lock().ok().and_then(|g| {
         let fresh = |t: &Instant| t.elapsed().as_secs_f32() < 0.15;
@@ -733,9 +756,10 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
         g.iter().rev().find(|(r, _, t)| *r == sig && fresh(t)).or_else(|| g.back().filter(|(_, _, t)| fresh(t))).and_then(|(_, b, _)| pick(b))
     }) else { return };
     let Some(right) = pick(kh2_right) else { return };
-    let Some(rig) = super::pose::kh2().and_then(|k| k.valor.as_ref()).map(|f| f.rig.clone()) else { return };
+    // (The form's own rig: the same skeleton and hand bones in every form, 178 and 86.)
+    let Some(rig) = super::pose::kh2().and_then(|k| super::form::current().and_then(|f| f.data(k)).or(k.valor.as_ref())).map(|f| f.rig.clone()) else { return };
     let (Some(sr), Some(sl)) = (rig.weapons.first().and_then(|w| w.bone), rig.weapons.get(1).and_then(|w| w.bone)) else {
-        log_n(&N, 5, || "the Valor rig has no second weapon bone".into());
+        log_n(&N, 5, || "the form's rig has no second weapon bone".into());
         return;
     };
     if kh1.len() < SORA_BONES || kh1_bind.len() < SORA_BONES || kh2_body.len() <= sr.max(sl) || kh2_right.is_empty() {
@@ -763,16 +787,36 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
     // banked glide turn (206, 207) KH2 puts both on one side of him, about 35 units
     // apart, the left one 115 units from its hand across his body: the two hands' differences
     // there came to the 35 units, and the left landed on the right.
-    let hand = if super::form::in_final() { RIGHT_HAND } else { LEFT_HAND };
-    let left_blade = if hand == RIGHT_HAND {
-        kh1[RIGHT_HAND] * offset(RIGHT_HAND, sr) * rel(sr, left)
+    //
+    // Master Form's second Keyblade floats by his left hand, "held by magic" (KH2's
+    // `W_EX010_TRIF_L`: 22..123 units from the left hand while it floats, 8 when he holds it in
+    // the jump, the fall, the landing, the run and Aerial Dodge; the right one is always in his
+    // hand). Floating, it hangs from the right hand as Final's does (s282: the left hand's wobble
+    // over a long float); held, from the left hand, so it stays in his grip; in between, the two
+    // blended by how far KH2 has it from its left hand (`MASTER_HELD`, `MASTER_FLOAT`).
+    let via_right = || kh1[RIGHT_HAND] * offset(RIGHT_HAND, sr) * rel(sr, left);
+    let via_left = || kh1[LEFT_HAND] * offset(LEFT_HAND, sl) * rel(sl, left);
+    let (hand, left_blade) = if super::form::in_final() {
+        (RIGHT_HAND, via_right())
+    } else if master {
+        let d = (kh2_body[sl].inverse() * left).w_axis.truncate().length();
+        let w = ((d - MASTER_HELD) / (MASTER_FLOAT - MASTER_HELD)).clamp(0.0, 1.0);
+        let w = w * w * (3.0 - 2.0 * w);
+        let m = if w <= 0.0 {
+            via_left()
+        } else if w >= 1.0 {
+            via_right()
+        } else {
+            blend(via_left(), via_right(), w)
+        };
+        (if w < 0.5 { LEFT_HAND } else { RIGHT_HAND }, m)
     } else {
-        kh1[LEFT_HAND] * offset(LEFT_HAND, sl) * rel(sl, left)
+        (LEFT_HAND, via_left())
     };
     let grip = left_blade * turn;
     let from_hand = (grip.w_axis - kh1[hand].w_axis).truncate().length();
-    // (Final Form's floats away from his hand.)
-    let reach = if super::form::in_final() { 400.0 } else { 40.0 };
+    // (Final's and Master's float away from his hand.)
+    let reach = if floats { 400.0 } else { 40.0 };
     if !grip.is_finite() || from_hand > reach {
         log_n(&N, 5, || format!("left grip {from_hand:.0} units from the hand it hangs from: not drawn this frame"));
         return;
@@ -783,12 +827,50 @@ pub fn note_pose(kh1: &[Mat4], kh1_bind: &[Mat4], kh2_body: &[Mat4], kh2_right: 
         *m = grip * inv_grip * kh1[GRIP + i];
     }
     log_n(&N, 3, || format!("left grip posed, {from_hand:.1} units from the {} hand", if hand == RIGHT_HAND { "right" } else { "left" }));
-    // (Final's left blade bone as drawn, for the effects on its weapon anchor.)
-    if super::form::in_final() {
+    // (Final's and Master's blade bones as drawn, for the effects on their weapon anchors; Master's
+    // right one is KH2's on KH1's right hand, where KH1's held grip is.)
+    if floats {
         note_final_blade(true, *to_world * unit(left_blade));
+    }
+    if master {
+        note_final_blade(false, *to_world * unit(right_root));
     }
     if let Ok(mut g) = LEFT.try_lock() {
         *g = Some((out, super::takeover::GAME_FRAME.load(Ordering::Relaxed)));
+    }
+    // The trail's owner from this pose at once: Sora's world matrices were just written from it
+    // (`pose`), and KH1's own trail reads his from there. Filled only at the left Keyblade's draw
+    // (as before), the owner could be a frame behind his own whenever KH1's trail follower ran
+    // between the pose and the draw, so a fast floating blade's ribbon trailed it.
+    if TRAIL_HOOKED.load(Ordering::Relaxed) {
+        // (Safe here: the pose pass runs on the game thread, as the draw does.)
+        unsafe {
+            fill_owner();
+        }
+    }
+}
+
+/// Master Form's second Keyblade: KH2's blade this close to its left hand or closer is held there
+/// (8 in its held motions), this far or farther floats (22 at its nearest float). KH2 units.
+const MASTER_HELD: f32 = 12.0;
+const MASTER_FLOAT: f32 = 22.0;
+
+/// `a` toward `b` by `t`: place, turn and scale each (the hands' frames can be scaled). Two
+/// frames of opposite handedness (a mirrored hand) aren't blended: the nearer is taken.
+fn blend(a: Mat4, b: Mat4, t: f32) -> Mat4 {
+    let det = |m: &Mat4| glam::Mat3::from_mat4(*m).determinant();
+    if det(&a) * det(&b) <= 0.0 {
+        return if t < 0.5 { a } else { b };
+    }
+    let (sa, ra, pa) = a.to_scale_rotation_translation();
+    let (sb, rb, pb) = b.to_scale_rotation_translation();
+    let m = Mat4::from_scale_rotation_translation(sa.lerp(sb, t), ra.slerp(rb, t), pa.lerp(pb, t));
+    if m.is_finite() {
+        m
+    } else if t < 0.5 {
+        a
+    } else {
+        b
     }
 }
 
@@ -911,40 +993,46 @@ unsafe extern "system" fn trail_start(actor: usize, id: u32) {
     f(actor, id);
 }
 
-/// KH2's left weapon's trail ranges, from the KH2 install (as `pose::load_kh2` finds it).
+/// KH2's left weapons' trail ranges, from the KH2 install (as `pose::load_kh2` finds it), for each
+/// two-Keyblade form.
 fn load_trail_windows() {
-    let r = (|| -> Result<(String, Windows), String> {
+    let r = (|| -> Result<std::collections::HashMap<usize, Windows>, String> {
         let exe = format!("{}\\KINGDOM HEARTS II FINAL MIX.exe", super::exe_dir());
         let install = kh2_data::Install::locate(&exe).map_err(|e| format!("KH2 install: {e}"))?;
         let source = if install.has_backup() { kh2_data::Source::Backup } else { kh2_data::Source::Live };
-        // Valor's moveset (2): its left weapon's motion set name in 03system's `wmst`.
-        let name = install
-            .read_any(source, "03system.bin")
-            .ok()
-            .and_then(|b| kh2_formats::objentry::parse_wmst(&b).ok())
-            .and_then(|n| n.get(2 * 2 + 1).filter(|s| !s.is_empty()).cloned())
-            .unwrap_or_else(|| "W_EX010_BTLF_L".into());
-        let bytes = install.read_any(source, &format!("obj/{name}.mset")).map_err(|e| format!("{name}.mset: {e}"))?;
-        let mset = kh2_formats::motion::Mset::parse(&bytes).map_err(|e| format!("{name}.mset: {e}"))?;
-        let mut out = Windows::new();
-        for m in 0..=255u16 {
-            let Some(anb) = mset.slot_for(m as usize, true, true).and_then(|s| s.anb.as_ref()) else { continue };
-            let w: Vec<(u32, Option<u32>)> = anb
-                .triggers
-                .ranges
-                .iter()
-                .filter(|r| r.id == kh2_formats::motion::range_id::WEAPON_TRAIL)
-                .map(|r| (r.start.max(0) as u32, (r.end >= 0).then_some(r.end as u32)))
-                .collect();
-            if !w.is_empty() {
-                out.insert(m, w);
+        let wmst = install.read_any(source, "03system.bin").ok().and_then(|b| kh2_formats::objentry::parse_wmst(&b).ok());
+        let mut all = std::collections::HashMap::new();
+        for (moveset, fallback) in TRAIL_MOVESETS {
+            // The form's left weapon's motion set name in 03system's `wmst`.
+            let name = wmst.as_ref().and_then(|n| n.get(moveset * 2 + 1).filter(|s| !s.is_empty()).cloned()).unwrap_or_else(|| fallback.into());
+            let mset = match install.read_any(source, &format!("obj/{name}.mset")).map_err(|e| e.to_string()).and_then(|b| kh2_formats::motion::Mset::parse(&b).map_err(|e| e.to_string())) {
+                Ok(m) => m,
+                Err(e) => {
+                    log(&format!("left Keyblade: trail windows of {name} not read ({e}); KH2's trail windows of either hand used there"));
+                    continue;
+                }
+            };
+            let mut out = Windows::new();
+            for m in 0..=255u16 {
+                let Some(anb) = mset.slot_for(m as usize, true, true).and_then(|s| s.anb.as_ref()) else { continue };
+                let w: Vec<(u32, Option<u32>)> = anb
+                    .triggers
+                    .ranges
+                    .iter()
+                    .filter(|r| r.id == kh2_formats::motion::range_id::WEAPON_TRAIL)
+                    .map(|r| (r.start.max(0) as u32, (r.end >= 0).then_some(r.end as u32)))
+                    .collect();
+                if !w.is_empty() {
+                    out.insert(m, w);
+                }
             }
+            log(&format!("left Keyblade: trail windows of {name} (moveset {moveset}) for {} motions", out.len()));
+            all.insert(moveset, out);
         }
-        Ok((name, out))
+        Ok(all)
     })();
     match r {
-        Ok((name, w)) => {
-            log(&format!("left Keyblade: trail windows of {name} for {} motions", w.len()));
+        Ok(w) => {
             let _ = TRAIL_WINDOWS.set(w);
         }
         Err(e) => log(&format!("left Keyblade: trail windows not read ({e}); KH2's trail windows of either hand used")),
@@ -1082,9 +1170,10 @@ unsafe fn trail_report(effect: usize) -> String {
     format!("effect at {at}, left grip {grip}, left last bone {tip}, state {:#x}", rd::<u32>(effect + FX_STATE))
 }
 
-/// Whether the left weapon's trail is on at this frame of this motion.
+/// Whether the left weapon's trail is on at this frame of this motion (the current form's own
+/// left weapon's windows).
 fn left_window(motion: u16, frame: u32, either: bool) -> bool {
-    match TRAIL_WINDOWS.get() {
+    match TRAIL_WINDOWS.get().and_then(|all| all.get(&form_moveset()?)) {
         Some(w) => w.get(&motion).is_some_and(|v| v.iter().any(|&(s, e)| frame >= s && e.map_or(true, |e| frame < e))),
         None => either,
     }
@@ -1103,7 +1192,7 @@ unsafe fn trail_alive(effect: usize, fake: usize) -> bool {
 /// - made as the left weapon's trail window opens;
 /// - told to end (its end byte) as it closes;
 /// - ended at once out of Valor.
-unsafe fn trail_step(valor: bool, motion: u16, frame: u32, either: bool) {
+unsafe fn trail_step(valor: bool, motion: u16, frame: u32, either: bool, acting: bool) {
     static N: AtomicU32 = AtomicU32::new(0);
     if !TRAIL_HOOKED.load(Ordering::Relaxed) {
         return;
@@ -1112,7 +1201,7 @@ unsafe fn trail_step(valor: bool, motion: u16, frame: u32, either: bool) {
     let fake = FAKE.load(Ordering::Relaxed);
     let Ok(mut g) = TRAILS.try_lock() else { return };
     let (trails, was_open) = &mut *g;
-    let open = valor && left_window(motion, frame, either);
+    let open = valor && acting && left_window(motion, frame, either);
 
     // Those that ended, or aren't ours any more, are forgotten; out of Valor, ended.
     static R: AtomicU32 = AtomicU32::new(0);

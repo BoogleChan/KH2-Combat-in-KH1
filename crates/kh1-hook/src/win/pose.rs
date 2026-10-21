@@ -182,6 +182,8 @@ pub struct Kh2 {
     pub valor: Option<Form>,
     /// Limit Form (`form`: `P_EX100_KH1F`, moveset 0x42, one Keyblade).
     pub limit: Option<Form>,
+    /// Master Form (`form`: `P_EX100_TRIF`, moveset 4, two Keyblades, the left one floating).
+    pub master: Option<Form>,
     /// Final Form (`form`, stage 231: `P_EX100_ULTF`, its floating Keyblades).
     pub final_form: Option<Form>,
     /// Anti Form (`form`, the secret code's: `P_EX100_HTLF`, no Keyblade).
@@ -662,6 +664,35 @@ pub fn load_kh2() {
             } else {
                 None
             };
+            // Master Form (the user: "lets take the rules and procedures we've done for wisdom form
+            // and valor form, and lets make master form"): its own moveset (4), motions, combo rows,
+            // movement numbers, magic casts and effect archive, the same skeleton as Sora's, two
+            // Keyblades (`W_EX010_TRIF_R` in his right hand, `_L` floating by his left).
+            let master = if super::settings::get().drive {
+                let t = Instant::now();
+                match load_form(&install, source, kh2_data::sora::FORMS[3], rig.skeleton.len()) {
+                    Ok(f) => {
+                        log(&format!(
+                            "KH2 Master Form loaded: {} motions, {} combo rows, {} weapons (on bones {:?}), run {}, aerial dodge motion {}, effects {}, in {:.1}s",
+                            f.rig.motions.len(),
+                            f.character.moveset.combo_rows.len(),
+                            f.rig.weapons.len(),
+                            f.rig.weapons.iter().map(|w| w.bone).collect::<Vec<_>>(),
+                            f.character.params.run_speed,
+                            if f.character.moveset.clips.contains_key(&character_core::motion::AERIAL_DODGE) { "yes" } else { "none" },
+                            if f.archive.is_some() { "read" } else { "missing" },
+                            t.elapsed().as_secs_f32()
+                        ));
+                        Some(f)
+                    }
+                    Err(e) => {
+                        log(&format!("KH2 Master Form did not load: {e}"));
+                        None
+                    }
+                }
+            } else {
+                None
+            };
             let final_form = if super::settings::get().drive {
                 let t = Instant::now();
                 match load_form(&install, source, kh2_data::sora::FORMS[4], rig.skeleton.len()) {
@@ -712,12 +743,12 @@ pub fn load_kh2() {
             } else {
                 None
             };
-            for (name, f) in [("Valor", &valor), ("Wisdom", &wisdom), ("Limit", &limit), ("Final", &final_form), ("Anti", &anti)] {
+            for (name, f) in [("Valor", &valor), ("Wisdom", &wisdom), ("Limit", &limit), ("Master", &master), ("Final", &final_form), ("Anti", &anti)] {
                 if let Some(f) = f {
                     log_shape_groups(name, &f.rig, &f.character.moveset);
                 }
             }
-            Ok(Kh2 { rig, character: sora.character.clone(), battle: Arc::new(sora.combat.battle.clone()), magi: sora.magi.clone(), wisdom, valor, limit, final_form, anti, roots, ground })
+            Ok(Kh2 { rig, character: sora.character.clone(), battle: Arc::new(sora.combat.battle.clone()), magi: sora.magi.clone(), wisdom, valor, limit, master, final_form, anti, roots, ground })
         })();
         if let Err(e) = &r {
             log(&format!("KH2 Sora did not load: {e}"));

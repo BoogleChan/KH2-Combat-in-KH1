@@ -3467,3 +3467,20 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - Shortcuts in Limit Form: KH2 FM's fixed table (slot k: Sonic Rave, Last Arcanum, Strike Raid,
   Infinity, read from KH2's exe) as KH1's (`limits::SHORTCUT_LIMITS`).
   (Version s298 is the testing branch's.)
+
+### 2026-10-21: Stage 300 (Master Form)
+- The user: "take the rules and procedures we've done for wisdom form and valor form, and lets
+  make master form", 2 MP, unlocked at level 97. `form::Kind::Master` (`P_EX100_TRIF`, moveset 4):
+  KH2's moves, combos (finishers 183, 184), Aerial Dodge one level above Sora's, Wisdom's magic
+  rules on its own casts, its effects; the form rules (drain, 2 bars, reverts, no KH1 limits,
+  talk / examine). Drive list Valor, Wisdom, Limit, Master, Final. A form guards only if its
+  motion 42 has a guard window (Master has none).
+- Its second Keyblade (`W_EX010_TRIF_L`) floats as Final's (in the hand in jump / fall / run /
+  Aerial Dodge); an "M:" equipment row at `save + 0x48B` (`MASTER_OFF`, verified free on main;
+  the copy counting covers all three slots). NOTE: the testing branch's ability-split mark is a
+  u16 at +0x48A, overlapping 0x48B: shrink it to a u8 before testing is ever merged with main.
+- Look (`tint::Look::Master`): yellow jumpsuit and collar, the hood's lining the bright yellow,
+  black belt.
+- The user: "his secondary keyblade's trail actually follows the keyblade": the left trail used
+  Valor's timings in every form and lagged a frame; now each form's own left-blade timings,
+  refreshed right after the blade is posed, and only during moves.

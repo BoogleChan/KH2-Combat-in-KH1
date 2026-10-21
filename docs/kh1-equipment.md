@@ -349,6 +349,21 @@ The plan above, with these changes once the code was read closer:
   - The compare box needs nothing new: the second Keyblade adds alike in both forms, and the
     box's "now" is worked out from the row's Keyblade (`0x142E9AA5C`, set from the row picked).
 
+- **Master Form's row** (the user: "lets take the rules and procedures we've done for wisdom form
+  and valor form, and lets make master form"). A third form row, "M: <Keyblade>", shown once
+  Master is unlocked (level 97, `form::MASTER_LEVEL`). The rows go in KH2's order, as the Drive
+  list: Valor's ("V: "), Master's ("M: "), then Final's ("F: "). Master's Keyblade is kept at
+  `save + 0x48B` (`equip::MASTER_OFF`, section 5) and follows Final's rules: the same Keyblades to
+  choose from, and the Kingdom Key when the slot holds none, so Master is never refused
+  (`valor::master_keyblade`, `equip::master_keyblade`, `master_stored`).
+  - The row stub now reads three status bytes (rows 1..3), and rows past 3 go the accessory way.
+    It is 118 bytes, so the memory near the game is laid out again (the name stub at `+0xC0`, the
+    cells at `+0xE0..`, the shadow record at `+0x100`). Its jumps were checked by disassembling the
+    bytes.
+  - One label buffer per form (three), and the row-to-form map has three entries.
+  - Master's Keyblade's Strength and MP count while he is Master, as Valor's and Final's
+    (`valorstats::bonus`). The compare box needs nothing new.
+
 ### The form slots hold their copies
 
 The user: "When you put a keyblade in any of the drive equipment slots (for example, selecting the
@@ -391,6 +406,15 @@ Keyblade is in use like an equipped one (`equip::form_held`):
   hovered Keyblade in Sora's weapon byte and the copies can't be counted then.
 - The compare box and the stats are unchanged: they read the slots and Sora's own weapon, not
   the free copies.
+- **Master's slot** (the third) counts the same way, last: it holds its Keyblade when Master is
+  unlocked and a copy is left after the members', Valor's slot's and Final's slot's
+  (`master_may_hold`, `master_held`). Valor's and Final's slots don't count Master's against
+  themselves, so older saves keep exactly what they held. Each slot's list leaves out the other
+  two slots' copies (`valor_candidates`, `final_candidates`, `master_candidates`), and
+  `form_held` (Sora's list, KH1's free count) counts all three. Master's Kingdom Key fallback
+  holds no copy (its slot emptied, as Final's). Unlike Final's, a byte there that isn't a
+  Keyblade at all is left as it is and only read past, because the testing branch keeps a mark
+  over that byte (section 5).
 
 Log lines (`kh1-kh2.log`, all start with "Equipment:"): the install, "form rows [Valor ..
 (candidates ..), Final .. (candidates ..)]" on change, "Sora's slots N rows", "Valor row picked",
@@ -433,8 +457,13 @@ To test in the game:
     count is one lower.
 13. An old save with the same single copy in both slots: the V row keeps it, the F row shows the
     Kingdom Key, and the log has "Final's Keyblade: .. its copy is Valor's".
+14. Master unlocked (level 97): an "M: <Keyblade>" row between the V and F rows (the Kingdom Key
+    on a save that never set it). Pick one: it is stored for Master, and the V and F rows' lists
+    and Sora's row 0 no longer offer it (one copy). Enter Master: that Keyblade floating by his
+    left hand, its Strength and MP in the Status page. With all three rows up and 8 accessory
+    slots (12 rows): scrolling, the last accessory, the help line on each row.
 
-## 5. Spare save bytes for the Valor and Final Keyblades
+## 5. Spare save bytes for the Valor, Final and Master Keyblades
 
 **`save + 0x488`** (and the three bytes after it):
 
@@ -465,6 +494,27 @@ same spare four:
   else the Kingdom Key (`equip::final_keyblade`); `valor::final_keyblade` empties the slot (0)
   for the fallback (section 4, "The form slots hold their copies").
 - `+0x48A / +0x48B` stay free.
+
+**`save + 0x48B`**: Master Form's Keyblade (`equip::MASTER_OFF`), the last of the same spare four:
+
+- Checked again for this (the Epic exe's objdump, every instruction): no displacement `0x48A` or
+  `0x48B` from any base, and no rip-relative access to the static save copy's `0x142DEA1EA` /
+  `0x142DEA1EB`. The wide stores at `+0x480` / `+0x488` that would cover it (qwords at
+  `0x14006E395`, `0x14008E06B`, `0x140097371`, `0x1400EBF8D`, `0x1400EDCA3`, `0x140105C4B`,
+  `0x140140E46`, `0x1402F0F95`; a dword at `0x14039D24D`) are all object constructors and
+  structures of other kinds (a vtable at `+0`, fields at `+0x478..+0x494`), not the save, as
+  found for `+0x488`. New game writes nothing there. (medium-high, as for `+0x488`.)
+- Checked on every read: a Keyblade Sora owns with a copy no member, not Valor's slot and not
+  Final's holds, else the Kingdom Key (`equip::master_keyblade`).
+- **The testing branch overlaps it.** Testing's ability-split mark (`growth::LAYOUT_OFF`) is a
+  **u16 at `+0x48A`** (`LAYOUT_SPLIT` 0x4B02), so it covers `+0x48A` and `+0x48B`: a save that has
+  been through testing holds 0x4B at `+0x48B`. 0x4B is no Keyblade, so main's checked read falls
+  back to the Kingdom Key and leaves the byte alone (`valor::master_keyblade` empties only a
+  Keyblade byte). Picking a Keyblade in the "M:" row on main writes the byte, and testing would
+  then read its mark as missing. **Before testing is ever merged with main's Master slot,
+  testing's mark has to shrink to a u8 at `+0x48A`.**
+- With this, all four spare bytes `+0x488..+0x48B` are used (main: Valor, Final, Master;
+  testing: `+0x48A`).
 
 Not usable: `+0x840..0x843` (a u32 KH1 sets to 1), `+0x848..` (a u16 array of counters indexed
 from `+0x848`), `+0x37..+0x3B` of Sora's record (no direct use found, but the record has uses

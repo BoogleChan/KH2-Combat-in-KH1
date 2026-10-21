@@ -90,7 +90,14 @@ pub unsafe fn bonus() -> Option<(u8, i32, i32)> {
     }
     let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
     let save = super::menu::save_block(base)?;
-    let item = if super::form::in_final() { super::equip::final_stored(base) } else { rd::<u8>(save + super::equip::VALOR_OFF) };
+    let item = if super::form::in_final() {
+        super::equip::final_stored(base)
+    } else if super::form::in_master() {
+        // (Master's slot, kept by `valor::master_keyblade`, the Kingdom Key when it holds none.)
+        super::equip::master_stored(base)
+    } else {
+        rd::<u8>(save + super::equip::VALOR_OFF)
+    };
     if item == 0 || !super::equip::is_keyblade(base, item) {
         return None;
     }

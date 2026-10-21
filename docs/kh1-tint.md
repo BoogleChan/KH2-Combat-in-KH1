@@ -163,6 +163,8 @@ look, KH1's own texture back out of the form:
 - **Wisdom** (blue): the reds of `-1c0` / `-1c1` (hue shift to 225°), the shoes' yellow of `-1c3`,
   and the jacket's sleeves.
 - **Valor** (red): the sleeves, the belt, the hood's lining, the shoes' yellow.
+- **Master** (yellow and black): the jumpsuit, the collar and the hood lining yellow, the belt black
+  ("Master Form's look" below).
 - **Limit**: none. KH2's Limit Form (`P_EX100_KH1F`) is KH2's model of KH1 Sora, and the model
   drawn here is KH1's own, so his textures stay KH1's (`form::after_step` passes no look).
 
@@ -389,3 +391,28 @@ parts found`). Checked on the user's files in a numpy preview and a software ren
 pose: the jacket and the hood's inside black, the chain, crown, zipper and its rail silver, the
 belt yellow. Blue still left on triangles of slot 1 is all the belt's (s293's `BELT` rect
 leaves its less saturated rim and the strap end by the buckle, u 0.67–0.77, v 0.0–0.07).
+
+## Master Form's look
+
+The user: "I want sora's jumpsuit to be yellow, and the inside of sora's jacket's hood be yellow as
+well instead of blue. I want soras belt to be black". `Look::Master` on KH1 Sora's own textures:
+
+- `-1c1`'s belt (`BELT`): the blue black first (`Op::Grey`, brightness 0.04..0.2, as Final's
+  belt), so the passes after leave it.
+- `-1c1`'s hood lining (`HOOD_LINING`): the blue painted yellow (`Op::Paint`, Limit's belt
+  yellow: hue 45, saturation 0.85, brightness 0.55 + 0.45 × v, the bright yellow near the
+  shoes'). A plain hue shift of the dark blue comes out olive.
+- `-1c1`'s reds (the jumpsuit, its top and shorts): the same yellow, the folds kept by the
+  brightness. A lower floor (0.2) was tried for the dark folds and gave a mustard jumpsuit, so the
+  one yellow stays everywhere.
+- `-1c0`: only the collar's red strip (`COLLAR`, u 0..0.025, v 0.34..0.70: the texture's one
+  large red run, 3460 texels at u 0..0.018, v 0.35..0.69), in the same yellow. `-1c0`'s other red
+  is an oval on the shoe piece (u 0.40..0.49, v 0.63..0.70, 5233 texels), which the other looks'
+  red passes recolour too. It is left out here: the user asked for no change to the shoes.
+- `-1c3` (shoes), the sleeves, the jacket and its blue trim outside the lining: unchanged.
+
+Checked on the user's files (`xa_ex_0010.mdls`'s `-1c0` / `-1c1`) in a numpy copy of the ops and a
+software render of the bind pose (the helper's `/home/claude/logs/master-look/`, outside the repo):
+the jumpsuit and collar yellow, the hood's lining yellow at the neck front and back, the belt
+black, the shoes as KH1's. Left: a few texels of dark red that are too unsaturated for the pass
+(saturation under 0.55) inside the shorts' leg hole, now brown-yellow specks, seen only from below.

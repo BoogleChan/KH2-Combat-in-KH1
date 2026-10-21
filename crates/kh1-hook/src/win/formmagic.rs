@@ -22,6 +22,9 @@
 //!   Final's own), its moveset's motions under their ids (`P_EX100_ULTF`'s E36x / E37x), at its
 //!   magic sub (+ 30, `form::Kind::magic_sub`). No shots: Final's frame triggers 1 are its own
 //!   elements (`kh2fx::form_event`).
+//! - Master Form casts the same way too (the user: "lets take the rules and procedures we've done
+//!   for wisdom form"): its own casts under the MAGC ids (`P_EX100_TRIF`'s D370..D374, one clip
+//!   for the ground, the finisher and the air, both its Keyblades' hits in them), at its sub (+ 20).
 
 use super::reflect::{flip, world_now, KhWorld, SORA};
 use super::{combat, log, pose};
@@ -52,6 +55,7 @@ pub static BASE_KH1_CAST: AtomicBool = AtomicBool::new(false);
 fn who() -> &'static str {
     match super::form::casting_form() {
         Some(super::form::Kind::Wisdom) => "Wisdom",
+        Some(super::form::Kind::Master) => "Master",
         Some(super::form::Kind::Final) => "Final",
         _ => "KH2 magic",
     }
@@ -142,6 +146,10 @@ pub fn element_sounds(kh2: &pose::Kh2) -> Vec<(u8, u16, i32)> {
     // (Limit Form's.)
     if let Some(a) = kh2.limit.as_ref().and_then(|f| f.archive.as_ref()) {
         add(super::kh2fx::LIMIT, a);
+    }
+    // (Master Form's.)
+    if let Some(a) = kh2.master.as_ref().and_then(|f| f.archive.as_ref()) {
+        add(super::kh2fx::MASTER, a);
     }
     // (Also for base Sora's KH2 magic, `base_kh2`, which the Config menu switches in game.)
     {

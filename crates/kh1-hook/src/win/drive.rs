@@ -28,7 +28,11 @@ use std::sync::OnceLock;
 /// its records names a word above 0x173).)
 /// (Limit after Wisdom, KH2's order: record 0x81 and word 0x1FB, the next free ones. The records'
 /// arguments follow the list's order, so Final's is 0x13 now.)
-pub const FORMS: [(u8, u16, &str); 4] = [(0x7F, 0x1FD, "Valor Form"), (0x7E, 0x1FE, "Wisdom Form"), (0x81, 0x1FB, "Limit Form"), (0x80, 0x1FC, "Final Form")];
+/// (Master after Limit, before Final, KH2's order: record 0x87 and word 0x1F5, the next free ones
+/// after Limit Form's limits (records 0x82..0x86, words 0x1FA..0x1F6). Final's argument is 0x14
+/// now.)
+pub const FORMS: [(u8, u16, &str); 5] =
+    [(0x7F, 0x1FD, "Valor Form"), (0x7E, 0x1FE, "Wisdom Form"), (0x81, 0x1FB, "Limit Form"), (0x87, 0x1F5, "Master Form"), (0x80, 0x1FC, "Final Form")];
 /// The record argument of form `k` (KH1's spells are 0..6, Reflect 7).
 pub const FORM_ARG: u8 = 0x10;
 /// Summon's command (its record opens the summon list) and the summon-is-out one.
