@@ -338,3 +338,16 @@ match. `form tint (Anti): …mdls2c0.dds ready` in the log confirms both. Also n
 how the carried-over textures look under KH1's lighting, and whether KH1 draws its Anti-Sora with
 anything more than his textures (a tint, transparency or an effect around him); only the
 textures are copied.
+
+## Limit Form's look (s293)
+
+The user: "change sora's outfit in limit form to have his jumpsuit be black, his belt yellow, and
+his shoes black". `Look::Limit` on KH1 Sora's own textures:
+
+- `-1c0` (collar) and `-1c1` (jumpsuit): the reds black (`Op::Grey`, brightness 0.04..0.2 with
+  the folds kept, as Final's belt).
+- `-1c1`'s belt (`BELT`): the dark blue made a bright yellow (`Op::Paint`: hue 45, saturation
+  0.85, brightness 0.55 + 0.45 × v; a plain hue shift of the dark blue came out olive). It runs
+  first, so the black pass leaves it.
+- `-1c3` (shoes): the yellow, the red and the blue black. The sole's grey and the laces' metal stay.
+- The hood's lining and the jacket's blue trim stay blue (not asked).

@@ -3417,3 +3417,8 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   centres, RGB (253, 230, 95) (`texmap::ANTI_EYE_RGB`). Each eye: an ellipse fitted to Sora's
   eyeball, 1.12x, one flat opaque yellow, on the face and all 22 eye frames (shut frames stay
   shut). `texmap::solid_eyes`, `tint::Eyes`; also on the `Op::Shadow` fallback.
+
+### 2026-10-20: Stage 293 (Limit Form's outfit: black jumpsuit, yellow belt, black shoes)
+- The user: "change sora's outfit in limit form to have his jumpsuit be black, his belt yellow,
+  and his shoes black". `tint::Look::Limit` (was no tint): reds black, the belt's blue a bright
+  yellow (new `Op::Paint`), the shoes' yellow / red / blue black. `docs/kh1-tint.md`.

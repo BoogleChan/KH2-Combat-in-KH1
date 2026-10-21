@@ -768,9 +768,9 @@ pub unsafe fn after_step(d: &mut Drive, actor: usize, battle: bool) {
             Kind::Wisdom => Some(super::tint::Look::Wisdom),
             Kind::Valor => Some(super::tint::Look::Valor),
             Kind::Final => Some(super::tint::Look::Final),
-            // (KH1 Sora's own outfit: KH2's Limit Form is its model of him, and the model drawn
-            // here is KH1's already.)
-            Kind::Limit => None,
+            // (KH1 Sora's outfit recoloured, the user: "change sora's outfit in limit form to
+            // have his jumpsuit be black, his belt yellow, and his shoes black".)
+            Kind::Limit => Some(super::tint::Look::Limit),
             // (Shadow Sora's look, the user: "make sora look like shadow sora in this form".)
             Kind::Anti => Some(super::tint::Look::Anti),
         }),

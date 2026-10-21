@@ -100,6 +100,11 @@ const WHITE_LO: f32 = 0.5;
 const WHITE_HI: f32 = 0.97;
 const BLACK_LO: f32 = 0.04;
 const BLACK_HI: f32 = 0.2;
+/// Limit Form's yellow belt: hue, saturation, and the brightness its dark blue's 0..1 maps from
+/// (to 1.0).
+const LIMIT_BELT_HUE: f32 = 45.0;
+const LIMIT_BELT_SAT: f32 = 0.85;
+const LIMIT_BELT_LO: f32 = 0.55;
 /// Anti's Shadow Sora: brightness 0..1 to this range at this hue and saturation (pitch black,
 /// the folds still faintly there, a blue-violet sheen).
 const SHADOW_HUE: f32 = 260.0;
@@ -130,12 +135,15 @@ const SLEEVES: [[f32; 4]; 2] = [[0.035, 0.415, 0.236, 0.85], [0.236, 0.415, 0.21
 const BELT: [f32; 4] = [0.035, 0.07, 0.57, 0.14];
 const HOOD_LINING: [f32; 4] = [0.755, 0.72, 1.0, 1.0];
 
-/// A form's look (`form`): Wisdom's blue, Valor's red, Final's white, Anti's Shadow Sora.
+/// A form's look (`form`): Wisdom's blue, Valor's red, Final's white, Limit's black and yellow,
+/// Anti's Shadow Sora.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Look {
     Wisdom,
     Valor,
     Final,
+    /// Limit Form: KH1 Sora's outfit with the jumpsuit black, the belt yellow, the shoes black.
+    Limit,
     /// (`form` maps Anti Form here; until it does, nothing names it.)
     Anti,
 }
@@ -152,6 +160,10 @@ enum Op {
     /// Saturated texels near hue `from` (as `Shift`) made grey: brightness `lo + (hi - lo) × v`
     /// (white with its shading kept, or black); within `rect` if given.
     Grey { from: f32, width: f32, min_v: f32, lo: f32, hi: f32, rect: Option<[f32; 4]> },
+    /// Saturated texels near hue `from` (as `Shift`) given hue `to` at saturation `sat`,
+    /// brightness `lo + (hi - lo) × v` (a dark colour made a bright one, its shading kept);
+    /// within `rect` if given.
+    Paint { from: f32, width: f32, to: f32, sat: f32, lo: f32, hi: f32, rect: Option<[f32; 4]> },
     /// Every texel given hue `to` at saturation `sat`, brightness `lo + (hi - lo) × v` (Shadow
     /// Sora's black); then, if `eyes` is given, Anti's solid yellow eyes there.
     Shadow { to: f32, sat: f32, lo: f32, hi: f32, eyes: Option<Eyes> },
@@ -162,6 +174,7 @@ fn ops(look: Look, k: usize) -> Vec<Op> {
     let shift = |from, width, to| Op::Shift { from, width, to, min_v: 0.0, rect: None };
     let shoes = |to| Op::Shift { from: YELLOW_HUE, width: YELLOW_WIDTH, to, min_v: YELLOW_MIN_V, rect: None };
     let white = |from, width, min_v| Op::Grey { from, width, min_v, lo: WHITE_LO, hi: WHITE_HI, rect: None };
+    let black = |from, width, min_v| Op::Grey { from, width, min_v, lo: BLACK_LO, hi: BLACK_HI, rect: None };
     match (look, k) {
         // Wisdom (the user: "recolor KH1 Sora blue"): the reds and the shoes' yellow blue, and
         // the sleeves blue (the user, s232: "can you make his sleeves blue when in wisdom?").
@@ -192,6 +205,14 @@ fn ops(look: Look, k: usize) -> Vec<Op> {
             white(BLUE_HUE, BLUE_WIDTH, 0.0),
         ],
         (Look::Final, 2) => vec![white(YELLOW_HUE, YELLOW_WIDTH, YELLOW_MIN_V), white(RED, RED_WIDTH, 0.0), white(BLUE_HUE, BLUE_WIDTH, 0.0)],
+        // Limit (the user: "change sora's outfit in limit form to have his jumpsuit be black,
+        // his belt yellow, and his shoes black"): the reds (jumpsuit, collar) black, shaded as
+        // Final's belt; the belt's dark blue a bright yellow near the shoes' (first, so nothing
+        // after touches it; a plain hue shift left it olive);
+        // the shoes' yellow, red and blue black. The hood's lining stays blue.
+        (Look::Limit, 0) => vec![black(RED, RED_WIDTH, 0.0)],
+        (Look::Limit, 1) => vec![Op::Paint { from: BLUE_HUE, width: BLUE_WIDTH, to: LIMIT_BELT_HUE, sat: LIMIT_BELT_SAT, lo: LIMIT_BELT_LO, hi: 1.0, rect: Some(BELT) }, black(RED, RED_WIDTH, 0.0)],
+        (Look::Limit, 2) => vec![black(YELLOW_HUE, YELLOW_WIDTH, YELLOW_MIN_V), black(RED, RED_WIDTH, 0.0), black(BLUE_HUE, BLUE_WIDTH, 0.0)],
         // Anti (the user: "make sora look like shadow sora in this form (the miniboss from
         // neverland)"): all of him black, the face's eye frames too (else KH1 would paste
         // Sora's blue eyes onto the black face).
@@ -278,6 +299,7 @@ fn apply(p: &mut Pixels, op: Op) -> usize {
         Op::Shift { rect, .. } => rect,
         Op::Colourize { rect, .. } => Some(rect),
         Op::Grey { rect, .. } => rect,
+        Op::Paint { rect, .. } => rect,
         Op::Shadow { .. } => None,
     };
     let [u0, v0, u1, v1] = rect.unwrap_or([0.0, 0.0, 1.0, 1.0]);
@@ -308,6 +330,12 @@ fn apply(p: &mut Pixels, op: Op) -> usize {
                     let k = ((width - d) / RED_SOFT).clamp(0.0, 1.0) * ((s - SAT_FROM) / SAT_SOFT).clamp(0.0, 1.0) * if min_v > 0.0 { ((v - min_v) / 0.08 + 0.5).clamp(0.0, 1.0) } else { 1.0 };
                     let l = lo + (hi - lo) * v;
                     (k, (l, l, l))
+                }
+                Op::Paint { from, width, to, sat, lo, hi, .. } => {
+                    let dh = (hue - from).rem_euclid(360.0);
+                    let d = dh.min(360.0 - dh);
+                    let k = ((width - d) / RED_SOFT).clamp(0.0, 1.0) * ((s - SAT_FROM) / SAT_SOFT).clamp(0.0, 1.0);
+                    (k, rgb(to, sat, lo + (hi - lo) * v))
                 }
                 Op::Colourize { to, sat, .. } => {
                     // Light and grey: not the black trim, not already coloured.
@@ -620,6 +648,7 @@ unsafe fn ours_for(s: &mut Swap, k: usize, src: usize, look: Look) -> Option<u64
         Look::Wisdom => b"kh2combat_wisdom_blue\0",
         Look::Valor => b"kh2combat_valor_red\0",
         Look::Final => b"kh2combat_final_white\0",
+        Look::Limit => b"kh2combat_limit_black\0",
         Look::Anti => b"kh2combat_anti_shadow\0",
     };
     let t = create(r, &desc, p.bgra.as_ptr(), label.as_ptr(), 0);
