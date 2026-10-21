@@ -41,7 +41,10 @@
 //! - no magic, items, summons or KH1 specials (`combat`), no guard (no motion 42 in its set), no
 //!   growth ability (00battle `fmlv`'s Anti rows give none, so `growth_up` doesn't apply);
 //! - 1.5 times the damage taken (`hurt`, `character_core::drive::DriveParams::anti_damage`);
-//! - no Revert: the Drive row greyed and refused (`usable`, `choose`, `drive`).
+//! - no Revert: the Drive row greyed and refused (`usable`, `choose`, `drive`);
+//! - Square (the user: "lets add anti-form's square move"): Anti Glide (row 11, motion 173) on the
+//!   ground, standing or moving; Side Spin (row 12, motion 161) in a ground combo
+//!   (`ANTI_SIDE_SPIN_ROW`). Neither guards.
 //! It takes half his MP to enter (`cost_mp`), and it runs on Sora's MP as every form here does (the user: "Drive
 //! forms in this mod run out when you're out of MP, so sora will revert when he is out of MP"):
 //! the same drain (`after_step`), the same 2 extra bars (`valorstats::DRIVE_MP`), and out of MP
@@ -96,6 +99,9 @@ fn cost_mp(kind: Kind, have: i32) -> i32 {
 
 /// Limit Form's MP cost (the user: 1 MP to enter, as Valor and Wisdom).
 pub const LIMIT_COST_MP: i32 = 1;
+
+/// Anti Form's Side Spin: its PTYA row 12 (motion 161), Square in a ground combo (Data).
+const ANTI_SIDE_SPIN_ROW: u8 = 12;
 
 /// Whether `have` MP lets form `kind` start: its cost and some left to run on. Anti starts at any
 /// MP (it takes half; its `valorstats::DRIVE_MP` bars are there to run on).
@@ -652,6 +658,13 @@ unsafe fn arrive(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
     // finisher by pressing square during a combo").
     if kind == Kind::Valor {
         ch.square_finishers = Some((12, 38));
+    }
+    // Anti: Square in a ground combo is its Side Spin, row 12 (motion 161; PTYA ability 0, so it
+    // needs none), one swing of the combo as Upper Slash is (KH Wiki: "pressing Square in the
+    // middle of a ground combo"; the user: "lets add anti-form's square move"). Square otherwise is
+    // its Anti Glide, row 11 (motion 173), from the controller's guard-row path.
+    if kind == Kind::Anti {
+        ch.square_swing = Some(ANTI_SIDE_SPIN_ROW);
     }
     // (s220 showed Valor's stance in place of its landing, whose clip is Sora's own; the user,
     // s229: "valor form is currently missing kh2's landing animation": KH2's landing plays.)

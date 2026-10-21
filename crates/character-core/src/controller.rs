@@ -400,6 +400,10 @@ pub struct Character {
     /// and in the air (`(ground, air)` row ids), if set: a host's form (the KH1 port's Valor, the
     /// user: "valor forms ability to go into a finisher by pressing square during a combo").
     pub square_finishers: Option<(u8, u8)>,
+    /// Square in a ground combo's window goes into this row, needing no ability, as one swing of
+    /// the combo (Upper Slash's rule: only while a swing is left before the finisher), if set: a
+    /// host's form (the KH1 port's Anti Form, its Side Spin, row 12, whose PTYA ability is 0).
+    pub square_swing: Option<u8>,
     /// The air cast playing holds as Final Form's air Reflect does (`hold_air_cast`): frames of
     /// no gravity from its start, no drift; then a plain fall.
     cast_hold: Option<u32>,
@@ -553,6 +557,7 @@ impl Character {
             air_magic_gravity: 1.0,
             air_magic_fall_max: None,
             square_finishers: None,
+            square_swing: None,
             cast_hold: None,
             facing: 0.0,
             vel_h: [0.0; 2],
@@ -1396,7 +1401,7 @@ impl Character {
         // the user.)
         // (A form's Square finisher, `square_finishers`, is a finisher whatever its row id.)
         let form_finisher = wanted.is_some_and(|id| self.square_finishers.is_some_and(|(g, a)| id == g || id == a));
-        let square = SQUARE_MOVES.iter().any(|m| Some(m.0) == wanted) && !form_finisher;
+        let square = (SQUARE_MOVES.iter().any(|m| Some(m.0) == wanted) || wanted.is_some() && wanted == self.square_swing) && !form_finisher;
         let forced = wanted
             .and_then(|id| self.moveset.combo_rows.iter().find(|r| r.id == id))
             .filter(|r| condition(r, &sit))
@@ -1490,11 +1495,15 @@ impl Character {
             // double slash that launches him, jump 90; KH2's Valor has no guard): Square, standing
             // or moving, is that attack (the KH1 port's user: "using sora's square move in valor
             // doesnt launch him", "he also should be able to use it while walking").
-            let attack_row = self.moveset.combo_rows.iter().find(|r| r.id == GUARD_ROW).filter(|r| {
-                self.clip(r.motion).is_some_and(|c| {
-                    !c.windows.iter().any(|w| matches!(w.kind, WindowKind::Guard { .. })) && c.windows.iter().any(|w| matches!(w.kind, WindowKind::Hitbox { .. }))
-                })
-            });
+            // Or a move of its own with no guard window (Anti Form's Anti Glide, motion 173: the
+            // jump back and the dash forward past the target, its first frames invulnerable; the
+            // KH1 port's user: "lets add anti-form's square move"), the same way.
+            let attack_row = self
+                .moveset
+                .combo_rows
+                .iter()
+                .find(|r| r.id == GUARD_ROW)
+                .filter(|r| self.clip(r.motion).is_some_and(|c| !c.windows.iter().any(|w| matches!(w.kind, WindowKind::Guard { .. }))));
             if attack_row.is_some() {
                 self.forced_row = Some(GUARD_ROW);
                 if self.try_attack(input, env) {
@@ -2236,6 +2245,15 @@ impl Character {
                             }
                             self.forced_row = None;
                         }
+                    }
+                    // (A form's own Square swing on the ground, `square_swing`: Anti Form's Side Spin.)
+                    if let Some(row) = self.square_swing.filter(|_| !self.airborne) {
+                        self.mode = Mode::Action(act.clone());
+                        self.forced_row = Some(row);
+                        if self.try_attack(input, env) {
+                            return true;
+                        }
+                        self.forced_row = None;
                     }
                     for (row, ability, air) in SQUARE_MOVES {
                         if air != self.airborne || !self.abilities.equipped.contains(&ability) {

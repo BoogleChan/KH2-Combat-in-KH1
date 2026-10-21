@@ -226,10 +226,39 @@ starts at any MP.
   - no weapon sets (`wmst` has none for moveset 6), so it holds no Keyblade. Its attack windows
     are on its body's own shapes (groups 1, 10, 13);
   - `prty`: run 16, jump 185, turn 0.26;
-  - 13 combo rows. Rows 11 (motion 173) and 12 (motion 161) are kind 0, reached only by id;
+  - 13 combo rows. Rows 11 (motion 173) and 12 (motion 161) are kind 0, reached only by id
+    (its Square moves, below);
   - motion 40 (Aerial Recovery) but no motion 42 (the guard's), so no guard;
   - its own sounds (bank 503, frame-trigger sounds) and frame-trigger effects from its own
     archive (`obj/P_EX100_HTLF.a.us`, `kh2fx::ANTI`).
+- **Square (Data + KH Wiki; the user: "lets add anti-form's square move").** Anti's PTYA rows 11
+  and 12 sit where Sora's guard (11, motion 173) and Upper Slash (12, motion 161) are, with
+  ability 0 (Sora's need 1 and 18). In Anti's motion set they are its own moves. The KH Wiki's
+  Antiform page names them: "By pressing Square on the ground, Sora jumps backwards, spins around
+  and flies forwards. If there are enemies he will home in on one and move into a position behind
+  them" (Anti Glide), and "By pressing Square in the middle of a ground combo, Sora blazes in a
+  circle around the enemy" (Side Spin).
+  - **Anti Glide** (row 11, motion 173, F311; 108 frames at 60 fps). No hit and no guard window.
+    Invulnerable on frames 0..8; no gravity from frame 2. Its root motion goes back about 270 and
+    up about 95 by frame 24, then forward about 1250 by frame 80 (from the start). Turn-to-lock
+    15° / 30° / 15° per frame on 52..62 / 62..84 / 84..100, so with a target he turns onto it as
+    he passes it. Frame 0: trigger 21 (360°, the start's snap); frame 2: effect 27 and a footstep;
+    sounds 503 038 (frame 4) and 503 039 (frame 56). Range 2 (the free state) from frame 92.
+  - **Side Spin** (row 12, motion 161, F310; 120 frames). Three hit windows on his body's
+    shapes: ATKP 542 (frames 9..19, group 1: power 50, physical, hit sound 503 003), 543 (26..94,
+    group 10: power 20, element 4, re-hit every 8 frames) and 544 (94..120, group 1: power 20,
+    element 4). All three have refact self 2 (they go on through a clash). Combo window 78..94,
+    turn-to-lock 22° per frame on 0..90, no gravity from 94 (it ends on a hop, root up 67). Effect
+    17 at frame 24. Its root motion circles (about 250 forward, swinging ±100 sideways).
+  - **Ours, in the port.** Square on the ground, standing or moving, plays Anti Glide: the
+    controller's guard-row path takes row 11 when its motion has no guard window (as Valor's,
+    whose row 11 is an attack). Square in a ground combo's window plays Side Spin
+    (`Character::square_swing`, set by `form::arrive`, `ANTI_SIDE_SPIN_ROW`), one swing of the
+    combo as Upper Slash is: only while a swing is left before the finisher. Otherwise Square goes
+    to Anti Glide, as Sora's Square goes to his guard. In the air Square does nothing (Anti has no
+    air Square row). Both play through the attack path: their motions, root motion,
+    invulnerability, turns, hits, effects and sounds come from the data. Neither guards: Anti
+    Glide has no guard window, and s283's rule stands.
 - **Growth (Data).** 00battle `fmlv`'s Anti rows give no ability at any level, so it has no
   growth ability. None of Sora's growth abilities carry over, as in every form, and the
   one-level-up rule (`form::growth_up`) doesn't apply. His support abilities carry over as in
@@ -262,10 +291,16 @@ starts at any MP.
   is drawn.
 - **Unchecked in game:** all of it. In particular:
   - whether the HTLF effect archive exists on the install;
-  - Square standing: KH2's exe tries row 11 for it, but our controller ties that to the guard
-    ability, so motion 173 (a short invulnerable move with no attack or guard window) isn't
-    played;
-  - what reaches row 12 (motion 161) in KH2;
+  - Anti Glide while moving: the exe notes have row 11 tried by the action button "when not
+    moving"; it is taken moving too here (no Dodge Roll in Anti; Valor's rule);
+  - Anti Glide's homing: how KH2 puts him behind the target (only its root motion and turns
+    here, so how far past the target he ends depends on the distance), and its free state from
+    frame 92 (range 2 isn't read, so it plays to its end at 108);
+  - Side Spin's group-1 hits (542, 544): the HTLF model's collision as parsed here has no
+    attack shape in groups 1, 4, 5 or 7 (it is the same table as Sora's), so those windows find
+    no shapes, as the group-1 windows of rows 154 / 155 do; the Spin (543, group 10) has one;
+  - the wiki's "can also deflect many attacks automatically": not traced (no guard window in
+    Anti Glide or Side Spin);
   - whether `+8` in KH1's hit record is the final damage.
 
 ## Limit Form in the KH1 port (Data; the rules ours where marked)

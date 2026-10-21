@@ -1459,6 +1459,70 @@ fn guard_row_attack_launches_from_square() {
     }
 }
 
+/// A moveset whose guard row is a move with no guard and no hit (Anti Form's Anti Glide, motion
+/// 173): Square, standing or moving, plays it with its root motion and its invulnerable frames,
+/// with no guard ability and nothing blocked (the KH1 port's user: "lets add anti-form's square
+/// move"; s283: no guard in Anti).
+#[test]
+fn guard_row_move_plays_from_square_without_a_guard() {
+    for stick in [[0.0, 0.0], [0.0, 0.4]] {
+        let mut ch = sora();
+        ch.abilities.guard = false;
+        ch.abilities.dodge_roll = 0;
+        let len = 60;
+        let mut clip = Clip::plain(173, len);
+        clip.root = (0..=len).map(|f| [0.0, 0.0, f as f32 * 10.0]).collect();
+        clip.windows.push(Window { start: 0, end: Some(8), kind: WindowKind::Invulnerable });
+        clip.windows.push(Window { start: 2, end: None, kind: WindowKind::NoGravity });
+        ch.moveset.clips.insert(173, clip);
+        ch.moveset.combo_rows.push(ComboRow { kind: 0, ..row(11, 173, false, false) });
+        let mut w = World::new(ch);
+        w.run(5, Pad { stick, ..IDLE });
+        let z = w.pos[2];
+        let o = w.step(Pad { action: true, stick, ..IDLE });
+        assert_eq!(o.state, StateName::Attack, "stick {stick:?}");
+        assert_eq!(o.motion, 173);
+        assert!(o.invulnerable, "not invulnerable on its first frame");
+        assert!(!o.guarding && o.guard_boxes.is_empty(), "it guards");
+        let outs = w.run(20, IDLE);
+        assert!(!outs.last().unwrap().invulnerable, "invulnerable past its window");
+        assert!(w.pos[2] - z > 150.0, "didn't move by its root motion: {} -> {}", z, w.pos[2]);
+    }
+}
+
+/// A form's Square swing (`square_swing`: Anti Form's Side Spin, row 12, ability 0): Square in a
+/// ground combo's window goes into it with no ability equipped, only while a swing is left before
+/// the finisher; without `square_swing` the row is never taken (Sora's Upper Slash rule).
+#[test]
+fn square_swing_in_a_ground_combo() {
+    for set in [true, false] {
+        let mut ch = sora();
+        ch.abilities.combo_master = true;
+        ch.moveset.clips.insert(161, attack_clip(161, 40, (9, 19), 542, 30));
+        ch.moveset.combo_rows.push(ComboRow { kind: 0, ..row(12, 161, false, false) });
+        if set {
+            ch.square_swing = Some(12);
+        }
+        let mut w = World::new(ch);
+        let mut motions = Vec::new();
+        for f in 0..400 {
+            // One swing, then Square only.
+            let o = w.step(Pad { attack: f < 2, action: f >= 22 && f % 2 == 0, ..IDLE });
+            if o.state == StateName::Attack && o.clip_frame == 0 {
+                motions.push(o.motion);
+            }
+        }
+        let spins = motions.iter().filter(|&&m| m == 161).count();
+        if set {
+            assert_eq!(motions.first(), Some(&100), "{motions:?}");
+            assert!(spins >= 1, "Side Spin never came out: {motions:?}");
+            assert!(spins <= w.ch.combo_rules.ground_base as usize - 1, "{spins} Side Spins in one combo: {motions:?}");
+        } else {
+            assert_eq!(spins, 0, "taken without square_swing: {motions:?}");
+        }
+    }
+}
+
 /// A wall met by a swing in a moveset without a repelled motion (Final Form's): pushed back, the
 /// swing goes on to its end (it went back to its frame 0, met the wall again, for ever: the KH1
 /// port's user, "it soft locks you").

@@ -3370,3 +3370,13 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
 - The Drive list's "DRIVES" title now for any first row (it was Valor's only).
 - s286's test was on s285: OpenKH's Mods Manager builds the game's mod from the GitHub install
   (`mods/kh1/PM2CRAZY/KH2-Combat-in-KH1`), so the lead's install now updates that folder too.
+
+### 2026-10-20: Stage 288 (Anti Form's Square moves)
+- The user: "lets add anti-form's square move". Anti's rows 11 / 12 (where Sora has guard and
+  Upper Slash) are Anti Glide (motion 173: back, spin, dash forward ~1250, invulnerable 0..8, no
+  hit, no guard) and Side Spin (motion 161: three hits circling the foe, a combo swing). Square on
+  the ground: Anti Glide (row 11 through Valor's "guard row is a move" path, now for any row 11
+  motion without a guard window); Square in a combo window with a swing left: Side Spin
+  (`Character::square_swing`, set for Anti in `form::arrive`). Still no guard in Anti (s283).
+- Known: Anti's attack groups 1 / 4 / 5 / 7 have no shape as we read its collision (Side Spin's
+  first and last hits, several combo hits); being looked into.
