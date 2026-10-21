@@ -35,7 +35,7 @@ Next to the game; written with the defaults when missing, read when the game sta
 | `fx_test` | `off` (default), `on` | Starts Magnet Burst's effect at Sora every 4 seconds, to check the effect renderer. |
 | `bonus_ap` | `on` (default), `off` | With `abilities = kh1`: Sora's max AP grows by the AP of each KH2 ability he learns (below). |
 | `auto_aim` | `off` (default), `on` | Off: KH2's swings turn toward and home in on only KH1's own target, the R1 lock or the small cursor's soft target. On: KH2's own pick, the nearest enemy in reach. |
-| `wall_clink` | `off` (default), `on` | On: a swing that meets a wall clinks off it (KH1's background ray) and bounces Sora back. Off: swings pass through walls. |
+| `walls` | `kh1` (default), `clink`, `pass` | What a swing does when it meets a wall (KH1's background ray). `kh1`: as KH1's own swings, the Keyblade's wall spark and sound where it touches, once a swing per blade, and the swing goes on and keeps hitting. `clink`: it clinks off the wall and bounces Sora back. `pass`: nothing. Enemy guards clink and repel either way. (Replaces `wall_clink`, which is no longer read.) |
 | `camera` | `kh2` (default), `kh1` | KH2's field camera (follows behind, swings behind while running with Auto, right stick turns and zooms, R3 resets, KH2's lock-on framing) or KH1's own. The Config menu's new last row, Camera Style, switches it in game and writes it here. |
 | `camera_scale` | `0.89` (default) | KH2's camera distances and heights are multiplied by this. 0.89 is KH1 Sora's size against KH2 Sora's (hips 78.9 / 88.5), so he is framed as in KH2. |
 | `camera_lower` | `0` (default) | KH2's camera, look point and eye together, this much lower. 0 = as KH2. |

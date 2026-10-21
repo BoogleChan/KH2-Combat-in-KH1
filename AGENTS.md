@@ -3574,3 +3574,12 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   press still hands him over at once). Draw changes for 500 ms after a grab blend over 10 frames.
 - The user: "the game should tell you when you get a drive form and reflect": "New Drive Form:
   <name>" box when a form opens by the story (`form_box`), beside s307's Reflect boxes.
+
+### 2026-10-21: Stage 309 (swings meet walls as KH1's do)
+- The user: "keep the clinking mechanic for enemies that should have it ... let sora hit the walls
+  without clinking", then a video of vanilla KH1: "this is how Base KH1 handles sora hitting a
+  wall". On a blade's first wall contact in a swing: KH1's own wall sound and spark at the contact
+  (`0x1402B1870`'s parts: surface class `0x14018FC20`, sound `0x140293FD0`, spark `0x1402B2190`,
+  turn `0x1402AB8F0`, on a temporary attack object of Sora's swing row), no clash record, no
+  bounce, the swing goes on. Ini `walls = kh1 | clink | pass` (default kh1; `wall_clink` no longer
+  read). Enemies' guards clink as before. `docs/kh1-clash.md`.

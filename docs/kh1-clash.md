@@ -28,8 +28,46 @@ Confidence: **Checked (exe)** read from KH1's code; **Ours** a choice of the mod
   attack-vs-attack clash (`0x1402B2890`): when KH1 marks Sora's side as clashed (`+4` 0x10 /
   0x20), the swing stops there and his recoil is KH1's kind 6 / 7 record, which `hurt` plays as
   KH2's recoil.
-- Walls (ini `wall_clink`): the blade's points from last frame to now through KH1's background
+- Walls (ini `walls`): the blade's points from last frame to now through KH1's background
   ray, not KH2's shapes (those reached far beside the blade: clinks "at random moments").
+  Valor's left blade and Final / Master's floating Keyblades test their KH2 shapes' centres the
+  same way. What a wall does: below.
+
+## A swing meeting a wall (Checked, exe; the spark checked against a video)
+
+KH1's per-attack step (`0x1402B1670`) tests an attack against the background only until it is
+marked spent (flags bit 20): a segment attack (position mode 2) from its end to its centre, and
+any attack with a previous centre (bit 16) from the middle of last frame's segment to the middle
+of this frame's. `0x1402B1870 (attack, from, to)`:
+
+1. The ray `0x140191520`, mode 1 (2 for a free-standing attack, `+0x30` bit 10). No face: done.
+2. The face's surface class (`0x14018FC20 (object, face)`): 0 gives wall kind 0x100, 5 gives 8,
+   anything else 2.
+3. **Sound**: for kinds 0x100 and 2, when the attack has flag bit 22 (the Attack command's rows
+   set it), `0x140293FD0 (owner, 0, attack +0xA9)`: the weapon's sound set (weapon object
+   `+0x20` stats `+0x34`) plus the row's sound byte, played at the owner.
+4. **Spark**: `0x1402B2190 (attack, kind, point)`: from the effect table at the attack's `+8`
+   (the weapon object's `+0x18`), the entry for this kind and the data's effect bit
+   (`1 << data +0x28`, picked by `0x1401DDE80`), spawned at the ray's point by `0x1402AC4C0`
+   (as the guard clink's spark, with -10000 for its third argument). It is turned by
+   (0, 0, 0, 1) − the face normal (`0x14018FC60`, `0x1402AB8F0`).
+5. The kind goes into the attack's results `+4` and the combat state's result word (`+0x60`).
+6. **The stop** (an attack on a host, `+0x30` bit 10 clear): marked spent (bit 20), and for
+   kinds 0x100 and 2 a clash record on the owner (`0x1402BCEB0`: kind 6, `+8` -20, `+0x2C` the
+   data), which Sora plays as motion 0x6E pushed back (`0x14029B590`); then the attack is marked
+   dying (bit 21) unless it keeps itself (bit 8).
+
+The user's video of KH1 (Agrabah, a rising swing into an arch): a bright flash where the
+Keyblade met the arch, which stays at that spot and turns into the green sparkle, fading out
+over about 18 frames (30 fps) while the swing goes on. One spark per swing. (The video has no
+sound.)
+
+Ours (`walls = kh1`, default; `combat::wall_spark`): steps 2 to 4 for the first wall a KH2 swing's
+blade meets (once a swing per blade, as KH1's spent mark), through a KH1 attack object made from
+Sora's KH1 swing row (ground or air) with that row's effect and sound bytes and flag bit 22, freed
+again at once. Not steps 5 and 6: no clash record, no recoil, the swing goes on and keeps hitting.
+`walls = clink` is the old repel (KH2's bounce and the clash clink, `clang`); `walls = pass` does
+nothing. Enemy guards clink and repel as before in all three.
 - Each clank is logged with where along the blade it touched (0% the blade's start, 100% its tip).
 
 ## KH2's guard windows as KH1 guards (Checked + Ours)

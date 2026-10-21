@@ -50,8 +50,10 @@ bonus_ap = on\r\n\
 ; auto_aim: off = swings turn toward only KH1's target (the R1 lock or the small cursor);\r\n\
 ; on = KH2's own pick, the nearest enemy in reach\r\n\
 auto_aim = off\r\n\
-; wall_clink: on = a swing that meets a wall clinks off it and bounces Sora back; off = it passes\r\n\
-wall_clink = on\r\n\
+; walls: what a swing does when it meets a wall. kh1 = as KH1's own swings: the Keyblade's\r\n\
+; wall spark and sound where it touches, and the swing goes on; clink = it clinks off the wall\r\n\
+; and bounces Sora back (an enemy's guard does that either way); pass = nothing at all\r\n\
+walls = kh1\r\n\
 ; camera: kh2 = KH2's field camera (follows behind, right stick turns and zooms, R3 resets);\r\n\
 ; kh1 = KH1's own. The Config menu's camera row switches it in game too.\r\n\
 camera = kh2\r\n\
@@ -141,7 +143,8 @@ pub struct Settings {
     pub kh2_voice: bool,
     pub bonus_ap: bool,
     pub auto_aim: bool,
-    pub wall_clink: bool,
+    /// What a swing does at a wall (`walls`).
+    pub walls: Walls,
     pub kh2_camera: bool,
     pub camera_scale: f32,
     pub camera_lower: f32,
@@ -171,6 +174,17 @@ pub struct Settings {
     /// Skip the Gummi Ship's flights (`gummi = skip`, `gummi.rs`; commented out for now).
     #[allow(dead_code)]
     pub gummi_skip: bool,
+}
+
+/// What a swing does when it meets a wall (`walls`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Walls {
+    /// As KH1's own swings: the Keyblade's wall spark and sound, and the swing goes on.
+    Kh1,
+    /// It clinks off and Sora bounces back (the old `wall_clink = on`).
+    Clink,
+    /// Nothing.
+    Pass,
 }
 
 static SETTINGS: OnceLock<Settings> = OnceLock::new();
@@ -218,7 +232,11 @@ pub fn get() -> &'static Settings {
             kh2_voice: on(&text, "kh2_voice", "on", false),
             bonus_ap: on(&text, "bonus_ap", "on", true),
             auto_aim: on(&text, "auto_aim", "on", false),
-            wall_clink: on(&text, "wall_clink", "on", true),
+            walls: match setting(&text, "walls").as_deref() {
+                Some("clink") => Walls::Clink,
+                Some("pass") | Some("off") => Walls::Pass,
+                _ => Walls::Kh1,
+            },
             kh2_camera: on(&text, "camera", "kh2", true),
             config_row: on(&text, "config_row", "on", true),
             four_shortcuts: on(&text, "shortcuts", "4", true),

@@ -21,6 +21,7 @@
 //! hit record in `probe::hit`).
 
 use super::addr::Rva;
+use super::settings::Walls;
 use super::{hook, log, pose, takeover};
 use character_core::{Character, Output, TargetInfo};
 use combat_core::{first_overlap, AttackVolume, HitRecord, Shape};
@@ -848,6 +849,8 @@ pub struct Strikes {
     guards: Vec<Guard>,
     /// Swings a guard repelled: they hit nothing more.
     repelled: HashSet<u64>,
+    /// (swing, weapon) that met a wall and showed KH1's wall spark (`walls = kh1`): once a swing.
+    sparked: HashSet<(u64, u8)>,
     /// KH1's swing rows by motion (200..206), for `swing_start`, and the model they are for.
     swing_rows: Option<(u16, HashMap<i16, Row>)>,
     /// Frames since a trail was asked for.
@@ -1101,10 +1104,19 @@ unsafe fn meet_shot(sora: usize, shot: &Shot, at: &Shape, row: Row) -> (bool, bo
     (rd::<u32>(shot.obj) & 0x0100_0000 != 0, ours)
 }
 
+/// A wall a blade met: the point (KH1 world), the face and its object (-1 the map), and the
+/// face's normal as `0x14018FC60` gives it.
+struct WallHit {
+    at: [f32; 3],
+    face: i32,
+    owner: i32,
+    normal: [f32; 4],
+}
+
 /// Where the map's walls stop a blade moving `from` → `to` (KH1 world, y down): KH1's
-/// background ray (`0x140191520`, the one its attacks use), and the hit face's normal
-/// (`0x14018FC60`) to tell walls from floors and ceilings.
-unsafe fn wall_between(from: [f32; 3], to: [f32; 3]) -> Option<[f32; 3]> {
+/// background ray (`0x140191520`, mode 1 as `0x1402B1870` casts it for a swing on a bone), and
+/// the hit face's normal (`0x14018FC60`) to tell walls from floors and ceilings.
+unsafe fn wall_between(from: [f32; 3], to: [f32; 3]) -> Option<WallHit> {
     let d = [to[0] - from[0], to[1] - from[1], to[2] - from[2]];
     let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
     if !(0.5..400.0).contains(&len) || !from.iter().chain(to.iter()).all(|v| v.is_finite()) {
@@ -1131,7 +1143,56 @@ unsafe fn wall_between(from: [f32; 3], to: [f32; 3]) -> Option<[f32; 3]> {
         return None;
     }
     let at = rd::<[f32; 3]>(p + 0x20);
-    at.iter().all(|v| v.is_finite()).then_some(at)
+    at.iter().all(|v| v.is_finite()).then_some(WallHit { at, face, owner, normal: n })
+}
+
+/// KH1's own swing meeting a wall (`0x1402B1870`), without the part that stops it: the
+/// Keyblade's wall spark where the blade touched, turned out of the face, and its wall sound.
+/// Not the clash record on Sora (kind 6, his recoil motion 0x6E), not the swing marked spent and
+/// dying, not the combat state's result word: the swing goes on and keeps hitting.
+///
+/// As KH1 does it, through a KH1 attack object made from Sora's swing row (as `land_hit`): the
+/// face's surface class (`0x14018FC20`: 0 → wall kind 0x100, 5 → 8, else 2); the sound
+/// (`0x140293FD0 (Sora, 0, row's sound byte)`: the weapon's sound set, at Sora) for kinds 0x100
+/// and 2; the spark (`0x1402B2190 (attack, kind, point)`: the weapon's effect table, `+8`, picked
+/// by the kind and the data's effect bit `+0x28`) turned by (0, 0, 0, 1) − the normal
+/// (`0x1402AB8F0`).
+unsafe fn wall_spark(sora: usize, row: Row, hit: &WallHit) -> (u32, bool) {
+    let base = BASE.load(Ordering::Relaxed);
+    let surface: unsafe extern "system" fn(i32, i32) -> u32 = std::mem::transmute(base + SURFACE_RVA);
+    let free_bit: unsafe extern "system" fn() -> u32 = std::mem::transmute(base + FREE_BIT_RVA);
+    let new_attack: unsafe extern "system" fn(usize, u32, usize) -> usize = std::mem::transmute(base + NEW_ATTACK_RVA);
+    let free: unsafe extern "system" fn(usize) = std::mem::transmute(base + FREE_ATTACK_RVA);
+    let sound: unsafe extern "system" fn(usize, u32, i32) -> usize = std::mem::transmute(base + WALL_SOUND_RVA);
+    let spark: unsafe extern "system" fn(usize, u32, *const [f32; 4]) -> usize = std::mem::transmute(base + WALL_SPARK_RVA);
+    let turn: unsafe extern "system" fn(usize, *const [f32; 4]) = std::mem::transmute(base + EFFECT_TURN_RVA);
+    let kind = match surface(hit.owner, hit.face) {
+        0 => 0x100,
+        5 => 8,
+        _ => 2,
+    };
+    // (No Keyblade object: KH1's own constructor and calls would find no weapon either.)
+    if pose::ptr(rd::<u32>(sora + 0x14C)) < 0x10000 {
+        return (kind, false);
+    }
+    let obj = new_attack(sora, free_bit(), base + ATTACK_DATA_RVA + row.data as usize);
+    if obj < 0x10000 {
+        return (kind, false);
+    }
+    // The Attack command's row's sound and effect bytes and its wall-sound flag (bit 22).
+    wr(obj, rd::<u32>(obj) | 0x400000);
+    wr(obj + 0xA8, row.fx);
+    if kind & 0x102 != 0 {
+        sound(sora, 0, rd::<i8>(obj + 0xA9) as i32);
+    }
+    let at = [hit.at[0], hit.at[1], hit.at[2], 1.0f32];
+    let fx = spark(obj, kind, &at);
+    if fx > 0x10000 {
+        let n = hit.normal;
+        turn(fx, &[-n[0], -n[1], -n[2], 1.0 - n[3]]);
+    }
+    free(obj);
+    (kind, fx > 0x10000)
 }
 
 /// An enemy's guard: a KH1 attack object of priority 100 (`0x1402B2A30`: such an object
@@ -1187,9 +1248,18 @@ const CLASH_HALF_RVA: Rva = Rva(0x2B2A30);
 /// KH1's attack pairing table (8 bytes, a bit per type that may meet).
 const PAIRS_RVA: Rva = Rva(0x5299B8);
 /// KH1's attack-vs-background ray (`0x1402B1870 (attack, from, to)`): spark, sound, and a
-/// clash record on the owner when it meets a wall.
+/// clash record on the owner when it meets a wall (`wall_spark` does its first two).
 #[allow(dead_code)]
 const WALL_RVA: Rva = Rva(0x2B1870);
+/// A face's surface class (`0x14018FC20 (object, face)`, bits 4..7 of its attributes).
+const SURFACE_RVA: Rva = Rva(0x18FC20);
+/// An attack's wall spark (`0x1402B2190 (attack, wall kind, point) -> effect`).
+const WALL_SPARK_RVA: Rva = Rva(0x2B2190);
+/// One of an actor's weapon sounds at the actor (`0x140293FD0 (actor, 0, n)`: weapon stats
+/// `+0x34` + n).
+const WALL_SOUND_RVA: Rva = Rva(0x293FD0);
+/// Turns an effect to a direction (`0x1402AB8F0 (effect, direction)`).
+const EFFECT_TURN_RVA: Rva = Rva(0x2AB8F0);
 /// KH1's background ray (`0x140191520 (ray, mode)`): ray from `+0`, direction `+0x10`; out:
 /// the point `+0x20`, the face `+0x30` (i16, -1 none), its object `+0x34` (-1 the map).
 const RAY_RVA: Rva = Rva(0x191520);
@@ -1658,6 +1728,7 @@ impl Strikes {
         }
         let keys: HashSet<(u64, u8)> = out.hitboxes.iter().map(|h| (h.swing, h.weapon)).collect();
         self.volumes.retain(|k, _| keys.contains(k));
+        self.sparked.retain(|k| keys.contains(k));
         self.met_shots.retain(|(sw, _)| keys.iter().any(|k| k.0 == *sw));
         let air = character.airborne();
         // KH2's guard windows as KH1 guard objects (the Aerial Dodge's, Aerial Recovery's, the
@@ -1692,21 +1763,44 @@ impl Strikes {
                 continue;
             }
             // A wall in the blade's way since last frame: KH1's background ray, as its own swings
-            // have it (`0x1402B1870`), and KH2's repel off it (the user: swings went through
-            // walls). Walls only: a floor or ceiling the blade dips into doesn't repel.
-            // (Off by default: the user would rather swings pass through walls; ini `wall_clink`.)
-            let wall = match (on_blade, blade.as_ref(), blade_prev.as_ref()) {
-                (Some(_), Some((now, _)), Some(prev)) if prev.len() == now.len() => prev.iter().zip(now).find_map(|(p, q)| wall_between(*p, *q)),
-                (Some(_), _, _) => None,
+            // have it (`0x1402B1870`). Walls only: a floor or ceiling the blade dips into doesn't
+            // count. What it does is the ini's `walls`:
+            // - kh1 (default; the user, with a video of KH1's own swing into a wall: "lets try to
+            //   get this working instead of the clinking associated with enemies"): KH1's wall
+            //   spark and sound where the blade touched, and the swing goes on. Once a swing per
+            //   blade, as KH1 tests its own swing's object only until its first wall.
+            // - clink: KH2's repel off it, Sora bounced (the user had asked for that when swings
+            //   went through walls).
+            // - pass: nothing.
+            let walls = super::settings::get().walls;
+            let key = (h.swing, h.weapon);
+            let test = match walls {
+                Walls::Kh1 => !self.sparked.contains(&key),
+                Walls::Clink => true,
+                Walls::Pass => false,
+            };
+            let wall = match (test, on_blade, blade.as_ref(), blade_prev.as_ref()) {
+                (false, ..) => None,
+                (_, Some(_), Some((now, _)), Some(prev)) if prev.len() == now.len() => prev.iter().zip(now).find_map(|(p, q)| wall_between(*p, *q)),
+                (_, Some(_), _, _) => None,
                 _ => before.iter().zip(shapes.iter()).find_map(|(p, s)| wall_between([p[0], -p[1], p[2]], [s.center[0], -s.center[1], s.center[2]])),
             };
-            if !super::settings::get().wall_clink {
-            } else if let Some(at) = wall {
-                self.repelled.insert(h.swing);
-                let bounced = character.register_wall_hit();
-                clang(at);
-                note(format!("KH2 attack {} struck a wall at {at:.0?} (bounced: {bounced})", h.attack));
-                continue;
+            match (walls, wall) {
+                (Walls::Clink, Some(hit)) => {
+                    self.repelled.insert(h.swing);
+                    let bounced = character.register_wall_hit();
+                    clang(hit.at);
+                    note(format!("KH2 attack {} struck a wall at {:.0?} (bounced: {bounced})", h.attack, hit.at));
+                    continue;
+                }
+                (Walls::Kh1, Some(hit)) => {
+                    self.sparked.insert(key);
+                    if let Some(rows) = self.rows {
+                        let (kind, shown) = wall_spark(sora, rows[(air as usize) * 2], &hit);
+                        note(format!("KH2 attack {} (weapon {}) met a wall at {:.0?}: KH1's wall spark, kind {kind:#x}, effect made {shown}", h.attack, h.weapon, hit.at));
+                    }
+                }
+                _ => {}
             }
             // Only guards KH1's clash table lets meet Sora's swing (its row data's `+0x38` type;
             // the user: aerial combos on Dragon Maleficent clinked: her big guard is type 6,
