@@ -1061,6 +1061,13 @@ fn decompose(v: &[Mat4]) -> Vec<(Vec3, Quat, Vec3)> {
 
 /// KH2's motion for what KH1's slot shows Sora doing; `None` leaves KH1's own animation.
 fn follow(s: &mut Sora, slot: Option<usize>, to_world: &Mat4) -> Option<Vec<Mat4>> {
+    // One of KH1's limits in Limit Form (`limits::kh1_limit_holds`): KH1's own animation all
+    // through it as KH1 plays it (Limit Form's model is KH1 Sora's), none of the form's KH2
+    // motions drawn over a slot of it (a walk, a run, a jump).
+    if super::limits::kh1_limit_holds() {
+        s.follow.slot = slot;
+        return None;
+    }
     // Misc Animations at KH2 (`styles`, base Sora): KH1 uses the item (its effect, its timing, the
     // item's logic) and KH2's item-use motion is drawn over it (P_EX100 motion 9, A110: the
     // right hand raised overhead at frames ~20-30 of its 50, a voice at 0 and a sound at 10; KH1's

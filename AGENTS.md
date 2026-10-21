@@ -3442,3 +3442,15 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   texel mask (`texmap::island_mask`, read at start), the vest's zipper teeth cut out; within it
   every texel grey-black with its folds (`Op::Darken`, `Mask::Jacket`). Chain, crown, zippers and
   the yellow belt stay. (Version s295 is the testing branch's.)
+
+### 2026-10-20: Stage 297 (KH1's limits in Limit Form; KH2's Limit menu switched off)
+- The user: "lets comment the KH2 limits, and for the moment put in the equivalent KH1 limits".
+  `limits::KH2_LIMITS = false` (the s291 / s294 menu kept, not installed); Magic greyed in Limit
+  Form again. KH1's Triangle offer runs in Limit Form with every limit but Sonic Blade, Ars
+  Arcanum, Strike Raid and Ragnarok hidden for the call (equipped ones, KH1's own range and MP; not
+  in KH2's air); other forms skip it as before.
+- KH1 takes him for the limit (its "limit running" flag) and keeps him until it clears: its own
+  animation, Keyblade, effects, hits and Triangle follow-ups; the form stays on, its MP drain goes
+  on (`form::drain`), a revert at 0 MP waits for the limit's end; KH2 takes him back after.
+- Found: s278's refusal never caught KH1's limits (they skip that check list); the command step
+  now refuses them and their follow-ups in every form but Limit Form's four.

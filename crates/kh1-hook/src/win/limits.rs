@@ -1,6 +1,18 @@
-//! Limit Form's own limits, KH2's (the user: "KH2's own limits" for Limit Form, its Limit menu in
-//! Magic's place). `docs/drive-model.md`, "Limit Form in the KH1 port", has what is KH2's and what
-//! is ours.
+//! Limit Form's limits. `docs/drive-model.md`, "Limit Form in the KH1 port", has what is KH2's and
+//! what is ours.
+//!
+//! **For now KH1's limits, not KH2's** (the user: "lets comment the KH2 limits, and for the moment
+//! put in the equivalent KH1 limits"). KH2's Limit menu (s291 / s294, below) is switched off by
+//! `KH2_LIMITS` (false): its code is all kept and still compiled, only never switched on
+//! (`install` stops before it, so `ON` stays false and every entry point here returns at once);
+//! `true` brings it back as it was. With it off, Magic in Limit Form is as before s291: greyed
+//! and refused (`drive::fill`, `combat::spell_not_yet`). In its place, KH1's own limits that
+//! stand in for KH2's four (`KH1_LIMITS`; section "KH1's limits in Limit Form" at the end):
+//! Sonic Blade for Sonic Rave, Ars Arcanum for Last Arcanum, Strike Raid for Strike Raid,
+//! Ragnarok for Infinity. KH1 offers them in its Triangle box (`specials_prompt`) and runs them
+//! (`combat::command`, `takeover`); every other form still has none.
+//!
+//! KH2's Limit menu, when `KH2_LIMITS` is on:
 //!
 //! - **Menu.** In Limit Form the top's Magic row reads "Limit" (record 2's word, `word`) and its
 //!   list (the magic list, `0x140529638`) holds our four records 0x82..0x85 (spell-type records
@@ -36,8 +48,10 @@
 //!   pressed while it shows runs it (the script's trigger 23), once per window.
 //! - **KH1's limits in a form.** KH1's own limits (Sonic Blade, Ars Arcanum, Strike Raid, ...)
 //!   are offered by KH1 in that same Triangle box (`0x14028AF60`, called once from the context
-//!   fill); in any Drive Form that call is skipped (`specials_prompt`), so they never show. The
-//!   command step's refusal (`combat::command`, s278) stays behind it.
+//!   fill). In any Drive Form but Limit Form that call is skipped (`specials_prompt`), so they
+//!   never show; in Limit Form it runs with only the four stand-ins left in (with KH2's menu on,
+//!   it would be skipped there too: KH2's limits are its limits then). The command step refuses
+//!   the rest (`combat::command`, `kh1_limit_allowed`).
 
 use super::addr::Rva;
 use super::reflect::{world_now, KhWorld, SORA};
@@ -49,6 +63,12 @@ use kh2_magic::{Event, Magic, ObjId, SpellFile, World};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
+
+/// KH2's Limit menu in Limit Form (s291 / s294: Sonic Rave, Last Arcanum, Strike Raid, Infinity
+/// from the form's `limi` script). Off for now, KH1's equivalent limits in its place (the user:
+/// "lets comment the KH2 limits, and for the moment put in the equivalent KH1 limits"). The code
+/// stays compiled; `true` brings the menu back (and takes KH1's limits out of Limit Form again).
+pub const KH2_LIMITS: bool = false;
 
 /// A limit: its 03system `cmd`, KH2's name, our command record and word, and KH2's MP cost.
 struct Limit {
@@ -295,17 +315,39 @@ unsafe extern "system" fn context_fill(a: usize) -> u64 {
 }
 
 /// KH1's limits' Triangle offer (`0x14028AF60`): none in a Drive Form (the user: "KH1 limits
-/// that are equipped shouldn't even prompt in any drive form").
+/// that are equipped shouldn't even prompt in any drive form"), but Limit Form's stand-ins for
+/// its KH2 limits (`KH1_LIMITS`, with `KH2_LIMITS` off): KH1's own offer, the others masked out
+/// of its equipped bits for the call. Not in KH2's air: KH1 offers them only in its ground
+/// state, which reads as the ground all through KH2's jumps.
 unsafe extern "system" fn specials_prompt() {
-    if super::form::in_form() {
-        static N: AtomicU32 = AtomicU32::new(0);
-        if N.fetch_add(1, Ordering::Relaxed) == 0 {
-            log("KH1's limits: not offered in a Drive Form");
+    let f: unsafe extern "system" fn() = std::mem::transmute(ORIG_SPECIALS.load(Ordering::Acquire));
+    if !super::form::in_form() {
+        return f();
+    }
+    if !KH2_LIMITS && super::form::in_limit() {
+        if super::takeover::kh2_airborne() {
+            return;
         }
+        let at = base() + KH1_EQUIPPED_RVA;
+        let bits = rd::<u32>(at);
+        let keep = bits & LIMIT_FORM_KH1;
+        static LOGGED: AtomicU32 = AtomicU32::new(u32::MAX);
+        if LOGGED.swap(bits, Ordering::Relaxed) != bits {
+            let names = |b: u32| KH1_LIMITS.iter().enumerate().filter(|(k, _)| b >> k & 1 != 0).map(|(_, l)| l.name).collect::<Vec<_>>().join(", ");
+            log(&format!("Limit Form: KH1's limits offered as KH1 offers them: {} (equipped: {})", if keep == 0 { "none equipped".into() } else { names(keep) }, if bits == 0 { "none".into() } else { names(bits) }));
+        }
+        if keep == 0 {
+            return;
+        }
+        wr(at, keep);
+        f();
+        wr(at, bits);
         return;
     }
-    let f: unsafe extern "system" fn() = std::mem::transmute(ORIG_SPECIALS.load(Ordering::Acquire));
-    f()
+    static N: AtomicU32 = AtomicU32::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) == 0 {
+        log("KH1's limits: not offered in a Drive Form");
+    }
 }
 
 /// KH1's menu runs one of our entries (`combat::spell_not_yet`): `true` keeps it from running.
@@ -713,7 +755,9 @@ pub fn drawn_blade() -> Option<Mat4> {
 /// noted for the effects on it (`drawn_blade`). `kh1`: KH1's bones (model space); `ratio`: KH1's
 /// size against KH2's.
 pub fn pose_hook(kh1: &mut [Mat4], kh1_bind: &[Mat4], to_world: &Mat4, ratio: f32) {
-    if !ON.load(Ordering::Relaxed) || !super::form::in_limit() {
+    // (With KH2's Limit menu off too: where the Keyblade is drawn is all Limit Form's effects'
+    // weapon anchors, its combos' as well. Nothing is thrown then: only KH2's script throws it.)
+    if !super::form::in_limit() {
         return;
     }
     static N: AtomicU32 = AtomicU32::new(0);
@@ -935,6 +979,79 @@ pub unsafe fn after_step(actor: usize, out: &Output, airborne: bool, strikes: &m
     }
 }
 
+// ---------------------------------------------------------------- KH1's limits in Limit Form
+
+/// One of KH1's own limits: its command, the follow-up commands it takes while it runs, KH1's
+/// name, and the KH2 Limit Form limit it stands in for (`None`: none, so never in a form).
+pub struct Kh1Limit {
+    pub command: u8,
+    follow_ups: &'static [u8],
+    pub name: &'static str,
+    kh2: Option<&'static str>,
+}
+
+/// KH1's limits, in the order of its Triangle offer's table (`0x140529040`: five pairs of KH1
+/// ability and command, abilities 11..15; read from the executable). The command is also the
+/// command type KH1's command step dispatches on (`0x1402A1470` sends these to its limit start
+/// `0x14028B240`, which starts limit 0..4 through `0x140397C00` and pays its MP). The follow-ups
+/// are the commands that dispatcher passes to the running limit (`0x140397C00 (7 | 8 | 9 | 11,
+/// 0)`): Sonic Blade 0x4D / 0x4E, Ars Arcanum 0x58 / 0x59, Strike Raid 0x5F / 0x60, Ragnarok
+/// 0x5B; Trinity Limit has none. In Limit Form the first four stand in for its KH2 limits (the
+/// user's pairs): Sonic Blade for Sonic Rave, Ars Arcanum for Last Arcanum, Strike Raid for Strike
+/// Raid, Ragnarok for Infinity.
+pub const KH1_LIMITS: [Kh1Limit; 5] = [
+    Kh1Limit { command: 0x4B, follow_ups: &[0x4D, 0x4E], name: "Sonic Blade", kh2: Some("Sonic Rave") },
+    Kh1Limit { command: 0x57, follow_ups: &[0x58, 0x59], name: "Ars Arcanum", kh2: Some("Last Arcanum") },
+    Kh1Limit { command: 0x5E, follow_ups: &[0x5F, 0x60], name: "Strike Raid", kh2: Some("Strike Raid") },
+    Kh1Limit { command: 0x5A, follow_ups: &[0x5B], name: "Ragnarok", kh2: Some("Infinity") },
+    Kh1Limit { command: 0x52, follow_ups: &[], name: "Trinity Limit", kh2: None },
+];
+/// The offer's equipped bits (`0x14299CC40`): bit k for `KH1_LIMITS[k]` equipped (set from KH1's
+/// has-ability test `0x140282A70` at `0x14028B310`). Its offer looks only at these.
+const KH1_EQUIPPED_RVA: Rva = Rva(0x299CC40);
+/// The bits of the limits Limit Form may offer (those with a KH2 equivalent).
+const LIMIT_FORM_KH1: u32 = {
+    let mut m = 0;
+    let mut k = 0;
+    while k < KH1_LIMITS.len() {
+        if KH1_LIMITS[k].kh2.is_some() {
+            m |= 1 << k;
+        }
+        k += 1;
+    }
+    m
+};
+/// KH1's battle flags (`takeover::BATTLE_RVA`); bit 16: a KH1 limit runs (set by its limit start
+/// `0x14028B670`, cleared by its frame task `0x14028B490` two frames after the limit's module
+/// stops, `0x140397C00 (5)` reading 0; its offer is skipped while it is set).
+const BATTLE_FLAGS_RVA: Rva = Rva(0x2867CD8);
+const KH1_LIMIT_ON: u32 = 0x1_0000;
+
+/// KH1's command (type) `kind` is one of its limits (`false`) or a limit's follow-up (`true`):
+/// its index in `KH1_LIMITS`.
+pub fn kh1_limit(kind: u8) -> Option<(usize, bool)> {
+    KH1_LIMITS.iter().enumerate().find_map(|(k, l)| if l.command == kind { Some((k, false)) } else if l.follow_ups.contains(&kind) { Some((k, true)) } else { None })
+}
+
+/// Whether a KH1 limit may run in the form Sora is in: only in Limit Form, only the four with a
+/// KH2 equivalent, and only while KH2's Limit menu is off (out of a form this isn't asked: KH1's
+/// own rules).
+pub fn kh1_limit_allowed(k: usize) -> bool {
+    !KH2_LIMITS && super::form::in_limit() && KH1_LIMITS.get(k).is_some_and(|l| l.kh2.is_some())
+}
+
+/// A KH1 limit runs now (KH1's battle flags' bit 16).
+pub fn kh1_limit_running() -> bool {
+    let base = base();
+    base != 0 && unsafe { rd::<u32>(base + BATTLE_FLAGS_RVA) } & KH1_LIMIT_ON != 0
+}
+
+/// In Limit Form with one of KH1's limits running: KH1 has Sora for all of it (`takeover`), its
+/// own animation drawn (`pose::follow`), the form on and draining (`form::drain`).
+pub fn kh1_limit_holds() -> bool {
+    !KH2_LIMITS && super::form::in_limit() && kh1_limit_running()
+}
+
 // ---------------------------------------------------------------- install
 
 /// Points the `jmp rel32` at `site` (which must go to `to`) at `ours`, through a stub near the
@@ -974,13 +1091,22 @@ pub unsafe fn install() {
     if !super::settings::get().drive {
         return;
     }
-    // KH1's limits never offered in a form (the user), whatever else goes in.
+    // KH1's limits never offered in a form (the user), whatever else goes in; in Limit Form only
+    // its four stand-ins while KH2's menu is off (`specials_prompt`).
     ORIG_SPECIALS.store(base + SPECIALS_RVA, Ordering::Release);
-    if !hook::redirect_call(base + SPECIALS_CALL_RVA, base + SPECIALS_RVA, specials_prompt as *const () as usize, "KH1's limits' Triangle offer (none in a form)") {
-        log("KH1's limits: their Triangle offer wasn't as expected: they still show in a form (refused when used)");
+    if !hook::redirect_call(base + SPECIALS_CALL_RVA, base + SPECIALS_RVA, specials_prompt as *const () as usize, "KH1's limits' Triangle offer (none in a form; Limit Form's four)") {
+        log("KH1's limits: their Triangle offer wasn't as expected: they still show in a form (refused when used, but Limit Form's four)");
     }
     if !super::drive::on() {
         log("Limit Form: no Drive menu, no Limit menu");
+        return;
+    }
+    // KH2's Limit menu off for now (`KH2_LIMITS`): none of it is installed, `ON` stays false.
+    if !KH2_LIMITS {
+        log(&format!(
+            "Limit Form: KH2's Limit menu off for now (KH2_LIMITS); KH1's {} in its place, as KH1 offers them",
+            KH1_LIMITS.iter().filter_map(|l| l.kh2.map(|k| format!("{} (for {k})", l.name))).collect::<Vec<_>>().join(", ")
+        ));
         return;
     }
     let _ = TEXT.set((

@@ -192,8 +192,9 @@ pub unsafe fn fill(actor: usize, _flags: usize) {
     // when Sora has no spell, so the list doesn't open; page 2's Drive row is drawn from the
     // magic list's own bit (`fill` below), so Revert stays usable.
     // (Limit Form: KH2's Limit can't cast either; its Limit commands take Magic's place there,
-    // `limits::fill`.)
-    if super::form::in_valor() {
+    // `limits::fill`. With that menu off for now, `limits::KH2_LIMITS`, Magic is greyed there as
+    // in Valor, as before s291; KH1's limits stand in, in KH1's Triangle box.)
+    if super::form::in_valor() || super::form::in_limit() && !super::limits::KH2_LIMITS {
         let top = base + MENU_RVA;
         if rd::<u8>(top + 0x14 + 1) == 2 {
             for off in [4usize, 8] {

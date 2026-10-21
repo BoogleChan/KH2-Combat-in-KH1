@@ -58,8 +58,11 @@
 //! Sora's (as the others'). It keeps KH1 Sora's own look (no tint: the model drawn is KH1's
 //! already). No magic: KH2's Limit Form has its Limit commands in place of Magic (Sonic Rave, Last
 //! Arcanum, Strike Raid, Infinity), run by its model's own script (`limi`): `limits`, the Limit
-//! menu in Magic's place (Sonic Rave and Last Arcanum so far). It costs `LIMIT_COST_MP` and opens at level `LIMIT_LEVEL` (the
-//! user).
+//! menu in Magic's place. That menu is off for now (`limits::KH2_LIMITS`; the user: "lets comment
+//! the KH2 limits, and for the moment put in the equivalent KH1 limits"): Magic is greyed, and
+//! KH1's own Sonic Blade, Ars Arcanum, Strike Raid and Ragnarok (those equipped) are offered and
+//! run as KH1 does them, KH1 having him for each, the form on and draining (`drain`) all through.
+//! It costs `LIMIT_COST_MP` and opens at level `LIMIT_LEVEL` (the user).
 
 use super::{log, pose};
 use character_core::{Abilities, Character, EventKind};
@@ -777,19 +780,28 @@ pub unsafe fn after_step(d: &mut Drive, actor: usize, battle: bool) {
     );
     // Valor's second Keyblade's Strength and MP (and back to Sora's own after).
     super::valorstats::step(actor);
-    let Some(f) = d.form.as_mut() else { return };
+    let Some(kind) = d.form.as_ref().map(|f| f.kind) else { return };
     // (Valor, Final: its Keyblade checked every 10 frames, so a change made in the menu reaches
     // his hand, `valor::keyblade` / `valor::final_keyblade`.)
-    if f.kind.two_blades() {
+    if kind.two_blades() {
         static TICK: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         if TICK.fetch_add(1, Ordering::Relaxed) % 10 == 0 {
-            if f.kind == Kind::Final {
+            if kind == Kind::Final {
                 super::valor::final_keyblade();
             } else {
                 super::valor::keyblade();
             }
         }
     }
+    drain(d, actor, battle);
+}
+
+/// One frame of the form's MP drain (`after_step`), and its end out of MP: `revert` set, taken by
+/// `before_step` once KH2 has him and he can change. Also while KH1 has him for one of its limits
+/// in Limit Form (`takeover`, `limits::kh1_limit_holds`: the form stays on all through the limit
+/// and drains as ever; out of MP meanwhile, the revert waits for the limit's end and KH2).
+pub unsafe fn drain(d: &mut Drive, actor: usize, battle: bool) {
+    let Some(f) = d.form.as_mut() else { return };
     f.left += if battle { 2 } else { 1 };
     if f.left >= DRAIN_FRAMES * 2 {
         f.left = 0;
@@ -804,7 +816,7 @@ pub unsafe fn after_step(d: &mut Drive, actor: usize, battle: bool) {
     }
     if !super::reflect::has_mp(actor, 1) && !d.revert {
         d.revert = true;
-        log(&format!("{}: out of MP", f.kind.name()));
+        log(&format!("{}: out of MP{}", f.kind.name(), if super::limits::kh1_limit_holds() { " during KH1's limit (the revert waits for its end, KH2 having him)" } else { "" }));
     }
 }
 

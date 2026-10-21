@@ -540,8 +540,16 @@ lists (`.hed` names). Nothing of it is in the repository.
   modelled on. With KH2's player model (off since s259) its own body `P_EX100_KH1F.mdlx` is
   drawn (`model.rs`).
 - **No magic.** KH1's spells (a shortcut's too) are refused in the form (`combat::run_entry`):
-  KH2's Limit Form can't cast.
-- **The Limit menu (the user's pick: "KH2's own limits").** `limits.rs`:
+  KH2's Limit Form can't cast. With the Limit menu off (below), Magic is greyed in the form as
+  in Valor (`drive::fill`), as it was before s291.
+- **For now KH1's limits, not KH2's** (the user: "lets comment the KH2 limits, and for the
+  moment put in the equivalent KH1 limits"). The Limit menu below is switched off by
+  `limits::KH2_LIMITS` (false). Its code is kept and still compiled, only never installed, so
+  `true` brings it back as it was (and takes KH1's limits out of Limit Form again). In its place,
+  KH1's own limits that stand in for KH2's four (the user's pairs): Sonic Blade for Sonic Rave,
+  Ars Arcanum for Last Arcanum, Strike Raid for Strike Raid, Ragnarok for Infinity. See "KH1's
+  limits in Limit Form" below.
+- **The Limit menu (the user's pick: "KH2's own limits"; off for now, above).** `limits.rs`:
   - The top's Magic row reads "Limit" (record 2's word answered by `limits::word`) and opens our
     list in the magic list's place: records 0x82..0x85 (words 0x1FA..0x1F7, spell-type records
     with arguments 0x20..0x23, written over empty ones as the Drive forms are), named Sonic
@@ -604,23 +612,84 @@ lists (`.hed` names). Nothing of it is in the repository.
     Keyblade (elements 35 / 36, 6 and 28 along the blade) pointed along his facing, off the
     Keyblade (the user, s291: "the last arcanum vfx being desyncd from the keyblade"). An element
     a spell script starts now starts on its package's anchors (`kh2fx::spell_start`).
-- **No KH1 limits in any form** (the user: "KH1 limits that are equipped shouldn't even prompt
-  in any drive form. No drive form should be able to use KH1 Limits"). KH1 offers its limits
-  (Sonic Blade, Ars Arcanum, Strike Raid, Ragnarok, ...) in its Triangle box: `0x14028AF60`,
-  called once, from the end of the context fill (`0x140292B12`), checks up to five equipped ones
-  (`0x14052904C`, the bits at `0x14299CC40`) against the target's distance and their MP
-  (`0x1402A2A80`) and puts the best in the box (`0x140290E70 (3, id)`, the id from
-  `0x140529041`; greyed by `0x140290E20` when the MP is short). In any Drive Form that call is
-  skipped (`limits::specials_prompt`): they never show. The refusal of every KH1 move but Attack,
-  magic and items in a form (`combat::command`, `exec`, s278) stays as the backstop. Limit
-  Form's KH2 limits are the only limits in a form.
+- **No KH1 limits in any form but Limit Form's four** (the user: "KH1 limits that are equipped
+  shouldn't even prompt in any drive form. No drive form should be able to use KH1 Limits"; then,
+  for Limit Form only, "for the moment put in the equivalent KH1 limits"). Read from the
+  executable:
+  - **The offer.** KH1 offers its limits in its Triangle box: `0x14028AF60`, called once, from
+    the end of the context fill (`0x140292B12`). It does nothing while a limit runs (battle flags
+    `0x142867CD8` bit 16), with Sora not in KH1's ground state, with the limit data not loaded
+    (`0x14299CC20` not 5) or without a hittable target (`0x142DB3F18`). Its table at
+    `0x140529040` holds five pairs of ability and command: Sonic Blade (ability 11, command 0x4B),
+    Ars Arcanum (12, 0x57), Strike Raid (13, 0x5E), Ragnarok (14, 0x5A), Trinity Limit (15, 0x52).
+    It goes through them in the order at `0x14052904C` (Trinity, Ragnarok, Ars Arcanum, Sonic
+    Blade, Strike Raid), taking only those whose bit is set at `0x14299CC40` (bit k for entry k,
+    set from KH1's has-ability test `0x140282A70` at `0x14028B310`: the equipped ones). Each one
+    is scored against the target's distance (the command record's `+0xE`; Sonic Blade and
+    Ragnarok also by its height, Trinity by the party) and its MP (`0x142D23730 + 0xF4 + 2k`,
+    through `0x1402A2A80`). The best goes in the box (`0x140290E70 (3, command)`), greyed
+    (`0x140290E20`) when the MP is short.
+  - **The run.** The command is its own command type. KH1's command step sends it from
+    `0x1402A1470` to `0x14028B240`, the limit start: `0x14028B670 (sora, k)` sets bit 16, starts
+    limit k through `0x140397C00 (k, its data)` and pays its MP (`0x1402A39D0`). The follow-ups go
+    the same way to the running limit (`0x140397C00 (7 | 8 | 9 | 11, 0)`): Sonic Blade 0x4D / 0x4E,
+    Ars Arcanum 0x58 / 0x59, Strike Raid 0x5F / 0x60, Ragnarok 0x5B. `0x140397C00` sends each
+    limit to its own code (`0x14039EC80`, `0x14039F060`, `0x1403A0180`, `0x14039F400`,
+    `0x1403A0650`; not read further). `0x14028B490`, a task run every frame, clears bit 16 two
+    frames after the limit stops (`0x140397C00 (5)` reading 0). (That the command type is the
+    command id, as for the context commands, is inferred: the type dispatch and the offer's table
+    name the same five ids. The log names the command when one is chosen in a form.)
+  - **Ours, every form but Limit Form.** The offer call is skipped (`limits::specials_prompt`), so
+    they never show. The command step refuses them and their follow-ups with KH1's "can't"
+    (`combat::command`, `limits::kh1_limit`). They don't move Sora through the command step, so
+    `NOT_SORAS` lists them, and the s278 refusal of every KH1 move but Attack, magic and items
+    never caught them: before this, the offer's skip was the only thing keeping them out.
+  - **Ours, Limit Form** (with `KH2_LIMITS` off): KH1's offer runs as KH1's own, with the
+    equipped bits of all but Sonic Blade, Ars Arcanum, Strike Raid and Ragnarok masked out for the
+    call. So only those four show, only the equipped ones, by KH1's own distance, height and MP
+    rules, and in KH1's own box. Not in KH2's air: KH1's ground-state check reads the ground all
+    through KH2's jumps. The command step refuses Trinity Limit, so only the four and their
+    follow-ups run.
+- **KH1's limits in Limit Form: how they run (ours).**
+  - **The start** (`combat::command`) is taken on the ground, and only when KH2's move can take a
+    command (`can_take_command`, no queue, as every command here). Otherwise it is refused with
+    KH1's "can't". KH1's command step then runs it as KH1 does: its limit, its MP cost. If its
+    limit flag (bit 16) is set after that, KH1 takes Sora as for a KH1 command (`hand_to_kh1`,
+    `FROM_COMMAND`, no spell, no combo slot).
+  - **While it runs** (`takeover`, `limits::kh1_limit_holds`: Limit Form and bit 16 set), KH1 has
+    him whatever is pressed. Its limit module moves and animates him, and its Keyblade (Strike
+    Raid's throw too), effects, hits and MP are KH1's. None of the hand-off's cuts (Attack, jump,
+    Square, the stick) are taken. An Attack pressed meanwhile is dropped (no buffer). The
+    follow-ups are KH1's own Triangle presses, passed straight to KH1. `pose::follow` draws KH1's
+    own animation all through: Limit Form's model is KH1 Sora's, so none of the form's KH2
+    motions are drawn over a walk, run or jump slot of it.
+  - **The form** stays on. Its MP drain goes on (`form::drain`, the same yellow drain as
+    `after_step`). Out of MP meanwhile, the revert is set but waits: it needs KH2 to have him
+    and `can_change_form`, so it comes on the first frame after the limit. Before this, every
+    KH1 move in a form paused the drain, because the drain ran only in KH2's steps. That is still
+    so for items and Wisdom / Final's KH1 spells.
+  - **Its end.** Once bit 16 clears, the hand-off decides as at a KH1 command's end. The
+    hand-off's frames count on through the limit, so the end is taken as soon as KH1 lets him go.
+    On the ground, KH2 takes him on KH1's idle, the stick, an Attack, a jump or Square. In the
+    air (KH1's jump or fall state), it is KH2's fall at KH1's speed. KH2's controller starts over
+    in the form (`form::character`) and comes back in its battle stance.
+  - **Unchanged out of a form.** Base Sora's KH1 limits still run as before: no hand-off, KH1
+    keeping him while its slot is one of its own actions.
 - **Unchecked in game:** all of it. In particular:
   - whether the KH1F archive loads as a PAX;
   - the Limit menu's rows and names, and the Triangle box with our record (KH1's step runs it
     only at the menu's top level);
   - the follow-ups' timing against KH2's (the press reaches the script one or two frames later);
   - the limits' hits (KH2's ATKP powers on KH1's enemies) and their invulnerability;
-  - KH1's limits gone from the Triangle box in every form;
+  - KH1's limits gone from the Triangle box in every form but Limit Form, and in Limit Form only
+    the four, only those equipped;
+  - KH1's limits in Limit Form: that KH1 has him all through each (Sonic Blade's dashes, Ars
+    Arcanum's flurry, Strike Raid's throws, Ragnarok's rise and shots) and draws its own
+    animation, Keyblade and effects there, its hits land, its follow-ups come on Triangle, and KH2
+    takes him back cleanly after, on the ground and in the air; that bit 16 covers the whole
+    limit (if KH1 drops it early, the hand-off's cuts could take him mid-limit); that the takeover
+    runs on KH1's limit frames (the drain runs from there);
+  - the MP drain and the out-of-MP revert through a KH1 limit;
   - Ripple Drive's body group 20 shapes on KH1's contact code;
   - Zantetsuken's power 600 against KH1's enemies;
   - Sora's `plyr` stand-in.

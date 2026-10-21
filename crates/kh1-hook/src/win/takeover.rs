@@ -1158,6 +1158,46 @@ unsafe fn takeover(actor: usize) -> bool {
             }
         }
     }
+    // Limit Form: one of KH1's own limits runs (`limits::kh1_limit_holds`; Sonic Blade, Ars
+    // Arcanum, Strike Raid, Ragnarok, started as a KH1 command's hand-off, `combat::command`). KH1
+    // has him all through it whatever is pressed: its limit module moves and animates him, and its
+    // Keyblade, effects and hits are KH1's (none of the hand-off's cuts below, which would take him
+    // mid-limit). The form stays on and its MP drain goes on (`form::drain`; out of MP, the revert
+    // waits for KH2 to have him again). When KH1's limit flag clears, the hand-off below ends it as
+    // a KH1 command's end: on the ground KH2's again on KH1's idle, the stick, an Attack or a jump;
+    // in the air KH2's fall.
+    if super::limits::kh1_limit_holds() {
+        // (An Attack meanwhile is dropped, no buffer: the limit plays to its end. KH1's follow-ups
+        // are KH1's own Triangle presses.)
+        if ATTACK_AFTER.swap(false, Ordering::Relaxed) {
+            static N: AtomicU32 = AtomicU32::new(0);
+            if N.fetch_add(1, Ordering::Relaxed) < 20 {
+                log("an Attack during KH1's limit (Limit Form): dropped, the limit plays to its end");
+            }
+        }
+        let battle = rd::<u32>(base + BATTLE_RVA) & 1 != 0;
+        if let Ok(mut g) = DRIVER.try_lock() {
+            if let Some(d) = g.as_mut() {
+                super::form::drain(&mut d.drive, actor, battle);
+            }
+        }
+        // (The hand-off's frames count on, so its end is taken on the limit's first free frame;
+        // the jump button as held now, so one held through the limit isn't a fresh press.)
+        if HANDOFF.load(Ordering::Relaxed) {
+            HANDOFF_FRAMES.fetch_add(1, Ordering::Relaxed);
+            JUMP_PREV.store(buttons() & jump_button() != 0, Ordering::Relaxed);
+            *HANDOFF_POS.lock().unwrap() = Some(rd::<[f32; 3]>(actor + 0x10));
+        }
+        static HELD: AtomicU32 = AtomicU32::new(0);
+        let n = HELD.fetch_add(1, Ordering::Relaxed);
+        if n % 60 == 0 && n < 60 * 120 {
+            log(&format!("KH1's limit (Limit Form): KH1 has him, KH1 state {}, slot {:?}, {:.0} above the floor, hand-off {}", rd::<i32>(actor + 0x70), pose::sora_slot(), rd::<f32>(actor + 0x3D4), HANDOFF.load(Ordering::Relaxed)));
+        }
+        HANDOFF_SEEN_MS.store(now.max(1), Ordering::Relaxed);
+        HANDOFF_FRAME.store(true, Ordering::Relaxed);
+        release("KH1's limit (Limit Form)");
+        return false;
+    }
     // KH1 took him for one of its own air moves (`grab`): until it has him standing again.
     if HANDOFF.load(Ordering::Relaxed) {
         let state = rd::<i32>(actor + 0x70);
