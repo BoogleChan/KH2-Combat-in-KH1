@@ -202,6 +202,29 @@ const BAR_RVA: Rva = Rva(0x2C7E00);
 const NO_BARS_RVA: Rva = Rva(0x298D3A8);
 const HANG_RVA: Rva = Rva(0x2C17B0);
 const SWIM_RVA: Rva = Rva(0x2BF410);
+/// Water (`docs/kh1-water-pits.md`). KH1's swim state, and its two ways in: from the air (its fall
+/// state's input step: `SWIM_RVA`, refused in `NO_SWIM_WORLD` room `NO_SWIM_ROOM`, Hook's ship,
+/// where its fall turns to flight instead) and walking in (its ground state's input step
+/// `0x1402CA350`: `0x1402BF300`, only while he can act, no room refused). Both take the deep test
+/// `DEEP_WATER_RVA` (the feet more than a set depth under the water level `+0x2D4`: a table by
+/// body size at `0x14052AD40`, 50 to 100).
+const SWIM_STATE: i32 = 17;
+const WADE_IN_RVA: Rva = Rva(0x2BF300);
+const NO_SWIM_WORLD: u32 = 0xD;
+const NO_SWIM_ROOM: u32 = 8;
+/// KH1's splash as an airborne body's feet go under the water (its physics step, `0x140298488`:
+/// once per entry, flag `0x400000` on the actor while under; the effect only for air states).
+const SPLASH_RVA: Rva = Rva(0x2C0020);
+const IN_WATER: u32 = 0x40_0000;
+/// The states KH1's ground state's input step (`0x1402CA350`) can put him in: ladders and climbable
+/// walls (9, 10), the hang off an edge walked over (13), 12 (its narrow-beam move, skipped while
+/// `NO_BARS_RVA`), and swimming. KH1 runs that step every frame while KH2 has him, in the air too
+/// (KH2 keeps KH1's state at 0): those taken mid-air are undone (`ground_moves_in_air`).
+const GROUND_STEP_MOVES: [i32; 5] = [9, 10, 12, 13, SWIM_STATE];
+/// Where KH2's last frame left him (KH1's game frame, position), for `ground_moves_in_air`.
+static LAST_END: Mutex<(u64, [f32; 4])> = Mutex::new((u64::MAX, [0.0; 4]));
+/// The hand-off running is KH1's swim (`water`): logged as he leaves the water.
+static SWIM_MOVE: AtomicBool = AtomicBool::new(false);
 /// KH1 has him for one of its own moves (`grab`); KH2 starts over afterwards (`FRESH`).
 static HANDOFF: AtomicBool = AtomicBool::new(false);
 /// When `takeover` last saw KH1 still in its move (`kh1_move` holds while it does: KH2 draws
@@ -1413,6 +1436,16 @@ unsafe fn takeover(actor: usize) -> bool {
             }
         }
     }
+    ground_moves_in_air(base, actor);
+    swim_rescue(base, actor);
+    // KH1's ground step waded him into deep water while KH2 had him on the ground: KH1's swim, as a
+    // hand-off of its own (before, only its swim motion's slot let KH1 have him, and a frame with
+    // the slot not yet changed was KH2's with KH1's state at 17).
+    if !HANDOFF.load(Ordering::Relaxed) && FRAME_KIND.load(Ordering::Relaxed) == 1 && rd::<i32>(actor + 0x70) == SWIM_STATE {
+        take_for_kh1_move("water (walked in: KH1's swim)", -rd::<f32>(actor + 0x14) - rd::<f32>(actor + 0x3D4));
+        SWIM_MOVE.store(true, Ordering::Relaxed);
+        drop_pose();
+    }
     // Limit Form: one of KH1's own limits runs (`limits::kh1_limit_holds`; any of the five from its
     // Limit menu or shortcuts, started as a KH1 command's hand-off, `combat::command`). KH1
     // has him all through it whatever is pressed: its limit module moves and animates him, and its
@@ -1811,6 +1844,12 @@ unsafe fn takeover(actor: usize) -> bool {
             HANDOFF.store(false, Ordering::Relaxed);
             if GRAB_MOVE.load(Ordering::Relaxed) {
                 GRAB_BACK_MS.store(now_ms().max(1), Ordering::Relaxed);
+            }
+            if SWIM_MOVE.swap(false, Ordering::Relaxed) {
+                log(&format!(
+                    "water: out of KH1's swim, KH2 has him again (KH1 state {state}, {above:.0} above the floor, {}under the surface)",
+                    if rd::<f32>(actor + 0x14) >= rd::<f32>(actor + 0x2D4) { "" } else { "not " }
+                ));
             }
             SETTLE.store(false, Ordering::Relaxed);
             KH1_WINDOW.store(false, Ordering::Relaxed);
@@ -2388,7 +2427,11 @@ unsafe fn takeover(actor: usize) -> bool {
     let rise3d = settings.ceilings && (rising || air);
     // An attack's lunge doesn't walk him into a room exit (`gates`): its face event dropped,
     // this frame's move undone.
-    let attack_move = matches!(out.state, StateName::Attack);
+    // (Not an air attack coming down more than it lunges: under it is a floor or a pit's trigger,
+    // which KH1's own fall would meet, not a doorway; the player: "Fell into the blackness" of the
+    // Bottomless Hall "but didn't transition to the chambers underneath".)
+    let comes_down = air && !rising && -out.displacement[1] > glam::Vec2::new(out.displacement[0], out.displacement[2]).length();
+    let attack_move = matches!(out.state, StateName::Attack) && !comes_down;
     let before_move = rd::<[f32; 4]>(actor + 0x10);
     super::gates::pre_move(actor, attack_move);
     super::gates::attacking(actor, attack_move);
@@ -2400,13 +2443,19 @@ unsafe fn takeover(actor: usize) -> bool {
     } else {
         mv(actor, &[out.displacement[0] + carry[0], 0.0, out.displacement[2] + carry[2], 0.0], 0);
     }
-    if let Some(e) = super::gates::post_move() {
+    // A face event dropped: the whole move undone, its height too. (KH2's height in the air was
+    // set again below from where the move began, so an air combo sank on through a trigger it had
+    // touched, its event dropped: through a pit's, into the dark under the Bottomless Hall.)
+    let undone = if let Some(e) = super::gates::post_move() {
         wr(actor + 0x10, before_move);
         static N: AtomicU32 = AtomicU32::new(0);
         if N.fetch_add(1, Ordering::Relaxed) < 40 {
-            log(&format!("an attack's lunge touched map event {e}: kept out of it (the move undone)"));
+            log(&format!("an attack's lunge touched map event {e}: kept out of it (the move undone{})", if air { ", his height held" } else { "" }));
         }
-    }
+        true
+    } else {
+        false
+    };
     if settings.carry {
         wr(actor + 0x120, [0.0f32; 4]);
     }
@@ -2414,10 +2463,10 @@ unsafe fn takeover(actor: usize) -> bool {
     let floor_up = -rd::<f32>(actor + 0x324);
     let walked_up = -rd::<f32>(actor + 0x14);
     if air || rising {
-        let mut y = up_before + out.displacement[1];
+        let mut y = up_before + if undone { 0.0 } else { out.displacement[1] };
         let mut stopped = false;
         let mut on: Option<usize> = None;
-        if rise3d && !rising {
+        if rise3d && !rising && !undone {
             // Stopped short of a fall (less than half of it happened): standing on something.
             let got = -rd::<f32>(actor + 0x14);
             // Only with KH1's collision saying he is on ground (`+0x2D0` bit 0 clear, as its
@@ -2447,7 +2496,7 @@ unsafe fn takeover(actor: usize) -> bool {
             RISE_FRAMES.store(0, Ordering::Relaxed);
             SLOPE_RUN.store(false, Ordering::Relaxed);
         }
-        if rise3d && rising {
+        if rise3d && rising && !undone {
             // KH2's ceiling rule: less than 49% of the rise happened.
             // (KH1's mover may cut the rise short, never add to it: pushed out of an enemy's
             // body it lifted him, and swing after swing he rode up the target he was locked on
@@ -2503,6 +2552,22 @@ unsafe fn takeover(actor: usize) -> bool {
             wr(actor + 0x14, -floor_up);
             d.grounded = true;
             d.on_top = None;
+            // (Pits: a landing with no floor face under him (`+0x2DC` 0xFFFF; KH1's floor query
+            // `0x140194920` then makes up a floor point): logged, for the next look at a pit KH2
+            // doesn't fall into.)
+            let face = rd::<u16>(actor + 0x2DC);
+            if face == 0xFFFF {
+                static N: AtomicU32 = AtomicU32::new(0);
+                if N.fetch_add(1, Ordering::Relaxed) < 30 {
+                    log(&format!(
+                        "landed with no floor face under him (collision flags {:08x}, event {}, world {:#x} room {:#x}, y {floor_up:.0})",
+                        rd::<u32>(actor + 0x2D0),
+                        rd::<u16>(actor + 0x2D8),
+                        rd::<u32>(base + WORLD_RVA),
+                        rd::<u32>(base + ROOM_RVA)
+                    ));
+                }
+            }
         } else {
             wr(actor + 0x14, -y.max(floor_up));
             d.grounded = false;
@@ -2565,9 +2630,22 @@ unsafe fn takeover(actor: usize) -> bool {
     if no_grab > 0 {
         NO_GRAB.store(no_grab - 1, Ordering::Relaxed);
     }
+    // Water first, in any of KH2's states (an air combo, an Aerial Dodge, a glide, a Quick Run or a
+    // landing into it) and whatever the ini's `grabs` says: KH1's fall state tries its swim every
+    // frame, outside its other grabs' tests (`0x1402ADB54`), and its ground state wades in.
+    let swim_stick = if tilt > 0.0 { [dir.x, 0.0, dir.y, tilt] } else { [0.0; 4] };
+    let swam = water(base, actor, d.character.airborne(), swim_stick, floor_up);
+    // In a flight world, none of KH1's grabs coming down where KH1 would be flying him (more than
+    // 100 over the floor, or under the room's flight height): its fall turns to flight there
+    // (the player, Hook's fight: stuck in midair in a climbing position). Rising, its jump's grabs
+    // as before.
+    let flight_here = !rising && rd::<u32>(base + BATTLE_RVA) & FLIGHT_FLAG != 0 && {
+        let room: unsafe extern "system" fn(usize) -> u32 = std::mem::transmute(base + FLIGHT_ROOM_RVA);
+        rd::<f32>(actor + 0x3D4) > FLIGHT_ABOVE || room(actor) != 0
+    };
     // (Also out of an Aerial Dodge or a glide: KH2's fall, the user: "KH2 soras falling animation
     // is unable to grab onto ladders/vines".)
-    if settings.grabs && no_grab == 0 && d.character.airborne() && matches!(out.state, StateName::Air | StateName::Jump | StateName::AerialDodge | StateName::Glide) {
+    if settings.grabs && !swam && !flight_here && rd::<i32>(actor + 0x70) == 0 && no_grab == 0 && d.character.airborne() && matches!(out.state, StateName::Air | StateName::Jump | StateName::AerialDodge | StateName::Glide) {
         // KH1 tries them in its jump / fall states, whose collision (`0x140297F20`: flag 1)
         // finds the contacts they read; ours ran in its ground state. So: KH1's fall state (3,
         // which has these checks too) and a standing-still move there to refresh the contacts.
@@ -2601,6 +2679,7 @@ unsafe fn takeover(actor: usize) -> bool {
             SETTLE.store(false, Ordering::Relaxed);
             *GRAB_FLOOR.lock().unwrap() = floor.is_finite().then_some(floor);
             set_air_cast(None);
+            SWIM_MOVE.store(rd::<i32>(actor + 0x70) == SWIM_STATE, Ordering::Relaxed);
             log(&format!("KH1 takes him: {what} (KH1 state {}, slot {:?})", rd::<i32>(actor + 0x70), pose::sora_slot()));
         }
     }
@@ -2784,6 +2863,7 @@ unsafe fn takeover(actor: usize) -> bool {
         }
         d.last_state = Some(out.state);
     }
+    *LAST_END.lock().unwrap() = (GAME_FRAME.load(Ordering::Relaxed), rd::<[f32; 4]>(actor + 0x10));
     ACTIVE_MS.store(now_ms().max(1), Ordering::Relaxed);
     true
 }
@@ -2896,6 +2976,159 @@ unsafe fn kh2_footsteps(actor: usize, out: &Output, anim: &RigAnim) {
     for k in steps {
         play_step(actor, k);
     }
+}
+
+/// KH1's ground state's own moves taken while KH2 had him in the air (`GROUND_STEP_MOVES`). KH1's
+/// think runs its state's input step every frame, KH2's included, and KH2 keeps KH1 in its ground
+/// state 0 all the while, in the air too: so KH1's walking checks ran mid-air (the player: in
+/// Hook's fight "you can get stuck in midair in a climbing position"; under water, "walked on the
+/// bottom"). Its catch of a ladder, an edge to hang from or deep water to wade into then set his
+/// state under KH2, which kept him while airborne (`takeover`'s slot test spares a fall) and moved
+/// him off; on landing KH1 had him in a climb, a hang or a swim with nothing there. Undone here: KH1
+/// back in its ground state where KH2's last frame left him, its motion request back to idle.
+/// KH1's air rules decide instead (`grab`, `water`), as vanilla's fall state has them.
+unsafe fn ground_moves_in_air(base: usize, actor: usize) {
+    if HANDOFF.load(Ordering::Relaxed) || FRAME_KIND.load(Ordering::Relaxed) != 1 || !KH2_AIR.load(Ordering::Relaxed) {
+        return;
+    }
+    let state = rd::<i32>(actor + 0x70);
+    if !GROUND_STEP_MOVES.contains(&state) {
+        return;
+    }
+    let set: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(base + SET_STATE_RVA);
+    set(actor, 0);
+    let at = rd::<[f32; 4]>(actor + 0x10);
+    let (frame, last) = *LAST_END.lock().unwrap();
+    let restored = frame.wrapping_add(1) == GAME_FRAME.load(Ordering::Relaxed) && last.iter().all(|v| v.is_finite());
+    if restored {
+        wr(actor + 0x10, last);
+    }
+    let setm: unsafe extern "system" fn(usize, u32, f32) -> usize = std::mem::transmute(base + SET_MOTION_RVA);
+    setm(actor, 0, 0.0);
+    static N: AtomicU32 = AtomicU32::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) < 40 {
+        let moved = glam::Vec3::from_slice(&at[..3]).distance(glam::Vec3::from_slice(&last[..3]));
+        log(&format!(
+            "KH1's ground step put him in state {state} ({}) while KH2 had him in the air: undone ({}; {:.0} above the floor)",
+            match state {
+                9 | 10 => "a ladder or climbable wall",
+                13 => "the hang off an edge",
+                SWIM_STATE => "wading into deep water",
+                _ => "a ground move",
+            },
+            if restored { format!("back where KH2 left him, {moved:.0} away") } else { "left where KH1 put him".to_string() },
+            rd::<f32>(actor + 0x3D4)
+        ));
+    }
+}
+
+/// KH1 swims him where its own air rules never would (`NO_SWIM_WORLD` / `NO_SWIM_ROOM`: Hook's ship,
+/// whose sea has no shore or ledge to swim out to; the player: "Once you're swimming you're fully
+/// stuck and cannot escape"). There KH1's fall turns into flight below the room's height
+/// (`0x1402ADA30` with `FLIGHT_ROOM_RVA`): so does this swim (its rise speed cleared, as `takeover`'s
+/// flight start does), and KH1 flies him out.
+unsafe fn swim_rescue(base: usize, actor: usize) {
+    if rd::<i32>(actor + 0x70) != SWIM_STATE || rd::<u32>(base + BATTLE_RVA) & FLIGHT_FLAG == 0 || !no_swim_room(base) {
+        return;
+    }
+    wr(actor + 0x3C4, 0.0f32);
+    let set: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(base + SET_STATE_RVA);
+    set(actor, FLIGHT_STATE);
+    let handed = HANDOFF.swap(false, Ordering::Relaxed);
+    if handed {
+        SETTLE.store(false, Ordering::Relaxed);
+        SWIM_MOVE.store(false, Ordering::Relaxed);
+        FRESH.store(true, Ordering::Relaxed);
+    }
+    static N: AtomicU32 = AtomicU32::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) < 20 {
+        log(&format!("water: KH1 swam him where it never swims (world {NO_SWIM_WORLD:#x} room {NO_SWIM_ROOM:#x}): KH1's flight instead (state now {}, hand-off {handed})", rd::<i32>(actor + 0x70)));
+    }
+}
+
+/// The room where KH1's air entry into water refuses (`SWIM_RVA`, `0x1402BF100`).
+unsafe fn no_swim_room(base: usize) -> bool {
+    rd::<u32>(base + WORLD_RVA) == NO_SWIM_WORLD && rd::<u32>(base + ROOM_RVA) == NO_SWIM_ROOM
+}
+
+/// Water while KH2 has him, after its move (`docs/kh1-water-pits.md`): KH1's own rules, run here
+/// since KH1's fall and ground states don't run for him. Under the surface he gets KH1's splash
+/// (once per entry, as its physics step gives it). Deep (KH1's own test): in the air KH1's air
+/// entry (`SWIM_RVA`, as its fall state's input step tries it every frame, whatever he is doing),
+/// on the ground its walk-in (`WADE_IN_RVA`); either takes him into KH1's swim (`HANDOFF`), and KH1
+/// hands him back once its swim has him out (the shore, a ledge). Refused in the air in a flight
+/// world: KH1's fall's next step, flight below the room's height. Whether KH1 took him.
+unsafe fn water(base: usize, actor: usize, air: bool, stick: [f32; 4], floor: f32) -> bool {
+    // (KH1 y-down: the feet at or below the water level are under it.)
+    let under = rd::<f32>(actor + 0x14) >= rd::<f32>(actor + 0x2D4);
+    let flags = rd::<u32>(actor);
+    if under && flags & IN_WATER == 0 {
+        if air {
+            // (Its effect is for air states only, `0x1402C0020`: KH1's fall state for the call.)
+            let state = rd::<i32>(actor + 0x70);
+            wr(actor + 0x70, AIR_STATE);
+            let splash: unsafe extern "system" fn(usize) = std::mem::transmute(base + SPLASH_RVA);
+            splash(actor);
+            wr(actor + 0x70, state);
+        }
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 60 {
+            log(&format!(
+                "water: under the surface while KH2 has him ({}, {:.0} above the floor, the surface {:.0} above it)",
+                if air { "in the air: KH1's splash" } else { "on the ground" },
+                rd::<f32>(actor + 0x3D4),
+                rd::<f32>(actor + 0x324) - rd::<f32>(actor + 0x2D4)
+            ));
+        }
+    }
+    wr(actor, if under { rd::<u32>(actor) | IN_WATER } else { rd::<u32>(actor) & !IN_WATER });
+    let deep: unsafe extern "system" fn(usize) -> i32 = std::mem::transmute(base + DEEP_WATER_RVA);
+    if !under || deep(actor) == 0 {
+        return false;
+    }
+    // (Some write into the vector they are given: room to spare, as `grab`.)
+    let mut v = [0.0f32; 16];
+    v[..4].copy_from_slice(&stick);
+    type Try = unsafe extern "system" fn(usize, usize) -> i32;
+    let entry: Try = std::mem::transmute(base + if air { SWIM_RVA } else { WADE_IN_RVA });
+    if entry(actor, v.as_mut_ptr() as usize) != 0 && rd::<i32>(actor + 0x70) == SWIM_STATE {
+        take_for_kh1_move(if air { "water (from the air: KH1's swim)" } else { "water (walked in: KH1's swim)" }, floor);
+        SWIM_MOVE.store(true, Ordering::Relaxed);
+        return true;
+    }
+    if air && rd::<u32>(base + BATTLE_RVA) & FLIGHT_FLAG != 0 {
+        let room: unsafe extern "system" fn(usize) -> u32 = std::mem::transmute(base + FLIGHT_ROOM_RVA);
+        if room(actor) != 0 {
+            wr(actor + 0x3C4, 0.0f32);
+            let set: unsafe extern "system" fn(usize, i32) -> u32 = std::mem::transmute(base + SET_STATE_RVA);
+            set(actor, FLIGHT_STATE);
+            log(&format!("water: deep in the air where KH1 doesn't swim: KH1's flight, as its fall has it (state now {})", rd::<i32>(actor + 0x70)));
+            return false;
+        }
+    }
+    static REFUSED: AtomicU64 = AtomicU64::new(0);
+    let now = now_ms();
+    if now.saturating_sub(REFUSED.swap(now, Ordering::Relaxed)) > 2000 {
+        log(&format!(
+            "water: deep, KH1 doesn't take him yet ({}; flags {:08x}, world {:#x} room {:#x})",
+            if air { "its air entry refuses here" } else { "its walk-in waits for him to be able to act" },
+            rd::<u32>(actor),
+            rd::<u32>(base + WORLD_RVA),
+            rd::<u32>(base + ROOM_RVA)
+        ));
+    }
+    false
+}
+
+/// KH1 has him for one of its own moves from KH2's frame (a grab, the water): KH1 keeps him until it
+/// has him standing again (`HANDOFF`), `pose` blending into its animation.
+fn take_for_kh1_move(what: &str, floor: f32) {
+    hand_to_kh1(what);
+    FROM_COMMAND.store(false, Ordering::Relaxed);
+    SWIM_MOVE.store(false, Ordering::Relaxed);
+    GRAB_MOVE.store(true, Ordering::Relaxed);
+    *GRAB_FLOOR.lock().unwrap() = floor.is_finite().then_some(floor);
+    set_air_cast(None);
 }
 
 /// KH1's air moves, tried as its jump's input step does; the one that took him, if any.

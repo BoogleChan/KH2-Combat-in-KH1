@@ -23,6 +23,7 @@ mod leftblade;
 mod limits;
 mod menu;
 mod model;
+mod music;
 mod pose;
 mod settings;
 mod shortcuts;
@@ -236,6 +237,7 @@ pub unsafe extern "system" fn DllMain(_inst: *mut c_void, reason: u32, _reserved
         leftblade::install();
         model::install();
         gates::install();
+        music::install();
         kh2sound::start();
         kh2fx::start();
         pose::load_kh2();

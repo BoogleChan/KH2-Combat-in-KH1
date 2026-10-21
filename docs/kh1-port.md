@@ -24,11 +24,12 @@ Next to the game; written with the defaults when missing, read when the game sta
 | `hurt` | `kh2` (default), `kh1` | How Sora takes hits while KH2 has him. |
 | `carry` | `on` (default), `off` | Moving platforms carry him, KH1's pushes move him. |
 | `ceilings` | `on` (default), `off` | Ceilings stop KH2's jumps. |
-| `grabs` | `on` (default), `off` | KH1's ledge, vine, bar and swim moves take him from KH2's falls. |
+| `grabs` | `on` (default), `off` | KH1's ledge, vine, bar and swim moves take him from KH2's falls. Water is KH1's either way (`docs/kh1-water-pits.md`). |
 | `commands` | `on` (default), `off` | KH1's own commands (magic, items, specials, summons) take him from KH2. |
 | `swing_fx` | `on` (default), `off` | KH2's swings play KH1's Keyblade trail, swing effect and Sora's voice. |
 | `kh2_sounds` | `magnet_explosion` (default), `all`, `off` | Which moves play KH2's own sounds (its effect and Keyblade sounds, from the KH2 install). |
 | `kh2_volume` | `1.0` (default) | Their volume. |
+| `music_mute` | `lowest` (default), `on`, `off` | `lowest`: the game's lowest Music volume step is silence (KH1's own lowest step is 0.1, still heard). `on`: no music at any step. `off`: KH1's own steps. Effects and voices are never touched. See `docs/kh1-music-mute.md`. |
 | `kh2_voice` | `off` (default), `on` | `on`: Sora's KH2 battle voice on those moves; `off`: KH1's voice. |
 | `kh2_effects` | `magnet_explosion` (default), `all`, `off` | Which moves show KH2's own visual effects (its particle effects, from the KH2 install, drawn in KH1's frame). |
 | `flip_weapons` | KH1 item ids, `0x53` (default), `none` | Weapons KH2's grip holds the wrong way round, turned half round in his hand (the Dream Shield). |
@@ -63,6 +64,10 @@ Next to the game; written with the defaults when missing, read when the game sta
     frames (`HANDBACK_BLEND`, `takeover::grab_blend`). Before this, KH2's arms-out fall popped
     in after the climb (the user: "a small visual bug that happens when you go up from a
     ledge grab").
+- Water, pits and KH1's ground step under KH2's air moves: `docs/kh1-water-pits.md`. In short,
+  deep water hands him to KH1's swim from any KH2 state, KH1's ground-state moves (ladders,
+  edge hangs, wading in) taken mid-air are undone, Hook's sea gives KH1's flight instead of a
+  swim, and an air combo no longer sinks through a pit's trigger.
 
 ## Abilities from KH1's menu (`abilities = kh1`)
 

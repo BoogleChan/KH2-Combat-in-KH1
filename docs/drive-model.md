@@ -1103,3 +1103,53 @@ forms already open shows none (its story bytes or level jump).
 The 2 extra MP bars a form added (s269) are switched off (`valorstats::DRIVE_MP_ON`), and the drain
 is three times slower: one unit of yellow MP every 9 frames of battle (`form::DRAIN_FRAMES`), half
 as fast out of battle. A top bar of value n breaks into n × 30 units.
+
+## Partners (the rule the user's, the reads Checked: exe)
+
+The user: "Let's make drive forms require their specific party members to cast. For example,
+wisdom form needs donald alive to activate in KH2". As in KH2, where each form draws on its
+partners:
+
+| Form | Needs |
+|---|---|
+| Valor | Goofy |
+| Wisdom | Donald |
+| Limit | no one (KH2 FM: the partners stay by Sora's side) |
+| Master | Donald and Goofy |
+| Final | Donald and Goofy |
+| Anti | no one (the secret code's, as before) |
+
+A partner counts when he is one of the two actors after Sora in KH1's field party now and isn't
+knocked out. Distance doesn't matter (KH2 doesn't ask). "Specific" means the named character: a
+world guest (Tarzan, Aladdin, Ariel, Jack, Peter Pan, Beast) in Donald's or Goofy's place doesn't
+stand in for him, so with Tarzan for Goofy only Wisdom and Limit are there. Without its partners
+the form's Drive row is greyed (`form::usable`, which the Drive list's greying asks) and a choice
+of it is refused with the reason in the log ("Drive: Wisdom Form refused (Wisdom Form needs
+Donald: Donald is knocked out)"). Only the start asks: a partner going down while Sora is in the
+form doesn't end it. The rule table is `kh1-hook/src/partners.rs` (unit tests there); the reads
+are `form::field_party`.
+
+How the actors are read (no new addresses, so nothing new for Steam):
+
+- The field party is `0x142D37C80` (Sora), `+8` and `+0x10` (the two others), the same array
+  Trinity Limit's check reads.
+- Who an actor is: his object (`actor + 0x130`, a handle) `+0x4C` (u16), KH1's party member id,
+  the number of the save's party records (0 Sora, 1 Donald, 2 Goofy, then the guests;
+  `kh1-equipment.md`). KH1 reads it as the member itself: the stats refresh `0x1402A2CC0` passes
+  it for each of the three actors to `0x1402A2FA0 (member, stats)`, which takes record `save +
+  member × 0x74`; the HUD code `0x1402873A0` looks it up in the save's party list with
+  `0x140282EC0`. Donald and Goofy being 1 and 2: the member-indexed weapon table `0x140528D60`
+  (Sora `0x94F8`, Donald `0x9C88`, Goofy `0xA208` as entries 0, 1, 2; `kh1-equipment.md`). The object id is the character's, not a model's, so it
+  holds in the worlds where Donald and Goofy wear other models (stats there come from the same
+  records).
+- The save's party list `save + 0x48E` (4 bytes: Sora, the two in the field, a fourth; 0xFF
+  empty) is set by `0x1402835C0 (a, b, c)` (ids above 9 become 0xFF), cleared to Sora alone by
+  `0x1402832E8`, and a member is taken out by `0x140283530`. It is logged beside the actors as a
+  cross-check, not used for the rule (the actors are what is on the field).
+- Knocked out: actor `+0x88 & 0x30` (KH1's own test `0x140299A30`). Bit 0x10 is set on the hit
+  that empties his HP (`0x140299CA1`); his step turns it into 0x20 with a lie-down timer (`+0x3E4`
+  from the battle parameters' per-character byte `+0x7C`, `0x14029A94E`) until he gets up. HP 0
+  (stats `+0x3C`) counts as down too.
+
+The party is logged whenever it changes: "Drive partners: Donald (member 1), Goofy (member 2);
+save party list [00, 01, 02, ff]; partners there for Valor Form, Wisdom Form, ...".

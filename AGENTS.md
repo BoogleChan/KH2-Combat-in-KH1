@@ -3584,6 +3584,18 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   bounce, the swing goes on. Ini `walls = kh1 | clink | pass` (default kh1; `wall_clink` no longer
   read). Enemies' guards clink as before. `docs/kh1-clash.md`.
 
+### 2026-10-21: Stage 311 (forms need partners; water, pits and midair climbs; music mute)
+- The user: "Let's make drive forms require their specific party members to cast". New `partners.rs`
+  (Valor Goofy, Wisdom Donald, Master/Final both, Limit none, Anti unchanged); `form::field_party`
+  reads each party actor's member id (object +0x4C) and KO bits (+0x88 & 0x30, HP 0). Only entering
+  is checked; guests don't count. Docs: docs/drive-model.md "Partners".
+- A player's report: falling through water surfaces and pits, stuck swimming and midair climbs at
+  Hook. KH1's ground step ran under KH2's air moves; its states 9/10/12/13/17 after an airborne KH2
+  frame are undone; water is checked after every KH2 move and handed to KH1's own entry (flight in
+  Hook's room); `gates` holds height and lets downward air attacks fire triggers. docs/kh1-water-pits.md.
+- The user: "make it where music can be fully muted in the settings". New `music.rs`: the lowest Music
+  step is silence (ini `music_mute = lowest|on|off`). docs/kh1-music-mute.md.
+
 ### 2026-10-21: Stage 310 (no extra MP bars in forms; the drain three times slower)
 - The user: "comment off about the 2 additional MP in drive forms. Instead, lets make drive forms
   drain MP MUCH slower". `valorstats::DRIVE_MP_ON = false` (the bars' code kept); `form::DRAIN_FRAMES`

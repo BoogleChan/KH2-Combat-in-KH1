@@ -9,6 +9,11 @@
 //!   he already stood on before the attack is dropped, and that frame's move is undone, so the
 //!   lunge stops at the trigger's edge instead of resting inside it (the event fires on every
 //!   touch, so a lunge left in it would fire on the next idle frame). Walking in still works.
+//!   In the air the undone move keeps his height too, and an air attack coming down more than it
+//!   lunges isn't gated at all: what is under him is a floor or a pit's trigger, which KH1's own
+//!   fall would meet (`docs/kh1-water-pits.md`; an air combo had sunk through the Bottomless Hall's
+//!   trigger with its event dropped).
+//! - Face events Sora touches while KH2 has him are logged (`note_event`).
 //! - Crates start the push themselves: their think (`0x1402C1450`, called from `0x1402C10E4`)
 //!   counts 12 frames of Sora touching and facing them. While KH2 has him attacking (and a
 //!   moment after), the crate is told nobody touched it (its `+8` cleared), so the count starts
@@ -83,12 +88,42 @@ pub fn released() {
 
 unsafe extern "system" fn queue(kind: i32, actor: usize, event: usize) {
     let lunge = LUNGE.load(Ordering::Relaxed);
-    if lunge != 0 && actor == lunge && kind == -2 && event as u32 & 0xFFFF != ALLOWED.load(Ordering::Relaxed) & 0xFFFF {
+    let drop = lunge != 0 && actor == lunge && kind == -2 && event as u32 & 0xFFFF != ALLOWED.load(Ordering::Relaxed) & 0xFFFF;
+    if kind == -2 && actor == super::takeover::sora_actor() && super::takeover::kh2_has() {
+        note_event(actor, event as u32 & 0xFFFF, drop);
+    }
+    if drop {
         DROPPED.store((event as u32 & 0xFFFF).max(1), Ordering::Relaxed);
         return;
     }
     let f: unsafe extern "system" fn(i32, usize, usize) = std::mem::transmute(BASE.load(Ordering::Relaxed) + QUEUE_RVA);
     f(kind, actor, event)
+}
+
+/// The last face event logged and when (`note_event`).
+static NOTED: AtomicU32 = AtomicU32::new(0);
+static NOTED_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A map face event Sora touched while KH2 has him (room exits, pits' triggers, scene walls): in
+/// the log on a new event or every 2 s of the same, 200 at most (`docs/kh1-water-pits.md`).
+unsafe fn note_event(actor: usize, event: u32, dropped: bool) {
+    static CLOCK: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    let now = CLOCK.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64 + 1;
+    let same = NOTED.swap(event, Ordering::Relaxed) == event;
+    if same && now.saturating_sub(NOTED_MS.load(Ordering::Relaxed)) < 2000 {
+        return;
+    }
+    NOTED_MS.store(now, Ordering::Relaxed);
+    static N: AtomicU32 = AtomicU32::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) < 200 {
+        log(&format!(
+            "map face event {event} touched while KH2 has Sora: {} ({} {:.0} above the floor, collision flags {:08x})",
+            if dropped { "dropped (an attack's lunge)" } else { "queued" },
+            if super::takeover::kh2_airborne() { "in the air," } else { "on the ground," },
+            rd::<f32>(actor + 0x3D4),
+            rd::<u32>(actor + 0x2D0)
+        ));
+    }
 }
 
 unsafe extern "system" fn push_check(object: usize) {

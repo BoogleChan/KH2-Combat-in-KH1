@@ -74,6 +74,13 @@
 //! motion 42 is the repel's clip, with no guard window). It casts as Wisdom and Final do, on its
 //! own cast motions, at KH2's Master sub (+ 20, `Kind::magic_sub`, `formmagic`). It costs
 //! `MASTER_COST_MP` and opens once Anti-Sora is beaten (`unlocked`, `crate::story`).
+//!
+//! Partners (the user: "Let's make drive forms require their specific party members to cast. For
+//! example, wisdom form needs donald alive to activate in KH2"; `docs/drive-model.md`, "Partners"):
+//! Valor needs Goofy, Wisdom Donald, Master and Final both, Limit no one, each in KH1's field party
+//! and not knocked out (`crate::partners`, `field_party`); a guest in his place doesn't count.
+//! Without them the Drive row is greyed (`usable`) and the choice refused with the reason
+//! (`choose`). Only the start asks: a partner going down in the form doesn't end it.
 
 use super::{log, pose};
 use character_core::{Abilities, Character, EventKind};
@@ -395,7 +402,7 @@ pub fn accept_now() -> bool {
 
 /// Whether form `kind`'s entry can be chosen now (`drive`'s menu): reverting in a form (not in
 /// Anti Form, which has no Revert), else MP for it and KH2 having Sora, its data loaded, and what
-/// the form itself needs (Valor's second Keyblade, `valor`).
+/// the form itself needs (Valor's second Keyblade, `valor`; its partners, `own_needs`).
 pub unsafe fn usable(sora: usize, kind: Kind) -> bool {
     if busy() {
         return false;
@@ -446,13 +453,79 @@ pub unsafe fn unlocked(kind: Kind) -> bool {
     crate::story::unlocked(form, choice, &flags)
 }
 
-/// What a form needs besides MP: Valor its second Keyblade (`valor::keyblade`).
+/// What a form needs besides MP: Valor its second Keyblade (`valor::keyblade`), and each Drive
+/// list form its partners (`partners`).
 unsafe fn own_needs(kind: Kind) -> Result<(), String> {
     match kind {
-        Kind::Valor => super::valor::keyblade().map(|_| ()).ok_or_else(|| "no Keyblade for the second hand (one Sora owns that isn't equipped)".into()),
+        Kind::Valor => super::valor::keyblade().map(|_| ()).ok_or_else(|| String::from("no Keyblade for the second hand (one Sora owns that isn't equipped)"))?,
         // (Master and Final fall back to the Kingdom Key: never refused.)
-        Kind::Wisdom | Kind::Limit | Kind::Master | Kind::Final | Kind::Anti => Ok(()),
+        Kind::Wisdom | Kind::Limit | Kind::Master | Kind::Final | Kind::Anti => {}
     }
+    // (Anti, the secret code's, needs no one: `story_form` has none for it.)
+    match story_form(kind) {
+        Some(form) => crate::partners::check(form, kind.name(), &field_party()),
+        None => Ok(()),
+    }
+}
+
+/// KH1's field party (`0x142D37C80`: Sora, then the two others).
+const PARTY_RVA: super::addr::Rva = super::addr::Rva(0x2D37C80);
+
+/// The two actors after Sora in KH1's field party, each as his party member id and whether he is
+/// down (`docs/drive-model.md`, "Partners"). The id is the actor's object's `+0x4C`
+/// (`actor + 0x130`, a handle): KH1's own party code reads it as the member, the stats refresh
+/// (`0x1402A2CC0`) taking his save record and the HUD code (`0x1402873A0`, through `0x140282EC0`)
+/// finding him in the save's party list (`save + 0x48E`) by it. Down: KH1's knocked-out bits
+/// (`+0x88 & 0x30`, the test `0x140299A30`: 0x10 set as his HP runs out, 0x20 while he lies down
+/// waiting to get up) or no HP left (stats `+0x3C`).
+unsafe fn field_party() -> [Option<crate::partners::Member>; 2] {
+    let base = super::sys::GetModuleHandleA(std::ptr::null()) as usize;
+    let mut out = [None; 2];
+    for (slot, m) in out.iter_mut().enumerate() {
+        let a = rd::<u64>(base + PARTY_RVA + (slot + 1) * 8) as usize;
+        if a < 0x10000 || !super::crash::readable(a) || !super::crash::readable(a + 0x378) {
+            continue;
+        }
+        let obj = pose::ptr(rd::<u32>(a + 0x130));
+        if obj < 0x10000 || !super::crash::readable(obj + 0x4D) {
+            continue;
+        }
+        let stats = pose::ptr(rd::<u32>(a + 0x6C));
+        let hp = if stats > 0x10000 && super::crash::readable(stats + 0x3F) { rd::<i32>(stats + 0x3C) } else { 1 };
+        *m = Some(crate::partners::Member { id: rd::<u16>(obj + 0x4C), down: rd::<u32>(a + 0x88) & 0x30 != 0 || hp <= 0 });
+    }
+    note_party(base, &out);
+    out
+}
+
+/// Logs the field party whenever it changes (who is in each slot, down or not), with the save's
+/// party list (`save + 0x48E`: Sora, the two in the field, a fourth) beside it.
+unsafe fn note_party(base: usize, party: &[Option<crate::partners::Member>; 2]) {
+    let mut key = 0u64;
+    for (i, m) in party.iter().enumerate() {
+        let v = m.map_or(0xFFFF, |m| (m.id as u64) << 1 | m.down as u64);
+        key |= v << (i * 16);
+    }
+    let list = super::menu::save_block(base).map(|s| rd::<[u8; 4]>(s + 0x48E));
+    key |= (list.map_or(0xFFFF_FFFF, u32::from_le_bytes) as u64) << 32;
+    static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+    if LAST.swap(key, Ordering::Relaxed) == key {
+        return;
+    }
+    let who: Vec<String> = party
+        .iter()
+        .map(|m| match m {
+            Some(m) => format!("{} (member {}{})", crate::partners::member_name(m.id), m.id, if m.down { ", knocked out" } else { "" }),
+            None => "none".into(),
+        })
+        .collect();
+    let open: Vec<&str> = Kind::ALL.iter().filter(|&&k| story_form(k).is_some_and(|f| crate::partners::check(f, "", party).is_ok())).map(|k| k.name()).collect();
+    log(&format!(
+        "Drive partners: {}; save party list {}; partners there for {}",
+        who.join(", "),
+        list.map_or("-".into(), |l| format!("{l:02x?}")),
+        if open.is_empty() { "none".to_string() } else { open.join(", ") }
+    ));
 }
 
 /// Chosen from the Drive list (`drive::chosen`), or Anti Form by the secret code. Returns why

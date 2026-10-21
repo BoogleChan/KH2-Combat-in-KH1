@@ -32,6 +32,9 @@ swing_fx = on\r\n\
 ; move, the plain combo too), off\r\n\
 kh2_sounds = abilities\r\n\
 kh2_volume = 1.0\r\n\
+; music_mute: lowest = the game's lowest Music volume step is silence (KH1's own is still\r\n\
+; quiet music); on = no music at any step; off = KH1's own steps. Effects and voices as set\r\n\
+music_mute = lowest\r\n\
 ; damage_scale: times the damage of Sora's KH2 attacks (1.0 = KH1's hit x KH2's power)\r\n\
 damage_scale = 1.0\r\n\
 ; magic_scale: times KH2's Magic-based attacks on top (Explosion, Magnet Burst; they also\r\n\
@@ -129,6 +132,8 @@ pub struct Settings {
     /// Which motions play KH2's own sounds: `None` off, `Some(None)` all.
     pub kh2_sounds: Option<Option<Vec<u16>>>,
     pub kh2_volume: f32,
+    /// When the music is silent (`music_mute`, `music.rs`).
+    pub music_mute: super::music::MusicMute,
     /// Times the damage of Sora's KH2 hits (KH1's damage x KH2's power x this).
     pub damage_scale: f32,
     /// Times KH2's Magic-based hits on top (Explosion, Magnet Burst), which also grow with MP.
@@ -225,6 +230,7 @@ pub fn get() -> &'static Settings {
                 _ => Some(Some(super::kh2sound::DEFAULT_MOTIONS.to_vec())),
             },
             kh2_volume: setting(&text, "kh2_volume").and_then(|v| v.parse().ok()).unwrap_or(1.0),
+            music_mute: setting(&text, "music_mute").map_or(super::music::MusicMute::Lowest, |v| super::music::MusicMute::parse(&v)),
             damage_scale: setting(&text, "damage_scale").and_then(|v| v.parse::<f32>().ok()).filter(|v| (0.1..=10.0).contains(v)).unwrap_or(1.0),
             glide_on_square: on(&text, "glide", "square", true),
             air_cast_fall: setting(&text, "air_cast_fall").and_then(|v| v.parse::<f32>().ok()).filter(|v| (0.0..=1.0).contains(v)).unwrap_or(AIR_CAST_FALL),
