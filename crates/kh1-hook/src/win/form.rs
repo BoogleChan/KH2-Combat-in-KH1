@@ -35,14 +35,14 @@
 //!
 //! Anti Form (the user: "that cheat code we were using ... I want you to add anti form. I want
 //! 1:1 combat parity. I dont want it to cost any MP to enter, and I dont want sora to be able to
-//! revert out of it"): reached only by the secret code (`pad`), never from the Drive list
+//! revert out of it"; since s285 it takes half his MP: "Antiform should take half of your MP"): reached only by the secret code (`pad`), never from the Drive list
 //! (`Kind::EVERY`, not `Kind::ALL`). `P_EX100_HTLF` (moveset 6): its own moveset, motions, combo
 //! rows, movement numbers, effects and sounds, no Keyblade (KH2's Anti holds none). As KH2's:
 //! - no magic, items, summons or KH1 specials (`combat`), no guard (no motion 42 in its set), no
 //!   growth ability (00battle `fmlv`'s Anti rows give none, so `growth_up` doesn't apply);
 //! - 1.5 times the damage taken (`hurt`, `character_core::drive::DriveParams::anti_damage`);
 //! - no Revert: the Drive row greyed and refused (`usable`, `choose`, `drive`).
-//! Free to enter (`cost_mp` 0), it runs on Sora's MP as every form here does (the user: "Drive
+//! It takes half his MP to enter (`cost_mp`), and it runs on Sora's MP as every form here does (the user: "Drive
 //! forms in this mod run out when you're out of MP, so sora will revert when he is out of MP"):
 //! the same drain (`after_step`), the same 2 extra bars (`valorstats::DRIVE_MP`), and out of MP
 //! (or knocked out) back to Sora.
@@ -71,22 +71,21 @@ const DRIVE_FRAMES: u32 = 39;
 pub const REVERT_ELEMENTS: [i16; 13] = [15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27];
 /// The motion id the revert's effects and sound are started under (no motion of Sora's has it).
 pub const REVERT_FX: u16 = u16::MAX - 2;
-/// MP to change (KH1's payment takes hundredths of a bar from 100 up): Valor and Wisdom 1 (the
-/// user: "have valor and wisdom forms cost 1 MP"), Final 3, Anti none (the user: "I dont want it
-/// to cost any MP to enter").
-fn cost_mp(kind: Kind) -> i32 {
+/// MP to change (KH1's payment takes hundredths of a bar from 100 up), with `have` MP now:
+/// Valor and Wisdom 1 (the user: "have valor and wisdom forms cost 1 MP"), Final 3, Anti half of
+/// what he has, rounded down (the user: "Antiform should take half of your MP").
+fn cost_mp(kind: Kind, have: i32) -> i32 {
     match kind {
         Kind::Valor | Kind::Wisdom => 1,
         Kind::Final => 3,
-        Kind::Anti => 0,
+        Kind::Anti => have.max(0) / 2,
     }
 }
 
-/// Whether `have` MP lets form `kind` start: its cost and some left to run on; a form that costs
-/// nothing (Anti) starts at any MP (its `valorstats::DRIVE_MP` bars are its first to run on).
+/// Whether `have` MP lets form `kind` start: its cost and some left to run on. Anti starts at any
+/// MP (it takes half; its `valorstats::DRIVE_MP` bars are there to run on).
 fn mp_enough(have: i32, kind: Kind) -> bool {
-    let cost = cost_mp(kind);
-    cost == 0 || have > cost
+    kind == Kind::Anti || have > cost_mp(kind, have)
 }
 /// The form's level (KH1 has no form experience): Lv 1, 40 s of battle.
 const LEVEL: u32 = 1;
@@ -410,7 +409,7 @@ pub unsafe fn choose(sora: usize, kind: Kind) -> Result<&'static str, String> {
     }
     let have = mp(sora);
     if !mp_enough(have, kind) {
-        return Err(format!("MP {have}: it costs {} and needs some left to run on", cost_mp(kind)));
+        return Err(format!("MP {have}: it costs {} and needs some left to run on", cost_mp(kind, have)));
     }
     WANT.store(kind.code(), Ordering::Relaxed);
     REQUEST.store(1, Ordering::Relaxed);
@@ -567,7 +566,7 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
             let Some(kind) = Kind::from_code(WANT.load(Ordering::Relaxed)) else { return };
             // (Taken on the frame it was pressed in, `accept_now`; in the air too, held there.)
             if !mp_enough(mp(actor), kind) {
-                log(&format!("Drive: MP {} short of {} by now", mp(actor), cost_mp(kind)));
+                log(&format!("Drive: MP {} short of {} by now", mp(actor), cost_mp(kind, mp(actor))));
                 return;
             }
             let air = ch.airborne();
@@ -576,9 +575,9 @@ pub unsafe fn before_step(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim,
                 return;
             }
             let before = mp(actor);
-            // (Anti: nothing paid, the user: "I dont want it to cost any MP to enter".)
-            if cost_mp(kind) > 0 {
-                super::reflect::pay_mp(actor, cost_mp(kind) * 100);
+            let cost = cost_mp(kind, before);
+            if cost > 0 {
+                super::reflect::pay_mp(actor, cost * 100);
             }
             super::valorstats::drive_started();
             heal_full(actor);
@@ -645,7 +644,7 @@ unsafe fn arrive(d: &mut Drive, ch: &mut Character, anim: &mut RigAnim, kh2: &po
         Kind::Final => ("Glide", lv.0.glide, lv.1.glide),
         Kind::Anti => {
             log(&format!(
-                "Anti Form: entered free; yellow MP drained 1 every {DRAIN_FRAMES} frames of battle (half as fast out of it), back to Sora out of MP; no growth ability, no guard ({}), no Revert, 1.5x damage taken",
+                "Anti Form: entered for half his MP; yellow MP drained 1 every {DRAIN_FRAMES} frames of battle (half as fast out of it), back to Sora out of MP; no growth ability, no guard ({}), no Revert, 1.5x damage taken",
                 if lv.1.guard { "it has a guard motion!" } else { "no motion 42" }
             ));
             return;

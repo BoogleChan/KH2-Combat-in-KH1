@@ -3342,3 +3342,9 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   (`form::form_abilities`); its moves' guard windows (the spinning finishers 183 / 184, ATKP
   455) put no KH1 guard objects (`combat::guard_step`, the form change's 52 / 53 kept) and a hit
   in them is not guarded (`hurt.rs`).
+
+### 2026-10-20: Stage 285 (Drive costs: Anti takes half his MP)
+- The user (back on main): "make sure that valor and wisdom only cost 1 MP to cast. Final form
+  should cost 3 MP to cast. Antiform should take half of your MP". Valor and Wisdom 1, Final 3
+  (as s264); Anti now pays half the MP he has, rounded down (`form::cost_mp(kind, have)`), and
+  still starts at any MP.

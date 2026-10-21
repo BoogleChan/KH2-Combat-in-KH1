@@ -213,7 +213,9 @@ bring it to final form, with final form's animations".
 
 The user: "I want you to add anti form. I want 1:1 combat parity. I dont want it to cost any MP
 to enter, and I dont want sora to be able to revert out of it." Then: "Drive forms in this mod
-run out when you're out of MP, so sora will revert when he is out of MP".
+run out when you're out of MP, so sora will revert when he is out of MP". Since s285 it takes
+half his MP to enter, rounded down (the user: "Antiform should take half of your MP"), and still
+starts at any MP.
 
 - **How he gets it (ours).** Only by the secret button code (`form::pad`, read in `probe::pad`).
   It is never in the Drive list. The code is taken when KH2 could change him (free, jumping,
