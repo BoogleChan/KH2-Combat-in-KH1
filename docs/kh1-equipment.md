@@ -323,6 +323,9 @@ To test in the game:
 - It travels with the save like `+0x847` (the whole block is the save data).
 - Old saves may hold anything there, so the id is checked on every read (`valor_keyblade`). If a
   marker is wanted, `+0x489` can hold one.
+- `+0x48A..+0x48B` (a u16) is the abilities' layout mark (`growth::LAYOUT_OFF`,
+  `docs/abilities.md`). A second scan found no `0x489..0x48B` displacement, immediate or absolute
+  address (`0x142DEA1E9..0x142DEA1EB`) anywhere in `.text`.
 
 Not usable: `+0x840..0x843` (a u32 KH1 sets to 1), `+0x848..` (a u16 array of counters indexed
 from `+0x848`), `+0x37..+0x3B` of Sora's record (no direct use found, but the record has uses

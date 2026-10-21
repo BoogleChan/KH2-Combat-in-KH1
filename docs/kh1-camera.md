@@ -469,6 +469,11 @@ before it decides whose camera runs:
 Cutscenes keep KH1's camera: they run in mode 0 or with the camera off, where neither mode
 function is called. Only their end (the hand-back) is a reset.
 
+Since the testing branch's s261 (`camera_calls = kh2`), a "scene" here is only an event or a
+KH1-only state. KH1's own moves holding Sora still and its area-script walks no longer count.
+KH1's movement-state cameras (modes 4 / 5 / 6 / 8) are also KH2's follow camera now, and its
+switches between two of our modes have no blend. See `kh1-kh2-camera.md`.
+
 ---
 
 ## 10. Open questions / runtime checks

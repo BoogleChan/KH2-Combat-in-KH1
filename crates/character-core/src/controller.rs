@@ -1142,6 +1142,107 @@ impl Character {
         matches!(&self.mode, Mode::Action(Action { kind: ActionKind::Attack { row }, .. }) if row.is_finisher())
     }
 
+    /// A host running a combo of its own with this character's abilities kept on top of it (the
+    /// KH1 port's KH1 combo style): the combo row this controller would take for a press now.
+    /// `from`: where the host's combo stands before the press (`set_combo_state`'s), the
+    /// character free there, in the air or not (`air`); `None`: this controller's own combo as it
+    /// is now. `square`: the action button, KH2's Square moves (Finishing Leap, Upper Slash,
+    /// Horizontal Slash, a form's Square finisher), instead of Attack. Nothing of `self` changes.
+    pub fn would_take(&mut self, from: Option<ComboState>, air: bool, square: bool, stick: [f32; 2], env: &Env) -> Option<ComboRow> {
+        // (The moveset isn't cloned: the trial borrows it and gives it back.)
+        let moveset = std::mem::take(&mut self.moveset);
+        let mut t = self.clone();
+        t.moveset = moveset;
+        if let Some(c) = from {
+            t.mode = Mode::Free;
+            t.airborne = air;
+            t.arc = if air { Some(Arc::fall()) } else { None };
+            t.set_combo_state(c);
+        }
+        let press = Button { pressed: true, held: true };
+        let input = if square { Input { stick, action: press, ..Input::default() } } else { Input { stick, attack: press, ..Input::default() } };
+        let took = if square {
+            let mut rows: Vec<u8> = Vec::new();
+            if let Some((ground, air_row)) = t.square_finishers {
+                rows.push(if t.airborne { air_row } else { ground });
+            }
+            rows.extend(SQUARE_MOVES.iter().filter(|m| m.2 == t.airborne && t.abilities.equipped.contains(&m.1)).map(|m| m.0));
+            let mode = t.mode.clone();
+            rows.into_iter().any(|row| {
+                t.mode = mode.clone();
+                t.forced_row = Some(row);
+                t.try_attack(&input, env)
+            })
+        } else {
+            t.try_attack(&input, env)
+        };
+        let row = match &t.mode {
+            Mode::Action(Action { kind: ActionKind::Attack { row }, .. }) if took => Some(row.clone()),
+            _ => None,
+        };
+        self.moveset = std::mem::take(&mut t.moveset);
+        row
+    }
+
+    /// The combo's length now (swings to its finisher, with Combo Plus, Air Combo Plus and
+    /// Negative Combo), on the ground or in the air.
+    pub fn combo_length(&self, air: bool) -> u8 {
+        self.max_count(air)
+    }
+
+    /// The next attack is this combo row (a host's borrow for one of KH2's ability moves:
+    /// `would_take`'s row), whatever the selector would pick; cleared if it can't be used.
+    pub fn force_row(&mut self, id: u8) {
+        self.forced_row = Some(id);
+    }
+
+    /// Aerial Recovery now (a host's borrow out of its own knock-back, in the air): the
+    /// recovery's hop and motion, as a jump while launched gives it. False without the ability
+    /// or out of the air.
+    pub fn air_recovery(&mut self, stick: [f32; 2]) -> bool {
+        if !self.abilities.aerial_recovery || !self.airborne {
+            return false;
+        }
+        self.start_air_recovery(stick);
+        true
+    }
+
+    /// The Retaliating Slash row (Square while launched), for a host's borrow (`force_row`).
+    pub fn retaliating_slash_row(&self) -> Option<u8> {
+        let r = self.moveset.combo_rows.iter().find(|r| r.id == RETALIATING_SLASH_ROW)?;
+        (r.ability == 0 || self.abilities.equipped.contains(&r.ability)).then_some(r.id)
+    }
+
+    fn start_air_recovery(&mut self, stick: [f32; 2]) {
+        if len2(stick) > DEAD_ZONE {
+            self.facing = yaw_of(stick);
+            self.vel_h = scale(norm(stick), AIR_RECOVERY_SPEED);
+        } else {
+            self.vel_h = [0.0; 2];
+        }
+        self.vel_y = 0.0;
+        self.arc = Some(Arc::new(AIR_RECOVERY_HOP, self.params.gravity));
+        self.air_dodge_ready = false;
+        let m = if self.clip(motion::AIR_RECOVERY).is_some() { motion::AIR_RECOVERY } else { motion::AERIAL_DODGE };
+        self.start_action(ActionKind::Hurt, m);
+    }
+
+    /// The growth numbers for an ability level (1 = LV1; 0 has none), for a host that runs a
+    /// move of its own with this character's numbers (KH1's glide with KH2's).
+    pub fn growth_level(&self, level: u8) -> Option<&GrowthLevel> {
+        self.growth(level)
+    }
+
+    /// Starts a Quick Run straight ahead, now, if it is owned and he is on the ground (a host's
+    /// own dodge roll held into KH2's Quick Run). Whether it started.
+    pub fn quick_run_now(&mut self) -> bool {
+        if self.airborne || self.abilities.quick_run == 0 {
+            return false;
+        }
+        let dir = self.forward();
+        self.start_quick_run(dir)
+    }
+
     fn growth(&self, level: u8) -> Option<&GrowthLevel> {
         if level == 0 {
             None
@@ -2174,17 +2275,7 @@ impl Character {
                 // it neutral), the launch's own speed dropped; no Aerial Dodge after it.
                 let recovery_after = RECOVERY_AFTER;
                 if self.abilities.aerial_recovery && input.jump.pressed && self.airborne && f >= recovery_after {
-                    if len2(input.stick) > DEAD_ZONE {
-                        self.facing = yaw_of(input.stick);
-                        self.vel_h = scale(norm(input.stick), AIR_RECOVERY_SPEED);
-                    } else {
-                        self.vel_h = [0.0; 2];
-                    }
-                    self.vel_y = 0.0;
-                    self.arc = Some(Arc::new(AIR_RECOVERY_HOP, self.params.gravity));
-                    self.air_dodge_ready = false;
-                    let m = if self.clip(motion::AIR_RECOVERY).is_some() { motion::AIR_RECOVERY } else { motion::AERIAL_DODGE };
-                    self.start_action(ActionKind::Hurt, m);
+                    self.start_air_recovery(input.stick);
                     return false;
                 }
                 // Retaliating Slash (see RETALIATING_SLASH_ROW): Square while launched, from the

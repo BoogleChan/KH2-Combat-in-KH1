@@ -12,6 +12,22 @@
 //!
 //! World: KH1's is y-down; `kh2_camera` is y-up, and here also divided by `camera_scale` (KH2's
 //! distances suit a slightly bigger Sora).
+//!
+//! KH2's camera as KH1's own camera mode (`camera_calls = kh2`, `docs/kh1-kh2-camera.md`): the
+//! user, "we need to instead write kh2s camera into kh1 so that kh1 can handle the kh2 camera
+//! while still keeping the cameras movements and fov". KH1's gameplay calls on its camera module
+//! drive KH2's camera instead of taking the view from it:
+//! - its movement-state cameras (ledge, climbing, poles: modes 4 / 5 / 6 / 8, which mode 1's end
+//!   `0x1401E3320` switches to from Sora's state) are KH2's follow camera too;
+//! - its switches between two of our modes (lock-on on and off) don't blend from a still copy
+//!   of our camera (KH2's own camera eases into the lock-on);
+//! - its own moves holding Sora still, and its area scripts walking him (doors, zone entries),
+//!   no longer count as a scene: only an event, and the KH1-only states (the Jungle Slider, the
+//!   carpet, water), hand mode 1 / 3 to KH1's own updates;
+//! - its hand-overs from its other cameras (area cameras, first person, events) blend into ours
+//!   with the field of view eased along with the eye.
+//! Scripted cameras stay KH1's: mode 0 (an event's hold or release), conversations (mode 7),
+//! the event camera tasks writing the public pair, area cameras (mode 9), first person (mode 2).
 
 use super::addr::Rva;
 use super::{log, pose};
@@ -62,6 +78,16 @@ const LOCK_POINT_RVA: Rva = Rva(0x2AE330);
 /// change it).
 const SET_FOV_RVA: Rva = Rva(0x28A960);
 const DEFAULT_FOV_RVA: Rva = Rva(0x3EAC84);
+/// The FOV as the setter keeps it (KH1's PS2 degrees).
+const FOV_RVA: Rva = Rva(0x299C500);
+/// KH1's mode-switch blend: time left, duration (the field camera task counts it down after the
+/// mode's update and eases the public pair from the blend-from pair by `1 - cos(left/T · π/2)`).
+const BLEND_LEFT_RVA: Rva = Rva(0x2538A20);
+const BLEND_TIME_RVA: Rva = Rva(0x2538A1C);
+/// KH1's movement-state cameras (mode, its update): vines / climbing surfaces (states 9 / 10),
+/// state 0xF (ladders, poles), ledges (0xD / 0xE), state 0x12.
+const STATE_MODES: [(usize, Rva); 4] = [(4, Rva(0x1E0C80)), (5, Rva(0x1E0E50)), (6, Rva(0x1E0F80)), (8, Rva(0x1E1390))];
+static ORIG_STATE: [AtomicUsize; 4] = [AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0)];
 
 /// KH2's camera is on (the ini's `camera`, the Config menu's row).
 pub static KH2: AtomicBool = AtomicBool::new(true);
@@ -100,10 +126,95 @@ pub unsafe fn install() {
     ORIG_FOLLOW.store(f, Ordering::Release);
     ORIG_LOCK.store(l, Ordering::Release);
     let mut old = 0u32;
-    super::sys::VirtualProtect(follow as *mut _, 0x30, 0x04, &mut old);
+    // (Modes 1 to 8: the follow, lock-on and movement-state cameras' entries.)
+    super::sys::VirtualProtect(follow as *mut _, 0x80, 0x04, &mut old);
     wr(follow, follow_mode as *const () as u64);
     wr(lock, lock_mode as *const () as u64);
-    log(&format!("KH2 camera: KH1's follow and lock-on cameras swapped for KH2's ({})", if KH2.load(Ordering::Relaxed) { "on" } else { "KH1's chosen" }));
+    // KH1's movement-state cameras: KH2's follow camera in their place (`state_mode`), each only
+    // if its entry is KH1's own.
+    let wrappers: [unsafe extern "system" fn(); 4] = [state_mode::<0>, state_mode::<1>, state_mode::<2>, state_mode::<3>];
+    let mut swapped = Vec::new();
+    for (i, (mode, orig)) in STATE_MODES.iter().enumerate() {
+        let slot = base + MODES_RVA + mode * 0x10;
+        let cur = rd::<u64>(slot) as usize;
+        if cur != base + *orig {
+            log(&format!("KH2 camera: KH1's camera mode {mode} isn't where expected ({cur:#x}): left to KH1"));
+            continue;
+        }
+        ORIG_STATE[i].store(cur, Ordering::Release);
+        wr(slot, wrappers[i] as *const () as u64);
+        swapped.push(*mode);
+    }
+    log(&format!(
+        "KH2 camera: KH1's follow, lock-on and movement-state cameras ({swapped:?}) swapped for KH2's ({}; KH1's camera calls: {})",
+        if KH2.load(Ordering::Relaxed) { "on" } else { "KH1's chosen" },
+        if calls_kh2() { "KH2's camera" } else { "KH1's camera" }
+    ));
+}
+
+/// KH1's gameplay camera calls drive KH2's camera (`camera_calls = kh2`); off, the older way:
+/// they hand the view to KH1's own camera.
+fn calls_kh2() -> bool {
+    super::settings::get().camera_calls_kh2
+}
+
+/// An event runs (a cutscene, a talk with text boxes): KH1's camera, the user's rule from stage
+/// 70 ("so the camera doesn't end up inside things").
+fn event_running(base: usize) -> bool {
+    base != 0 && unsafe { rd::<u32>(base + EVENT_RVA) } != 0
+}
+
+/// Sora in one of KH1's own movement modes that keep KH1's camera (the Jungle Slider, the
+/// magic carpet, swimming: `takeover::kh1_camera_mode`).
+fn kh1_only_state(base: usize) -> bool {
+    if base == 0 {
+        return false;
+    }
+    let sora = unsafe { rd::<u64>(base + SORA_RVA) } as usize;
+    sora > 0x10000 && super::takeover::kh1_camera_mode(unsafe { rd::<i32>(sora + 0x70) })
+}
+
+/// A scripted moment for the camera: with `camera_calls = kh2`, only an event or a KH1-only
+/// state (not KH1's own moves holding Sora still, nor its area scripts walking him through a
+/// door); otherwise the older test (`takeover::kh1_scene`).
+fn scene() -> bool {
+    if !calls_kh2() {
+        return super::takeover::kh1_scene();
+    }
+    let base = BASE.load(Ordering::Relaxed);
+    event_running(base) || kh1_only_state(base)
+}
+
+/// KH1 moves Sora itself in a scene (see `RESET_OWNS`).
+fn moves_sora() -> bool {
+    if !calls_kh2() {
+        return super::takeover::kh1_moves_sora();
+    }
+    kh1_only_state(BASE.load(Ordering::Relaxed))
+}
+
+/// KH1's movement-state camera `STATE_MODES[I]`: Sora on a ledge, a vine, a climbing surface, a
+/// ladder or a pole. With KH2's camera running and `camera_calls = kh2`, KH1 goes back to its
+/// follow mode at once (no blend: the view is ours on both sides) and KH2's follow camera runs
+/// this frame; KH1 only gets here when it entered the mode itself (mode 1's own end with KH1's
+/// camera running, its lock-on's end `0x1401E1FB0`, a conversation's end `0x1401E1F60`).
+unsafe extern "system" fn state_mode<const I: usize>() {
+    let base = BASE.load(Ordering::Relaxed);
+    let sora = rd::<u64>(base + SORA_RVA) as usize;
+    let subject_sora = sora > 0x10000 && rd::<u64>(base + SUBJECT_RVA) as usize == sora;
+    if calls_kh2() && subject_sora && ours() {
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 20 {
+            let state = rd::<i32>(sora + 0x70);
+            log(&format!("KH2 camera: KH1's movement-state camera (mode {}, Sora state {state}) taken by KH2's follow camera", STATE_MODES[I].0));
+        }
+        let set: unsafe extern "system" fn(i32, f32) = std::mem::transmute(base + SET_MODE_RVA);
+        set(1, 0.0);
+        follow_mode();
+        return;
+    }
+    let f: unsafe extern "system" fn() = std::mem::transmute(ORIG_STATE[I].load(Ordering::Acquire));
+    f();
 }
 
 /// KH1 handed its camera back to Sora after holding or releasing it: its mode switch
@@ -148,7 +259,7 @@ unsafe fn note_entry(lock: bool) {
         let feet = rd::<[f32; 3]>(sora + 0x10);
         if let Ok(mut last) = LAST_FEET.lock() {
             let moved = ((feet[0] - last[0]).powi(2) + (feet[2] - last[2]).powi(2)).sqrt();
-            if moved > 3.0 && RESET_OWNS.load(Ordering::Relaxed) && super::takeover::kh1_scene() {
+            if moved > 3.0 && RESET_OWNS.load(Ordering::Relaxed) && scene() {
                 RESET_OWNS.store(false, Ordering::Relaxed);
                 static N: AtomicU32 = AtomicU32::new(0);
                 if N.fetch_add(1, Ordering::Relaxed) < 20 {
@@ -170,8 +281,8 @@ unsafe fn note_entry(lock: bool) {
         return;
     }
     RESET_PENDING.store(true, Ordering::Relaxed);
-    let scene = super::takeover::kh1_scene();
-    let owns = scene && !super::takeover::kh1_moves_sora();
+    let scene = scene();
+    let owns = scene && !moves_sora();
     RESET_OWNS.store(owns, Ordering::Relaxed);
     static N: AtomicU32 = AtomicU32::new(0);
     if N.fetch_add(1, Ordering::Relaxed) < 60 {
@@ -193,18 +304,29 @@ unsafe fn note_entry(lock: bool) {
 
 /// KH2's camera this frame: chosen, and no cutscene (the user: KH1's camera for cutscenes and
 /// scenes with text, so the camera doesn't end up inside things), except after KH1 has given
-/// its camera back to Sora with a reset (`RESET_OWNS`).
+/// its camera back to Sora with a reset (`RESET_OWNS`). A cutscene is `scene`: with
+/// `camera_calls = kh2` an event or a KH1-only state, not KH1's own moves (shared states) holding
+/// Sora still (the user: "any move that goes through kh1s animation tree ... take away the camera
+/// from kh2").
 fn ours() -> bool {
     let kh2 = KH2.load(Ordering::Relaxed);
-    let scene = kh2 && super::takeover::kh1_scene();
-    if !scene || super::takeover::kh1_moves_sora() {
+    let scene = kh2 && scene();
+    if !scene || moves_sora() {
         RESET_OWNS.store(false, Ordering::Relaxed);
     }
     let on = kh2 && (!scene || RESET_OWNS.load(Ordering::Relaxed));
     static WAS: AtomicBool = AtomicBool::new(true);
     static N: AtomicU32 = AtomicU32::new(0);
     if WAS.swap(on, Ordering::Relaxed) != on && KH2.load(Ordering::Relaxed) && N.fetch_add(1, Ordering::Relaxed) < 60 {
-        log(if on { "KH2 camera: back from KH1's" } else { "KH2 camera: KH1's for a scene" });
+        let base = BASE.load(Ordering::Relaxed);
+        let why = if !calls_kh2() {
+            "the older test: an event, an area script or KH1 holding Sora still"
+        } else if event_running(base) {
+            "an event runs"
+        } else {
+            "a KH1-only state"
+        };
+        log(&if on { "KH2 camera: back from KH1's".to_string() } else { format!("KH2 camera: KH1's for a scene ({why})") });
     }
     if !on && FOV_SET.swap(false, Ordering::Relaxed) {
         // KH1's own field of view back for KH1's camera.
@@ -215,6 +337,8 @@ fn ours() -> bool {
 
 /// KH2's field of view is ours (KH1's own goes back when KH1's camera runs).
 static FOV_SET: AtomicBool = AtomicBool::new(false);
+/// The FOV KH1's camera had when it began blending into ours (bits; NaN: no blend from KH1's).
+static FOV_FROM: AtomicU32 = AtomicU32::new(0x7FC0_0000);
 
 unsafe fn set_fov(deg: f32) {
     if (20.0..120.0).contains(&deg) {
@@ -349,10 +473,6 @@ unsafe fn run(lock: bool) -> Option<()> {
     let flags = rd::<u32>(base + ENTRY_FLAGS_RVA);
     wr(base + ENTRY_FLAGS_RVA, flags & !7);
     let fresh_mode = flags & 2 != 0;
-    // KH2's field of view, every frame (KH1's area cameras and mode entries set their own).
-    let _ = fresh_mode;
-    set_fov(kh2_fov());
-    FOV_SET.store(true, Ordering::Relaxed);
     let dt = rd::<f32>(base + STEP_RVA);
     let dt = if dt.is_finite() { dt.clamp(0.0, 4.0) } else { 1.0 };
     let feet = rd::<[f32; 3]>(sora + 0x10);
@@ -453,6 +573,41 @@ unsafe fn run(lock: bool) -> Option<()> {
     // person, climbing / ledge, a conversation; or the view restored after a load): KH1 eases
     // from it into ours, so ours faces the way it looked. Not after a reset (bit 0: from mode 0).
     let handover = fresh_mode && (flags & 1 == 0 || flags & 4 != 0);
+    // KH1 switching between two of our modes this frame (lock-on on or off, one of its
+    // movement-state cameras given back): its blend would ease from a still copy of our camera
+    // (60 frames into the lock-on, 45 out), which held the view back while Sora ran. KH2's own
+    // camera eases into and out of the lock-on, so the blend goes.
+    let our_switch = calls_kh2() && fresh_mode && flags & 5 == 0 && gap < 300 && untouched;
+    if our_switch && rd::<f32>(base + BLEND_LEFT_RVA) > 0.0 {
+        wr(base + BLEND_LEFT_RVA, 0.0f32);
+        static N: AtomicU32 = AtomicU32::new(0);
+        if N.fetch_add(1, Ordering::Relaxed) < 20 {
+            log(&format!("KH2 camera: KH1's switch into its {} camera, from ours: no blend (KH2's camera goes on)", if lock { "lock-on" } else { "follow" }));
+        }
+    }
+    // KH2's field of view, every frame (KH1's area cameras, first person and event cameras set
+    // their own). While KH1 blends from one of its cameras into ours, eased with it from that
+    // camera's.
+    {
+        let left = rd::<f32>(base + BLEND_LEFT_RVA);
+        if fresh_mode {
+            let from = rd::<f32>(base + FOV_RVA);
+            FOV_FROM.store(if left > 0.0 && from.is_finite() { from.to_bits() } else { f32::NAN.to_bits() }, Ordering::Relaxed);
+        }
+        let target = kh2_fov();
+        let from = f32::from_bits(FOV_FROM.load(Ordering::Relaxed));
+        let time = rd::<f32>(base + BLEND_TIME_RVA);
+        let fov = if left > 0.0 && from.is_finite() && time > 0.0 {
+            // The weight KH1's task gives the blend-from camera after this frame's count.
+            let k = ((left - dt).max(0.0) / time).clamp(0.0, 1.0);
+            let w = 1.0 - (k * std::f32::consts::FRAC_PI_2).cos();
+            from * w + target * (1.0 - w)
+        } else {
+            target
+        };
+        set_fov(fov);
+        FOV_SET.store(true, Ordering::Relaxed);
+    }
     // (Or Sora is far from where it was looking: a new room, a warp.)
     // (The eye, not the look point: locked on, that is 30% of the way to the target, and a far
     // target put it 600 away, so the camera was made anew over and over, the user's boss fight.)
@@ -530,9 +685,19 @@ unsafe fn run(lock: bool) -> Option<()> {
             set(2, 30.0);
             return Some(());
         }
-        // KH1's climbing / ledge / swimming cameras take over as they would from its own.
-        let states: unsafe extern "system" fn() = std::mem::transmute(base + STATE_CAMERAS_RVA);
-        states();
+        // KH1's climbing / ledge cameras: with `camera_calls = kh2` KH2's follow camera goes on
+        // through them (the user: ledges took the camera), so KH1's switch into them
+        // (`0x1401E3320`, from Sora's state) isn't called; otherwise they take over as they
+        // would from its own.
+        if !calls_kh2() {
+            let states: unsafe extern "system" fn() = std::mem::transmute(base + STATE_CAMERAS_RVA);
+            states();
+        } else if MODE_LOGGED.swap(false, Ordering::Relaxed) {
+            log("KH2 camera: KH1's movement-state cameras (ledges, climbing, poles) are KH2's follow camera");
+        }
     }
     Some(())
 }
+
+/// Logged once, the first time KH2's follow camera runs with `camera_calls = kh2`.
+static MODE_LOGGED: AtomicBool = AtomicBool::new(true);

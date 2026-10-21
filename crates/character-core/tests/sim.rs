@@ -1482,3 +1482,47 @@ fn wall_hit_without_a_repelled_motion_doesnt_loop() {
     assert!(frames.len() < 200, "never left the swing");
     assert!(frames.windows(2).all(|p| p[1] >= p[0]), "the swing went back: {frames:?}");
 }
+
+/// A host's own combo with KH2's abilities on top (`would_take`, the KH1 port's KH1 combo
+/// style): what KH2's combo would take at the host's count, without changing the controller.
+#[test]
+fn would_take_reads_kh2_ability_moves_over_a_host_combo() {
+    let mut ch = sora();
+    ch.moveset.clips.insert(130, attack_clip(130, 40, (10, 16), 6, 20));
+    ch.moveset.clips.insert(140, attack_clip(140, 40, (10, 16), 7, 20));
+    // An ability's step (as Dodge Slash), before the plain swing in table order.
+    let mut step = row(4, 130, false, false);
+    step.ability = 91;
+    ch.moveset.combo_rows.insert(1, step);
+    // A Square move (as Upper Slash): reached only by the action button.
+    let mut upper = row(12, 140, false, false);
+    upper.kind = 0;
+    upper.ability = 18;
+    ch.moveset.combo_rows.push(upper);
+    let env = Env { pos: [0.0; 3], grounded: true, height_above_ground: 0.0, targets: &[], ledges: &[] };
+    let at = |count: u8, next_finisher: bool| Some(ComboState { count, finishers: 1, hit: true, finisher_next: next_finisher });
+    let pick = |ch: &mut Character, from: Option<ComboState>, square: bool| ch.would_take(from, false, square, [0.0; 2], &env).map(|r| r.id);
+    // Not equipped: the plain swing, then the finisher at the combo's end.
+    assert_eq!(pick(&mut ch, at(1, false), false), Some(0));
+    assert_eq!(pick(&mut ch, at(2, false), false), Some(1));
+    assert_eq!(pick(&mut ch, at(1, false), true), None);
+    ch.abilities.equipped.extend([91, 18]);
+    assert_eq!(pick(&mut ch, at(1, false), false), Some(4));
+    assert_eq!(pick(&mut ch, at(1, false), true), Some(12));
+    // A Square step only while the combo has a swing left before its finisher.
+    assert_eq!(pick(&mut ch, at(2, false), true), None);
+    // Negative Combo: the finisher a swing sooner.
+    ch.abilities.negative_combo = 1;
+    assert_eq!(pick(&mut ch, at(1, false), false), Some(1));
+    ch.abilities.negative_combo = 0;
+    // Finishing Plus: another finisher after the first.
+    // (Without it, a press after the finisher is a new combo's first swing.)
+    ch.abilities.finishing_plus = 0;
+    assert_eq!(pick(&mut ch, at(3, true), false), Some(4));
+    ch.abilities.finishing_plus = 1;
+    assert_eq!(pick(&mut ch, at(3, true), false), Some(1));
+    // Nothing of the controller changed.
+    assert_eq!(ch.combo_count(), 0);
+    assert_eq!(ch.state_name(), StateName::Idle);
+    assert!(ch.moveset.clips.contains_key(&130));
+}

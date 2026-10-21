@@ -5,6 +5,7 @@
 mod addr;
 mod camera;
 mod combat;
+mod combomods;
 mod config;
 mod crash;
 mod drive;

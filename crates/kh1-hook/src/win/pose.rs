@@ -75,16 +75,32 @@ enum Play {
     /// slots sharing a `group` continue the same clip instead of restarting it.
     Motion { motion: u16, field: bool, looping: bool, group: u8 },
     /// A combo swing, stretched to the KH1 swing's length so hits stay in time: on the ground
-    /// KH2's 151 / 152 alternate (its no-target rows) and 154 finishes; in the air 183 / 184
-    /// alternate and 181 finishes.
-    Swing { air: bool, finisher: bool },
+    /// KH2's 151 / 152 (its no-target rows) and 154 finishes; in the air 183 / 184 alternate and
+    /// 181 finishes. `second`: which of the two ground swings KH1's slot is (KH1's second swing
+    /// is KH2's second, the user: "sora base attack 2, kh2 base attack 2"), or `None` to
+    /// alternate them swing by swing.
+    Swing { air: bool, finisher: bool, second: Option<bool> },
+}
+
+/// KH2's swing for KH1's ground swing slot (`play_for`): 98 (KH1's first and third swing) KH2's
+/// first, 151; 99 (its second) KH2's second, 152; 101 (its finisher) KH2's finisher, 154 (the
+/// user: "kh1 base finisher, kh2 base finishers"); 100 (assumed a third swing) KH2's first.
+/// (`shared::physics` moves KH1's swing by this clip's root travel at Base Combo KH2.)
+pub fn swing_motion(slot: usize) -> Option<u16> {
+    Some(match slot {
+        98 | 100 => 151,
+        99 => 152,
+        101 => 154,
+        _ => return None,
+    })
 }
 
 /// KH1 Sora's slots, from the user's play logs (2026-10-13): 0 / 2 / 5 field idle, walk, run;
 /// 1 / 3 / 6 the battle ones; 12 → 13 → 10 → 11 jump, rise, fall, land; 98 → 99 → 98 → 101 the
 /// ground combo (100 assumed a third swing); 102 / 103 / 104 the air combo (the user: air
-/// combos showed the glide they were first taken for). 4 / 7 are unseen and taken as battle
-/// walk / run.
+/// combos showed the glide they were first taken for); 113..116 KH1's glide (`shared::slot_kind`:
+/// gliding slow / fast, banking one way / the other: KH2's glide, and its two banked glides).
+/// 4 / 7 are unseen and taken as battle walk / run.
 fn play_for(slot: usize) -> Option<Play> {
     use character_core::motion as m;
     let mo = |motion: u16, field: bool, looping: bool, group: u8| Play::Motion { motion, field, looping, group };
@@ -99,10 +115,16 @@ fn play_for(slot: usize) -> Option<Play> {
         8 | 9 => mo(m::JUMP, false, false, 1),
         10 => mo(m::FALL, false, true, 0),
         11 => mo(m::LAND, false, false, 0),
-        98..=100 => Play::Swing { air: false, finisher: false },
-        101 => Play::Swing { air: false, finisher: true },
-        102 | 103 => Play::Swing { air: true, finisher: false },
-        104 => Play::Swing { air: true, finisher: true },
+        98 => Play::Swing { air: false, finisher: false, second: Some(false) },
+        99 => Play::Swing { air: false, finisher: false, second: Some(true) },
+        100 => Play::Swing { air: false, finisher: false, second: None },
+        101 => Play::Swing { air: false, finisher: true, second: None },
+        102 | 103 => Play::Swing { air: true, finisher: false, second: None },
+        104 => Play::Swing { air: true, finisher: true, second: None },
+        // (KH1's glide: one group, so its slow / fast slots go on in the same clip.)
+        113 | 114 => mo(m::GLIDE, false, true, 5),
+        115 => mo(m::GLIDE_TURN_A, false, true, 5),
+        116 => mo(m::GLIDE_TURN_B, false, true, 5),
         _ => return None,
     })
 }
@@ -1019,13 +1041,14 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
             };
             (motion, field, looping, restart, rate, blend)
         }
-        Play::Swing { air, finisher } => {
+        Play::Swing { air, finisher, second } => {
             if new_slot {
                 let fresh = f.last_swing.map_or(true, |t| now.duration_since(t).as_secs_f32() > COMBO_GAP);
                 f.swings = if fresh { 0 } else { f.swings + 1 };
             }
             f.last_swing = Some(now);
-            let motion = match (air, finisher, f.swings % 2 == 0) {
+            let first = second.map_or(f.swings % 2 == 0, |s| !s);
+            let motion = match (air, finisher, first) {
                 (false, true, _) => 154,
                 (false, false, true) => 151,
                 (false, false, false) => 152,
@@ -1072,6 +1095,8 @@ fn follow_play(s: &mut Sora, slot: Option<usize>, to_world: &Mat4, forced: Optio
         .then(|| rig.field_motions.get(&motion))
         .flatten()
         .or_else(|| rig.motions.get(&motion))
+        // (A banked glide the rig lacks: its plain glide.)
+        .or_else(|| rig.motions.get(&m2::GLIDE).filter(|_| matches!(motion, m2::GLIDE_TURN_A | m2::GLIDE_TURN_B)))
         .or_else(|| rig.motions.get(&m2::IDLE))?;
     let frames = f.since.map_or(0.0, |t| now.duration_since(t).as_secs_f32() * f.rate);
     let t = kh2_anim::key_time(clip, frames, looping);
@@ -1380,11 +1405,12 @@ unsafe fn check(instance: usize, via_ik: bool, param_world: usize) {
                 log(&format!("hair, hood and keychain from KH2's own animation: {:?} (asked {want:?})", rep.parts));
             }
         }
-        // The swing (`kh1_data::jiggle`) for any chain KH2 didn't pose. One step per game frame
-        // (Sora's physics frames), not by the clock: frames come 13..22 ms apart, and a draw
-        // with no step left the chains at his last place (the user: the animations stuttered).
-        // A gap of more than half a second (KH1's own animation, a pause) starts it over.
-        let frame = super::takeover::GAME_FRAME.load(Ordering::Relaxed);
+        // The swing (`kh1_data::jiggle`) for any chain KH2 didn't pose. One step per 60 Hz frame
+        // of Sora's physics frames (`takeover::TICKS`: two a game frame at 30 fps), not by the
+        // clock: frames come 13..22 ms apart, and a draw with no step left the chains at his last
+        // place (the user: the animations stuttered). A gap of more than half a second (KH1's own
+        // animation, a pause) starts it over.
+        let frame = super::takeover::TICKS.load(Ordering::Relaxed);
         let (j, last) = s.jiggle.get_or_insert_with(|| (kh1_data::jiggle::Jiggle::new(kh1_data::jiggle::sora_chains()), frame));
         let steps = frame.saturating_sub(*last);
         if steps > 30 {

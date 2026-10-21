@@ -55,11 +55,12 @@ const NO_EFFECT: u8 = 0x20;
 static BASE: AtomicUsize = AtomicUsize::new(0);
 static ORIG: AtomicUsize = AtomicUsize::new(0);
 static LOGGED: AtomicU32 = AtomicU32::new(0);
-/// The last hit taken: its attacker's handle and the game frame (`takeover::GAME_FRAME`).
+/// The last hit taken: its attacker's handle and the 60 Hz frame (`takeover::TICKS`: the grace is
+/// the same time at 30 fps).
 static LAST_FROM: AtomicU32 = AtomicU32::new(0);
 static LAST_AT: AtomicU64 = AtomicU64::new(0);
-/// While flinching, the same attacker's hits this soon after the last one don't land (game
-/// frames, 60 a second).
+/// While flinching, the same attacker's hits this soon after the last one don't land (60 Hz
+/// frames, whatever the frame rate).
 const REHIT_GRACE: u64 = 20;
 
 unsafe fn rd<T: Copy>(p: usize) -> T {
@@ -112,7 +113,7 @@ unsafe extern "system" fn hurt(actor: usize, out: usize) -> usize {
     }
     let kind_of: unsafe extern "system" fn(usize, usize) -> u32 = std::mem::transmute(base + KIND_RVA);
     let me = rd::<[f32; 3]>(actor + 0x10);
-    let frame = takeover::GAME_FRAME.load(Ordering::Relaxed);
+    let frame = takeover::TICKS.load(Ordering::Relaxed);
     let (last_from, last_at) = (LAST_FROM.load(Ordering::Relaxed), LAST_AT.load(Ordering::Relaxed));
     let fates = takeover::with_kh2(|ch, out| {
         let reacting = out.state;
@@ -176,7 +177,15 @@ unsafe extern "system" fn hurt(actor: usize, out: usize) -> usize {
         }
         (fates, reacting)
     });
-    let Some((fates, reacting)) = fates else { return f(actor) };
+    let Some((fates, reacting)) = fates else {
+        // KH1's own states have base Sora (`shared`): KH1's reaction, as unmodded. A knock-back
+        // or launch of KH1's is where KH2's Aerial Recovery and Retaliating Slash can borrow him
+        // (`combomods::launched`).
+        if super::shared::active() && ready.iter().any(|&r| rd::<u8>(r) & NO_EFFECT == 0 && (rd::<u32>(r + 0xC) >> 6) & 0xF < 9 && matches!(kind_of(actor, r), 4 | 5)) {
+            super::combomods::kh1_blown();
+        }
+        return f(actor);
+    };
     // KH2's reaction for the strongest taken hit (after KH1's damage, unless he went down).
     let mut react: Option<(u32, glam::Vec2)> = None;
     for (&r, fate) in ready.iter().zip(&fates) {

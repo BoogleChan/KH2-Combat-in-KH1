@@ -91,8 +91,15 @@ unsafe extern "system" fn exec(actor: usize, row: i32, dir: usize) {
     let sora = rd::<u64>(base + PARTY_RVA) as usize;
     let command = rd::<u8>(base + COMMAND_RVA);
     // Base Sora in KH1's own states (`shared`) with KH1's combo where he is: KH1's own row, its
-    // combo as unmodded (with KH2's, the press is KH2's below: `kh1_move`).
-    if actor == sora && command == 1 && takeover::ON.load(Ordering::Relaxed) && super::shared::active() && super::stylecombo::kh1_here(matches!(rd::<i32>(actor + 0x70), 1 | 2)) {
+    // combo as unmodded (with KH2's, the press is KH2's below: `kh1_move`). The ground combo is
+    // KH1's at either Base Combo style (a shared move: KH2's swings and their travel drawn on
+    // KH1's at KH2, `pose::follow`, `shared::physics`), so its hits, timing and damage are KH1's.
+    // Where KH2 would use one of its ability moves at this press instead, KH2 borrows him for it
+    // (`combomods`), at either style.
+    if actor == sora && command == 1 && takeover::ON.load(Ordering::Relaxed) && super::shared::active() && super::shared::kh1_combo(matches!(rd::<i32>(actor + 0x70), 1 | 2)) {
+        if super::combomods::attack(actor, row_info(actor, row).map(|r| r.motion as u16 as u32)) {
+            return;
+        }
         let f: ExecFn = std::mem::transmute(ORIG_EXEC.load(Ordering::Acquire));
         return f(actor, row, dir);
     }
@@ -411,6 +418,15 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     // (Attack is KH2's attack button, unless the combo there is KH1's: then it goes to KH1 as
     // the other commands do, `stylecombo`.)
     let kh1_combo = kind == 1 && super::stylecombo::kh1_here(air);
+    // KH2 has base Sora for one of its moves (`shared`: an ability move out of KH1's combo, a
+    // spell) with the combo style KH1's where he is: KH1's next row goes on from KH2's combo
+    // count, unless KH2's next is one of its ability moves again, which KH2 keeps (`combomods`).
+    let next = if actor == sora && kh1_combo && super::shared::on() && super::settings::get().commands && takeover::ON.load(Ordering::Relaxed) && takeover::kh2_has() {
+        Some(super::combomods::next_from_kh2(actor, air))
+    } else {
+        None
+    };
+    let kh1_combo = kh1_combo && !matches!(next, Some(super::combomods::Next::Kh2));
     if actor != sora || kind == 0 || kind == 1 && !kh1_combo || NOT_SORAS.contains(&kind) || !super::settings::get().commands || !takeover::ON.load(Ordering::Relaxed) || !takeover::kh2_has() {
         return f(actor, dir);
     }
@@ -472,9 +488,17 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
     // air cast's `0x14029D7F0(actor, 0x83 + spell)` changed none of the others, the user's log).
     let look = || (rd::<i32>(actor + 0x70), rd::<u32>(actor + 0x164), rd::<u32>(actor) & 0x100_0000, pose::sora_slot(), super::probe::SORA_MOTIONS.load(Ordering::Relaxed));
     let set = look();
+    // (KH1's combo at KH2's count for its step, `combomods`; put back after it.)
+    let saved = match next {
+        Some(super::combomods::Next::Kh1 { count, hit }) if kh1_combo => super::combomods::kh1_count_in(actor, count, hit),
+        _ => None,
+    };
     super::stylecombo::starting(kh1_combo);
     f(actor, dir);
     super::stylecombo::starting(false);
+    if let Some(s) = saved {
+        super::combomods::restore(actor, s);
+    }
     // Only if KH1 did something with him (a new state or motion request); else as before.
     let after = look();
     if after != set {
@@ -504,6 +528,11 @@ unsafe extern "system" fn command(actor: usize, dir: usize) {
         if kh1_combo {
             super::stylecombo::started();
             log(&format!("KH1's own {} combo (move style KH1)", if air { "aerial" } else { "ground" }));
+            // Base Sora (`shared`): KH1's own states have him for it from its first swing, so
+            // KH2's abilities still apply at its next presses (`combomods`).
+            if super::shared::on() {
+                takeover::shared_now();
+            }
         }
     } else {
         if air {

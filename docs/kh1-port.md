@@ -53,76 +53,68 @@ Next to the game; written with the defaults when missing, read when the game sta
 
 ## Abilities from KH1's menu (`abilities = kh1`)
 
-KH1's own abilities, while equipped (those that are KH2 moves show their KH2 name and help in
-the menu, e.g. Hurricane Blast is listed as Explosion):
+Since the split (testing, `docs/abilities.md`), each ability id has one owner and one
+meaning. KH1's abilities are KH1's own again, with KH1's names, help and effect: Hurricane
+Blast is KH1's Hurricane Blast. KH2's abilities have their own ids, 66 to 87, and come with
+KH2's names and AP. KH1's abilities that both games have with the same job also work for KH2
+while equipped:
 
-| KH1 | KH2 |
+| KH1 | KH2, while KH2's controller has Sora |
 |---|---|
-| High Jump | High Jump LV1 (higher levels with Sora's level, below) |
-| Glide | Glide LV1, LV2 at level 40, LV3 at 52; MAX once Chernabog is beaten |
-| Superglide | none: turned into Glide (its Chernabog reward reads "Glide MAX") |
+| High Jump | High Jump: LV2 / LV3 / MAX at levels 30 / 44 / 58 |
+| Glide | Glide: LV2 at level 40, LV3 at 52 |
+| Superglide | Glide MAX |
 | Guard | Guard |
-| Dodge Roll | Dodge Roll LV1 (higher levels with Sora's level, below) |
+| Dodge Roll | Dodge Roll: LV2 / LV3 / MAX at levels 19 / 37 / 60 |
 | Combo Plus, Air Combo Plus (each) | Combo Plus, Air Combo Plus (each) |
-| Vortex | Flash Step |
-| Aerial Sweep | Aerial Sweep |
-| Counterattack | Counterguard |
-| Blitz | Finishing Leap |
-| Slapshot | Slapshot |
-| Sliding Dash | Slide Dash |
-| Hurricane Blast | Explosion |
-| Ripple Drive | Vicinity Break |
-| Stun Impact | Guard Break |
-| Gravity Break | Aerial Finish |
+| Combo Master | Combo Master |
 
-Final Mix's own Combo Master is KH2's Combo Master while equipped.
+KH1's combo modifiers (Vortex, Aerial Sweep, Counterattack, Blitz, Slapshot, Sliding Dash,
+Hurricane Blast, Ripple Drive, Stun Impact, Gravity Break) are KH1's: KH1's own combo runs
+them, and they do nothing for KH2's combo yet.
 
-What only KH2 has is added to KH1's Ability menu as new abilities, learned at Sora's level
-(added when he reaches it, or when the game loads if he is already past it, off until equipped;
-a "New Ability" box in KH1's level-up prompt style names it):
+KH2's abilities are in KH1's Ability menu as their own, off until equipped. Each one is learned
+at a level, for beating a boss, or together with its KH1 namesake; a "New Ability" box in KH1's
+level-up prompt style names it:
 
-| Level | Ability | Menu | AP |
-|---|---|---|---|
-| 4 | Aerial Recovery | Sora's | 2 |
-| 10 | Dodge Slash | Sora's | 2 |
-| 12 | Quick Run LV1 (LV2 at 20, LV3 at 32, MAX at 45; its menu name shows the level, an "Ability Up" box each time) | Sora's | 2 |
-| 16 | Horizontal Slash | Sora's | 2 |
-| 20 | Negative Combo | Sora's | 2 |
-| 25 | Aerial Spiral | Sora's | 2 |
-| 34 | Finishing Plus | Sora's | 5 |
-| 43 | Retaliating Slash | Sora's | 3 |
-
-Bosses give KH2 moves too, as KH2 does (the user's list), on top of what they already give;
-learned once the world's story progress passes the boss (off until equipped, with a "New
-Ability" box):
-
-| Boss | Ability | AP |
+| Ability | AP | Learned |
 |---|---|---|
-| Sabor | Upper Slash | 4 |
-| Clayton | Aerial Sweep (KH1's) | KH1's |
-| Jafar | Aerial Finish (KH1's Gravity Break) | KH1's |
-| Pot Centipede | Guard Break (KH1's Stun Impact) | KH1's |
-| Dragon Maleficent | Explosion (KH1's Hurricane Blast) | KH1's |
-| Captain Hook | Magnet Burst | 3 |
-| Cerberus | Aerial Dive | 2 |
-| Genie Jafar (Agrabah) | Aerial Dodge LV1 (higher levels below) | 3 |
-
-Earlier than KH1's level-ups (Dream Shield: 45 / 39 / 69 / 78 / 60), if Sora doesn't have them yet: Counterguard at 22, Slide Dash at 30, Vicinity Break at 36, Finishing Leap at 48; Flash Step comes for beating Sabor. Aerial Sweep also comes at level 28 if Clayton hasn't given it yet (KH1's Dream Shield gives it
-only at 84). Guard Break stays at KH1's own level 18 (Dream Shield).
+| Aerial Recovery | 2 | level 4 |
+| Dodge Slash | 2 | level 10 |
+| Quick Run (LV2 at 20, LV3 at 32, MAX at 45; its menu name shows the level) | 2 | level 12 |
+| Horizontal Slash | 2 | level 16 |
+| Negative Combo | 2 | level 20 |
+| Counterguard | 4 | level 22, or with KH1's Counterattack |
+| Aerial Spiral | 2 | level 25 |
+| Aerial Sweep | 2 | level 28, Clayton, or with KH1's Aerial Sweep |
+| Slide Dash | 2 | level 30, or with KH1's Sliding Dash |
+| Finishing Plus | 5 | level 34 |
+| Vicinity Break | 2 | level 36, or with KH1's Ripple Drive |
+| Retaliating Slash | 3 | level 43 |
+| Finishing Leap | 5 | level 48, or with KH1's Blitz |
+| Upper Slash | 4 | Sabor |
+| Flash Step | 2 | Sabor, or with KH1's Vortex |
+| Aerial Finish | 3 | Jafar, or with KH1's Gravity Break |
+| Guard Break | 3 | Pot Centipede, or with KH1's Stun Impact |
+| Explosion | 3 | Dragon Maleficent, or with KH1's Hurricane Blast |
+| Magnet Burst | 3 | Captain Hook |
+| Aerial Dive | 2 | Cerberus |
+| Aerial Dodge (LV2 at 30, LV3 at 42, MAX at 54) | 3 | Genie Jafar (Agrabah) |
+| Slapshot | 2 | with KH1's Slapshot |
 
 Each of these Sora learns raises his max AP by its own AP (`bonus_ap`), so the KH2
-abilities take none of the AP KH1 gives him: +2 at level 4, +32 in all by level 50 (KH1's
-cap of 100 still holds). The save keeps KH1's own AP; the bonus is added while the game runs.
+abilities take none of the AP KH1 gives him (KH1's cap of 100 still holds). The save keeps
+KH1's own AP; the bonus is added while the game runs.
 
-The dodge roll (KH1's Dodge Roll equipped) reaches LV2 / LV3 / MAX at levels 19 / 37 / 60; its
-menu name shows the level ("Dodge Roll LV2"), with an "Ability Up" box each time.
-High Jump reaches LV2 / LV3 / MAX at levels 30 / 44 / 58, and Aerial Dodge at 30 / 42 / 54,
-the same way (name with its level, "Ability Up" box), and Glide at 40 / 52 to LV3, MAX for
-beating Chernabog (End of the World progress 0x33, KH1's Superglide reward, renamed "Glide
-MAX"; Superglide itself is turned into Glide or taken out).
-Sora keeps one High Jump and one Glide: spare copies (a randomizer can give
+When KH2's level for KH1's High Jump, Glide or Dodge Roll grows, or Quick Run's or Aerial
+Dodge's, an "Ability Up" box says so. KH1's menu keeps KH1's names for KH1's own.
+Sora keeps one High Jump, one Glide and one Superglide: spare copies (a randomizer can give
 more) are taken out of the shared list when the game loads or he gets one, and noted in
 `kh1-kh2-removed.txt`.
+
+A save from before the split is moved over once (`docs/abilities.md`, "Old saves"). Each KH1
+modifier Sora has brings its KH2 ability, which is on if KH1's was on, and KH1's copy is
+turned off. Superglide comes back if Chernabog is beaten.
 
 Sora's ability list holds 48 (KH1's most). When it is full, KH2's abilities come first: a
 KH1 ability that is off gives up its place, a spare copy first (an ability he has more than
@@ -131,7 +123,7 @@ Strike, Treasure Magnet, ...). Equipped abilities, Guard, Dodge Roll, the specia
 combo modifiers are never removed. Each removal is written to `kh1-kh2-removed.txt` next to the
 game.
 
-They live in an extended copy of KH1's ability table (ids 66 to 77), so a save holding them
+They live in an extended copy of KH1's ability table (ids 66 to 87), so a save holding them
 needs this mod to show them. To go back to a plain KH1 save: set `abilities = test`, load the
 save (they are taken out of Sora's lists), save, then remove the mod.
 

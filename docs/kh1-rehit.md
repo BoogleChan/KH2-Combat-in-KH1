@@ -33,4 +33,4 @@ place (`hurt.rs`), had no invulnerable frames (Sora's KH2 hurt and blow clips, m
 carry no hurtbox-off ranges). So every re-arm of the pillar landed and its damage was taken.
 KH2's engine protects a downed Sora, and `hurt.rs` now does the same:
 - while KH2 has him in a blow (launched, landed, getting up), no hit lands;
-- while he flinches, the same attacker's hits within 20 game frames of the last one don't land.
+- while he flinches, the same attacker's hits within 20 frames at 60 Hz (a third of a second, at any frame rate: `takeover::TICKS`) of the last one don't land.

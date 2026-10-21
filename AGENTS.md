@@ -3132,3 +3132,24 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   0.8); landing by collision (`+0x2D0` bit 0).
 - Not yet: Base / Aerial Combo, Magic and Dodge Roll at KH2 are KH2 borrows, not KH1's states
   with KH2's motions. Nothing tested in game.
+
+### 2026-10-20: Stage 284 (testing branch: shared combo and glide, KH2 abilities on KH1's moves, split ability ids, 30 fps, KH2's camera in KH1's)
+- The user's testing list (s261, 30 fps Steam log): shared animations for base attack 2, the
+  finishers and glide; KH2's dodge roll unusable; KH1's roll into Quick Run; KH2's combo,
+  Square and general modifiers with the combo styles at KH1; KH2 in slow motion at 30 fps; KH1's
+  camera calls taking the camera; split KH1's and KH2's ability ids; docs.
+- **Shared ground combo and glide** (`shared.rs`, `pose.rs`): KH1's combo rows and glide state at
+  either style, drawn with KH2's swings (98 -> 151, 99 -> 152, 101 -> 154) and glides (113..116)
+  at KH2, with KH2's travel and glide numbers. KH2's dodge roll: s261's log had Dodge Roll, Guard
+  and Quick Run unequipped (nothing for KH2's Square); Square now borrows only with one of them.
+  KH1's roll held into KH2's Quick Run (Quick Run equipped).
+- **KH2's abilities on KH1's moves** (`combomods.rs`): KH2 borrows him where it would use an
+  ability move (openers, steps, finishers, Square moves, Negative Combo / Finishing Plus,
+  Aerial Recovery, Retaliating Slash), KH1's own rows elsewhere.
+- **Ability ids split** (`growth.rs`, `menu.rs`, `docs/abilities.md`): KH1's 1..65 vanilla, KH2's
+  moves on 78..87 (66..77 as before); an owner table; old saves moved once (mark at save
+  `+0x48A`).
+- **30 fps** (`takeover::steps`): KH2's side runs whole 60 Hz steps a game frame.
+- **Camera** (`camera.rs`, `docs/kh1-kh2-camera.md`): KH2's camera as KH1's own modes; KH1's ledge
+  / climb cameras, its lock-on blends and its "held still" scene test no longer take it;
+  `camera_calls = kh2` (ini).

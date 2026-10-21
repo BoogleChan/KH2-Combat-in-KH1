@@ -1,0 +1,362 @@
+//! KH2's abilities on KH1's own moves (testing branch, shared states, base Sora). The user:
+//! "when setting attack to kh1 sora is unable to use kh2s ground combo abilities (this includes
+//! kh2s square combo modifers)", the same for the air combo, and "sora is unable to use kh2s
+//! general modifiers (with the exception to aerial dodge)". `docs/shared-states.md`.
+//!
+//! With the Base / Aerial Combo style at KH1, KH1's own combo plays: its rows, motions and hits,
+//! and its own abilities, which KH1 reads itself (Combo Plus, Air Combo Plus, Combo Master and
+//! KH1's modifiers are the same KH1 abilities KH2's come from). KH2's abilities on top of it are
+//! borrows, as Aerial Dodge is with Jump at KH1: at the press where KH2 would use one, KH2's
+//! controller borrows him for that move (`takeover::shared_frame`), KH1's swing cut there as a
+//! spell's end frames are. Where none applies, KH1's own combo plays.
+//!
+//! - **Attack** (`attack`, from `combat::exec`: a press KH1's combo took, its row about to run):
+//!   KH2's combo is asked what it would take at KH1's count (`Character::would_take`, the combo
+//!   carried at KH1's count, the press, KH2's targets and KH1's lock). KH2 takes it when that is
+//!   - a row that needs an ability (an action ability's move: Slide Dash, Flash Step, Aerial
+//!     Dive, Dodge Slash, Vicinity Break, Aerial Sweep, Aerial Spiral; the finishers Explosion,
+//!     Guard Break, Aerial Finish, Magnet Burst ...), opener, step or finisher;
+//!   - KH2's finisher where KH1's would still swing, with Negative Combo;
+//!   - KH2's step where KH1's would finish, KH2's combo being the longer (Combo Plus KH1 didn't
+//!     count);
+//!   - Finishing Plus: a press during KH1's finisher is KH2's next finisher.
+//! - **Square** in KH1's combo window (`control`): KH2's Square move there (Finishing Leap, Upper
+//!   Slash, Horizontal Slash), if KH1's swing connected or Combo Master is on (as KH2's).
+//! - **Knocked away** in the air (`launched`, KH1's own reaction, `hurt`): the jump is KH2's
+//!   Aerial Recovery, Square its Retaliating Slash, from the 16th frame (KH2's).
+//! - **Quick Run** on Square while moving, with Dodge Roll at KH1 and no dodge roll of KH1's
+//!   equipped (where KH2 would run, not roll): `shared::control`'s Square borrow.
+//! - **After the move**, the next press in KH2's combo window (`combat::command`): KH1's next row
+//!   with KH2's count carried (`next_from_kh2`, `kh1_count_in`), unless KH2's next is an ability
+//!   move again; KH1's own states have him from there (`takeover::shared_now`).
+//!
+//! KH1's combo, from its Attack step `0x1402A5380` and row pickers `0x1402A4D50` (ground) /
+//! `0x1402A4AE0` (air): the count is the byte `+0x41` of the combat info (`+0x14C`'s handle),
+//! set to 1 outside a combo window, one more inside one (the actor's motion event flags `+0x1CC`
+//! bit 22, `0x14029CE20`) when the swing connected (the info's `+0x50`, the attack's hit flags,
+//! cleared as each attack row makes its attack object, `0x1402B10E0`) or Combo Master (65) is
+//! equipped (else no swing); the finisher is picked once the count reaches the stats' (`+0x6C`)
+//! `+0xD4` (ground) / `+0xD5` (air).
+
+use super::addr::Rva;
+use super::{log, pose, takeover};
+use character_core::{Button, Character, ComboRow, ComboState, Input};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::Mutex;
+
+/// KH1's motion event flag: the combo window (`0x14029CE20`).
+pub const KH1_COMBO_WINDOW: u32 = 0x40_0000;
+const PARTY_RVA: Rva = Rva(0x2D37C80);
+/// Frames into a knock-away before Aerial Recovery or Retaliating Slash (KH2's, 16), and the
+/// longest a KH1 knock-away is taken for one.
+const RECOVERY_AFTER: u64 = 16;
+const BLOWN_MAX: u64 = 240;
+/// Above the floor, KH1's world: in the air (`takeover`'s step down).
+const AIR: f32 = 24.0;
+
+unsafe fn rd<T: Copy>(p: usize) -> T {
+    std::ptr::read_unaligned(p as *const T)
+}
+
+unsafe fn wr<T: Copy>(p: usize, v: T) {
+    std::ptr::write_unaligned(p as *mut T, v)
+}
+
+fn note(s: String) {
+    static N: AtomicU32 = AtomicU32::new(0);
+    if N.fetch_add(1, Ordering::Relaxed) < 300 {
+        log(&s);
+    }
+}
+
+/// What KH2 borrows him for.
+#[derive(Clone, Copy, Debug)]
+pub enum Move {
+    /// That combo row (`Character::force_row`) with the combo carried at `state`, on an Attack
+    /// press.
+    Row { id: u8, state: ComboState },
+    /// Aerial Recovery.
+    Recover,
+}
+
+/// The move KH2 is to borrow him for (taken by `takeover::shared_frame` this frame), and the one
+/// it borrowed him for, to set on KH2's first step (`before_step`), with its game frame.
+static WANT: Mutex<Option<(Move, u64)>> = Mutex::new(None);
+static APPLY: Mutex<Option<(Move, u64)>> = Mutex::new(None);
+/// KH1's last swing of its own combo that ran: its count, its motion, whether it was KH1's
+/// finisher, in the air.
+static LAST: Mutex<Option<(u8, u32, bool, bool)>> = Mutex::new(None);
+/// When KH1 last knocked him away itself (`hurt`, game frames).
+static BLOWN_AT: AtomicU64 = AtomicU64::new(0);
+
+fn frame() -> u64 {
+    takeover::GAME_FRAME.load(Ordering::Relaxed)
+}
+
+fn want(m: Move) {
+    if let Ok(mut w) = WANT.lock() {
+        *w = Some((m, frame()));
+    }
+}
+
+/// This frame's ability borrow (`takeover::shared_frame`; one left from an earlier frame, KH1's
+/// physics step not run since, is dropped: no buffer).
+pub fn take_want() -> Option<Move> {
+    let (m, at) = WANT.try_lock().ok().and_then(|mut w| w.take())?;
+    if frame().saturating_sub(at) > 1 {
+        note(format!("KH2's ability move {m:?} dropped: KH1's states didn't let it go that frame"));
+        return None;
+    }
+    Some(m)
+}
+
+/// KH2 borrowed him for it: set on its first step.
+pub fn lent(m: Move) {
+    if let Ok(mut a) = APPLY.lock() {
+        *a = Some((m, frame()));
+    }
+    BLOWN_AT.store(0, Ordering::Relaxed);
+    if let Ok(mut l) = LAST.lock() {
+        *l = None;
+    }
+}
+
+/// Right before KH2's step: the move it borrowed him for (a few frames at most after the borrow:
+/// KH1 holding him still in between drops it), as the step's press.
+pub fn before_step(ch: &mut Character, input: Input) -> Input {
+    let Some((m, at)) = APPLY.try_lock().ok().and_then(|mut a| a.take()) else { return input };
+    if frame().saturating_sub(at) > 3 {
+        note(format!("KH2's ability move {m:?} dropped: its step came too late"));
+        return input;
+    }
+    let release = |b: Button| Button { pressed: false, held: b.held };
+    match m {
+        Move::Row { id, state } => {
+            ch.set_combo_state(state);
+            ch.force_row(id);
+            Input { attack: Button { pressed: true, held: true }, action: release(input.action), jump: release(input.jump), ..input }
+        }
+        Move::Recover => {
+            if !ch.air_recovery(input.stick) {
+                note("Aerial Recovery out of KH1's knock-away: KH2 couldn't (not in the air)".to_string());
+            }
+            Input { jump: release(input.jump), action: release(input.action), ..input }
+        }
+    }
+}
+
+unsafe fn sora() -> usize {
+    rd::<u64>(takeover::game_base() + PARTY_RVA) as usize
+}
+
+/// KH1's combo now: its count, its length here (ground or air), and whether its swing connected.
+unsafe fn kh1_combo(actor: usize, air: bool) -> Option<(u8, u8, bool)> {
+    let info = pose::ptr(rd::<u32>(actor + 0x14C));
+    let stats = pose::ptr(rd::<u32>(actor + 0x6C));
+    if info < 0x10000 || stats < 0x10000 {
+        return None;
+    }
+    Some((rd::<u8>(info + 0x41), rd::<u8>(stats + if air { 0xD5 } else { 0xD4 }), rd::<u32>(info + 0x50) != 0))
+}
+
+/// Whether KH2's pick is one of its ability moves over KH1's combo at `count` (what makes it so,
+/// for the log).
+fn ability_move(row: &ComboRow, kh2_len: u8, negative: u8, count: u8, kh1_len: u8) -> Option<&'static str> {
+    let kh1_finisher = count >= kh1_len;
+    if row.ability != 0 {
+        Some("an action ability's move")
+    } else if row.is_finisher() && !kh1_finisher && negative > 0 {
+        Some("KH2's finisher a swing sooner (Negative Combo)")
+    } else if !row.is_finisher() && kh1_finisher && kh2_len > kh1_len {
+        Some("KH2's combo goes on past KH1's (Combo Plus)")
+    } else {
+        None
+    }
+}
+
+/// An Attack KH1's own combo took (`combat::exec`, base Sora in KH1's own states, the combo style
+/// KH1's where he is): true when KH2 borrows him for one of its ability moves instead (KH1's row
+/// not run). `motion`: the row's motion (for Finishing Plus after it).
+pub unsafe fn attack(actor: usize, motion: Option<u32>) -> bool {
+    // (KH1's ground state or its jump / fall: not its flight, 8, nor its other states.)
+    let state = rd::<i32>(actor + 0x70);
+    if !matches!(state, 0..=2) || super::form::in_form() {
+        return false;
+    }
+    let air = matches!(state, 1 | 2);
+    let Some((count, kh1_len, _)) = kh1_combo(actor, air) else { return false };
+    let last = LAST.try_lock().ok().and_then(|l| *l);
+    // Finishing Plus: a press during KH1's finisher (its motion still playing) is KH2's next one.
+    let playing = rd::<u32>(actor + 0x164) & 0xFFFF;
+    if let Some((n, _, true, _)) = last.filter(|l| l.3 == air && l.1 & 0xFFFF == playing) {
+        let from = ComboState { count: n, finishers: 1, hit: true, finisher_next: true };
+        if let Some((row, ..)) = takeover::kh2_would_take(actor, Some(from), air, false).filter(|(r, ..)| r.is_finisher()) {
+            note(format!("Attack in KH1's finisher (count {n}): KH2's next finisher, row {} motion {} (Finishing Plus)", row.id, row.motion));
+            want(Move::Row { id: row.id, state: from });
+            return true;
+        }
+    }
+    // KH2's combo at KH1's count (this press counted: `count` is this swing's).
+    let from = ComboState { count: count.saturating_sub(1), finishers: 1, hit: true, finisher_next: false };
+    let pick = takeover::kh2_would_take(actor, Some(from), air, false);
+    let why = pick.as_ref().and_then(|(r, len, neg)| ability_move(r, *len, *neg, count, kh1_len));
+    note(format!(
+        "KH1's {} combo, swing {count} of {kh1_len}: KH2 would take {}{}",
+        if air { "aerial" } else { "ground" },
+        pick.as_ref().map_or("nothing".to_string(), |(r, len, _)| format!("row {} motion {} (ability {}, finisher {}, KH2's length {len})", r.id, r.motion, r.ability, r.is_finisher())),
+        why.map_or(String::new(), |w| format!(": {w}, KH2 borrows him for it"))
+    ));
+    if let Some((row, ..)) = pick.filter(|_| why.is_some()) {
+        want(Move::Row { id: row.id, state: from });
+        return true;
+    }
+    if let Ok(mut l) = LAST.lock() {
+        *l = motion.map(|m| (count, m, count >= kh1_len, air));
+    }
+    false
+}
+
+/// KH1's control step with base Sora in KH1's own states (`shared::control`): a press that is one
+/// of KH2's ability moves out of KH1's own move (a Square move in KH1's combo window, Aerial
+/// Recovery or Retaliating Slash while knocked away). The bits KH1 doesn't see, if so.
+pub fn control(s: &super::shared::Seen, jump_fresh: bool, square_fresh: bool) -> Option<u32> {
+    if !(jump_fresh || square_fresh) || super::form::in_form() {
+        return None;
+    }
+    let actor = unsafe { sora() };
+    if actor < 0x10000 {
+        return None;
+    }
+    let air = matches!(s.state, 1 | 2);
+    let all = super::shared::KH1_JUMP_BITS | super::shared::KH1_ACTION_BIT;
+    // Knocked away by KH1's own reaction: KH2's Aerial Recovery (the jump) or Retaliating Slash
+    // (Square).
+    if s.launched && !s.can_act {
+        if jump_fresh && takeover::with_abilities(|a| a.aerial_recovery) == Some(true) {
+            note("jump while KH1 has him knocked away: KH2's Aerial Recovery".to_string());
+            want(Move::Recover);
+            return Some(all);
+        }
+        if square_fresh {
+            let row = takeover::kh2_retaliating_slash();
+            if let Some(id) = row {
+                note("Square while KH1 has him knocked away: KH2's Retaliating Slash".to_string());
+                want(Move::Row { id, state: ComboState { count: 0, finishers: 1, hit: false, finisher_next: false } });
+                return Some(all);
+            }
+        }
+        return None;
+    }
+    // Square in KH1's combo window (a swing of its combo, slots 98..104): KH2's Square move there,
+    // its count KH1's.
+    if square_fresh && s.combo_window && matches!(pose::sora_slot(), Some(98..=104)) {
+        let (count, _, hit) = unsafe { kh1_combo(actor, air) }?;
+        let master = takeover::with_abilities(|a| a.combo_master) == Some(true);
+        if count == 0 || !(hit || master) {
+            return None;
+        }
+        let from = ComboState { count, finishers: 1, hit: true, finisher_next: false };
+        let (row, ..) = unsafe { takeover::kh2_would_take(actor, Some(from), air, true) }?;
+        note(format!("Square in KH1's combo window (swing {count}): KH2's Square move, row {} motion {}", row.id, row.motion));
+        want(Move::Row { id: row.id, state: from });
+        return Some(super::shared::KH1_ACTION_BIT);
+    }
+    None
+}
+
+/// KH1 knocked him away itself (`hurt`: a knock-back or launch while KH1's states have him).
+pub fn kh1_blown() {
+    BLOWN_AT.store(frame().max(1), Ordering::Relaxed);
+}
+
+/// KH1 has him knocked away in the air, far enough in for KH2's Aerial Recovery.
+pub unsafe fn launched(actor: usize) -> bool {
+    let at = BLOWN_AT.load(Ordering::Relaxed);
+    if at == 0 || actor < 0x10000 {
+        return false;
+    }
+    let f = frame().saturating_sub(at);
+    if f > BLOWN_MAX {
+        BLOWN_AT.store(0, Ordering::Relaxed);
+        return false;
+    }
+    f >= RECOVERY_AFTER && rd::<f32>(actor + 0x3D4) > AIR
+}
+
+/// An Attack in KH2's move with the combo style KH1's where he is (`combat::command`): what comes
+/// next.
+#[derive(Clone, Copy, Debug)]
+pub enum Next {
+    /// KH2's next is one of its ability moves again: KH2 keeps the press.
+    Kh2,
+    /// KH1's next row, its combo at KH2's count.
+    Kh1 { count: u8, hit: bool },
+    /// No combo of KH2's going: KH1's own combo from its start.
+    Fresh,
+}
+
+pub unsafe fn next_from_kh2(actor: usize, air: bool) -> Next {
+    let Some((state, going, master, in_finisher)) = takeover::kh2_combo() else { return Next::Fresh };
+    // In KH2's finisher: its next finisher with Finishing Plus (KH2's), else a new combo of KH1's.
+    if in_finisher {
+        let pick = takeover::kh2_would_take(actor, None, air, false).filter(|(r, ..)| r.is_finisher());
+        if let Some((r, ..)) = pick {
+            note(format!("Attack in KH2's finisher with the combo style KH1's: KH2's next finisher, row {} motion {} (Finishing Plus)", r.id, r.motion));
+            return Next::Kh2;
+        }
+        return Next::Fresh;
+    }
+    if !going || state.count == 0 {
+        return Next::Fresh;
+    }
+    let kh1_len = kh1_combo(actor, air).map_or(u8::MAX, |c| c.1);
+    let pick = takeover::kh2_would_take(actor, None, air, false);
+    let next = state.count.saturating_add(1);
+    let why = pick.as_ref().and_then(|(r, len, neg)| ability_move(r, *len, *neg, next, kh1_len));
+    let out = if why.is_some() { Next::Kh2 } else { Next::Kh1 { count: state.count, hit: state.hit || master } };
+    note(format!(
+        "Attack in KH2's combo (count {}) with the combo style KH1's: KH2 would take {}: {out:?}{}",
+        state.count,
+        pick.as_ref().map_or("nothing".to_string(), |(r, ..)| format!("row {} motion {}", r.id, r.motion)),
+        why.map_or(String::new(), |w| format!(" ({w})"))
+    ));
+    out
+}
+
+/// What `kh1_count_in` changed, put back after KH1's step.
+pub struct Saved {
+    info: usize,
+    /// The hit flags before, if we set them.
+    hit: Option<u32>,
+    window: bool,
+}
+
+/// Before KH1's Attack step out of KH2's combo: KH1's combo at KH2's count (its count, its combo
+/// window, its swing's hit), so the step goes on from there (one more, its finisher at its
+/// length).
+pub unsafe fn kh1_count_in(actor: usize, count: u8, hit: bool) -> Option<Saved> {
+    let info = pose::ptr(rd::<u32>(actor + 0x14C));
+    if info < 0x10000 {
+        return None;
+    }
+    let flags = rd::<u32>(actor + 0x1CC);
+    let before = rd::<u32>(info + 0x50);
+    let saved = Saved { info, hit: (hit && before == 0).then_some(before), window: flags & KH1_COMBO_WINDOW != 0 };
+    wr(info + 0x41, count);
+    wr(actor + 0x1CC, flags | KH1_COMBO_WINDOW);
+    if saved.hit.is_some() {
+        wr(info + 0x50, 1u32);
+    }
+    Some(saved)
+}
+
+pub unsafe fn restore(actor: usize, s: Saved) {
+    // (Only if KH1's step made no attack object of its own swing, which clears them itself.)
+    if let Some(h) = s.hit.filter(|_| rd::<u32>(s.info + 0x50) == 1) {
+        wr(s.info + 0x50, h);
+    }
+    if !s.window {
+        wr(actor + 0x1CC, rd::<u32>(actor + 0x1CC) & !KH1_COMBO_WINDOW);
+    }
+    note(format!("KH1's combo goes on from KH2's: count now {}", rd::<u8>(s.info + 0x41)));
+}
