@@ -23,6 +23,7 @@ mod kh2sound;
 mod leftblade;
 mod limits;
 mod menu;
+mod menujump;
 mod model;
 mod music;
 mod pose;
@@ -235,6 +236,7 @@ pub unsafe extern "system" fn DllMain(_inst: *mut c_void, reason: u32, _reserved
         equipmenu::install();
         reflect::install();
         drive::install();
+        menujump::install();
         limits::install();
         tint::install();
         leftblade::install();

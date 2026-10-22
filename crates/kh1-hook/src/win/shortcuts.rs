@@ -586,6 +586,8 @@ unsafe extern "system" fn step() -> u64 {
     let base = base();
     // The second page (D-pad left, `drive`).
     super::drive::pre_step();
+    // A jump / cancel press backing out of a submenu is the menu's, not KH2's jump (`menujump`).
+    super::menujump::pre_step();
     // On the shortcut menu (L1 held since last frame), cancel is the fourth shortcut, not KH1's
     // jump (its jump check comes first and ends the step), so KH1 doesn't see it.
     let pressed = base + PRESSED_RVA;

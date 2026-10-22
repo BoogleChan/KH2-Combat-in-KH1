@@ -3584,6 +3584,13 @@ KH2_GAME="D:\epic\KH_1.5_2.5\KINGDOM HEARTS II FINAL MIX.exe" cargo test
   bounce, the swing goes on. Ini `walls = kh1 | clink | pass` (default kh1; `wall_clink` no longer
   read). Enemies' guards clink as before. `docs/kh1-clash.md`.
 
+### 2026-10-21: Stage 317 (jump only backs out of an open submenu)
+- The user: "when the drives, summons, items, or magic submenus are open, pressing the jump button
+  closes the menus and jumps at the same time ... back out of the menu first before allowing jumps".
+  KH1's menu step (priority 0xD6D8) backs out before the actor job (0x13880) where KH2 reads the pad,
+  so the press looked fresh. `menujump` marks a jump/cancel press made with a submenu open as the
+  menu's; `takeover::buttons()` hides jump from KH2 until it is released. docs/kh1-drive.md.
+
 ### 2026-10-21: Stage 316 (KH1's own grants of the mod's scheduled abilities held back)
 - The user: "if explosion comes from defeating dragon maleficent, why did i get it", "it was not a
   randomized playthrough". KH1's Rod level-up table gives Stun Impact 6, Ripple Drive 12, Hurricane

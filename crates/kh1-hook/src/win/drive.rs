@@ -77,6 +77,16 @@ pub fn on() -> bool {
     ON.load(Ordering::Relaxed)
 }
 
+/// The second page is up (the summon list is the Drive list).
+pub fn page2() -> bool {
+    on() && PAGE2.load(Ordering::Relaxed)
+}
+
+/// The command step is hooked here (`shortcuts` didn't).
+pub fn step_hooked() -> bool {
+    ORIG_STEP.load(Ordering::Acquire) != 0
+}
+
 /// The menu run is the Drive row (`combat::run_entry`: the magic list, its last entry, on page 2).
 pub unsafe fn is_drive_row(menu: usize, id: u8) -> bool {
     on() && PAGE2.load(Ordering::Relaxed) && menu == base() + MAGIC_MENU_RVA && id == SUMMON
@@ -326,6 +336,7 @@ pub unsafe fn chosen(actor: usize, k: usize) {
 static ORIG_STEP: AtomicUsize = AtomicUsize::new(0);
 unsafe extern "system" fn step() -> u64 {
     pre_step();
+    super::menujump::pre_step();
     let f: unsafe extern "system" fn() -> u64 = std::mem::transmute(ORIG_STEP.load(Ordering::Acquire));
     f()
 }

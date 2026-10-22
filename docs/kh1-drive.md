@@ -104,6 +104,38 @@ the root, 0x80 alone moves the cursor to row 0 (Attack, sound 1). That is KH1's 
 use found on the battle path (direct references to 0x14298D4A4..B4 listed in btnrefs.txt; the
 player think 0x1402A4090 -> 0x14028A650 / 0x1402A59A0 read stick and other bits only).
 
+### Jump and cancel are one button; backing out isn't a jump (`menujump.rs`)
+
+- **One button.** The pad step `0x140288F30` sets jump (`4`) and cancel (`2`) together, as `6`,
+  from Circle (from Cross when `0x1402F4690` swaps confirm). Its 19-pair table doesn't hold
+  Circle or Cross. The keyboard's bindings (`0x1400D7DE0`) only OR pad buttons into a pad record
+  (`or ax, [rec + 0x18]`). So no binding, on the pad or the keyboard, can put jump and cancel on
+  different keys. KH2's jump reads the same thing (`takeover::buttons`: the pads' jump button
+  after the swap, or KH1's held `6`), so a remapped key works.
+- **Vanilla.** The command step `0x140291660` checks the jump press (`+8 & 4` → jump flag
+  `0x1000000` in `0x142D54440`, which ends the step) only when the level pointer
+  `0x142D54450` is the root (`cmp rbx, [0x142D54450]` at `0x140291857`). In a submenu the same
+  press goes to navigation (`0x140291020`), which pops one level, and KH1 doesn't jump.
+  Deeper levels (a spell's or item's target list, menu 4) pop one level per press too.
+- **The bug.** KH1's task list (`0x142867D80`, added to by `0x140282500` → `0x140288780`) is
+  sorted by priority and run in ascending order (`0x140288590`). The command step is priority
+  0xD6D8 (`0x140290F64`). The actor task `0x1402967B0` is 0x13880 (`0x140295746`). The actor
+  task runs Sora's think (`0x1402A1170`, its control step `0x1402A4090`), then his physics step
+  `0x140298230`, where KH2 reads the pad. So on the press frame the submenu had already closed
+  when KH2 looked. `shortcuts::submenu_open` was false and the press was fresh, so KH2 jumped,
+  or used Aerial Dodge or glide in the air.
+- **The fix.** Before KH1's command step runs (`menujump::pre_step`, from `shortcuts::step`,
+  `drive::step`, or its own hook when neither is installed), a jump / cancel press with a
+  submenu open is marked as the menu's. `takeover::buttons` then hides the jump button from
+  everything of KH2's until the button is let go. That covers the jump, High Jump, Aerial Dodge,
+  glide, cancels on the jump button, a jump buffered out of one of KH1's moves, and the Jump /
+  Glide styles at KH1. A new press at the top level jumps as usual. (KH1's own flight, state 8,
+  is left as it is. It rises on the jump held, read by the same step at the root, so a press
+  held on after closing a submenu in flight still rises, as in vanilla.) The log says
+  "jump held back: it closed the <Magic menu | Limit menu | Items menu | Summon menu | Drive
+  menu | target list>" once per press (300 at most). Logic and tests:
+  `crates/kh1-hook/src/menujump.rs`.
+
 ## Steam
 
 Steam = Epic - 0xD00 for the menu structs (0x528900 top, 0x528938 magic, 0x5289A8 summon list,

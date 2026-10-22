@@ -3379,6 +3379,13 @@ const BUTTONS_RVA: Rva = Rva(0x298D4A0);
 /// KH1's processed left stick (-1..1, its dead zone applied; the keyboard's keys too).
 const LEFT_STICK_RVA: Rva = Rva(0x298D4E0);
 
+/// The jump button held, as `buttons` reads it before `menujump` holds a press back: the pads'
+/// own records or KH1's merged state (the keyboard).
+pub fn jump_held_raw() -> bool {
+    let base = BASE.load(Ordering::Relaxed);
+    RAW_BUTTONS.load(Ordering::Relaxed) as u16 & jump_button() != 0 || (base != 0 && unsafe { rd::<u32>(base + BUTTONS_RVA + 4) } & 6 != 0)
+}
+
 /// The buttons as KH2 reads them: the pads' own records (`RAW_BUTTONS`, before KH1's copy is
 /// masked) and KH1's merged state, which the keyboard feeds too (the user's tester played on
 /// keyboard: the pad records stayed empty, so KH2 had no jump, roll or guard at all). KH1's jump
@@ -3404,6 +3411,12 @@ pub fn buttons() -> u16 {
                 log(&format!("KH1's action bit with the jump held (KH1 buttons {held:08x}): not taken for Square"));
             }
         }
+    }
+    // The press that backed out of a command submenu is the menu's until let go (`menujump`):
+    // KH1's command step closed the menu earlier in this frame, so `shortcuts::submenu_open`
+    // alone no longer says so.
+    if !super::menujump::jump_down(b & jump_button() != 0) {
+        b &= !jump_button();
     }
     b
 }
